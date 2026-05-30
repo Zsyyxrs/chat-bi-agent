@@ -1,0 +1,192 @@
+# RCA 归因路径评估问题集：Root Cause Analysis / 根因分析
+# 每道题对应一个埋雷事件，自动评估 RCA Agent 的归因能力
+#
+# 结构：
+#   - question: 用户提问（业务人员的自然问题）
+#   - related_event: 对应的埋雷事件 ID
+#   - expected_root_cause: 期望的根因结论
+#   - expected_affected_dimensions: 期望识别的关键维度
+#   - evaluation_criteria: 评估标准
+
+evaluation_questions:
+  # ============================================================
+  # 针对 anxin_90_expire 事件的题目
+  # ============================================================
+
+  - id: attribution_q001
+    question: |
+      上海分行（BR_CITY_0006）的高净值客户活期存款余额为什么在五月中旬突然下降 8%？
+      请分析主要原因和影响客户群体。
+    related_event: anxin_90_expire
+    expected_root_cause: |
+      安鑫 90 天理财产品在 2026-05-14 到期，导致高净值客户大额赎回。
+      根据数据分析，该产品持有者续作率仅 42%，低于历史均值 65%，大部分
+      资金流出行外。
+    expected_affected_dimensions:
+      - branch_id: BR_CITY_0006
+      - customer_tier: HIGH_NET_WORTH
+      - product_id: PROD_WEA_0000
+    expected_key_metrics:
+      - metric: retail_deposit_balance
+        change_direction: down
+        magnitude: ~8.5%
+    evaluation_criteria:
+      - dimension_recall: "Agent 是否识别出 branch_id, customer_tier, product_id"
+      - event_hit: "Agent 是否提到理财产品到期"
+      - continuation_rate: "Agent 是否提到 42% 续作率或流出数据"
+      - timing: "Agent 是否识别出 2026-05-14 的特定日期"
+
+  - id: attribution_q002
+    question: |
+      2026 年 5 月中旬，我们发现某个理财产品的持有余额下降，但同时发现客户
+      转入了其他理财产品。这说明了什么？能否定位具体的产品和原因？
+    related_event: anxin_90_expire
+    expected_root_cause: |
+      这是安鑫 90 天理财产品到期后的续作现象。虽然总体赎回率 58%，但 42% 的
+      续作客户将资金转入其他理财产品（如 PROD_WEA_0002, PROD_WEA_0003），
+      所以可以观察到"赎回 → 续作"的双向流动。
+    expected_affected_dimensions:
+      - product_id: PROD_WEA_0000
+      - related_products: [PROD_WEA_0002, PROD_WEA_0003]
+    evaluation_criteria:
+      - product_identification: "Agent 是否精准定位到源产品和目标产品"
+      - behavior_pattern: "Agent 是否解释了赎回→续作的行为链条"
+
+  # ============================================================
+  # 针对 spring_festival_withdrawal 事件的题目
+  # ============================================================
+
+  - id: attribution_q003
+    question: |
+      2 月 15-23 日期间，我们观察到全行 ATM 和柜面的现金支取交易量突增 25%。
+      这是异常波动吗？如果是，根因是什么？主要涉及哪些客户群体？
+    related_event: spring_festival_withdrawal
+    expected_root_cause: |
+      这不是异常，而是典型的春节季节性现象。春节假期期间，零售客户
+      大量现金支取用于春节走亲访友、红包等消费。数据显示，BASIC 和 MASS
+      层客户的现金支取量增加最多，而 ATM 和柜面是主要渠道。
+    expected_affected_dimensions:
+      - customer_tier: [BASIC, MASS]
+      - transaction_type: WITHDRAW
+      - transaction_channel: [ATM, COUNTER]
+    expected_key_metrics:
+      - metric: cash_withdrawal_amount
+        change_direction: up
+        magnitude: ~25%
+    evaluation_criteria:
+      - seasonal_recognition: "Agent 是否识别出春节季节性而非异常"
+      - customer_segmentation: "Agent 是否指出 BASIC/MASS 层影响更大"
+      - channel_identification: "Agent 是否提到 ATM/柜面"
+
+  - id: attribution_q004
+    question: |
+      从 2 月中旬到 2 月末，我们的日均余额有波动。这与特定的商业事件有关吗？
+      能否基于数据模式推断客户行为？
+    related_event: spring_festival_withdrawal
+    expected_root_cause: |
+      2 月 15-23 日的日均余额下降 18%，与春节假期现金支取高峰期完全吻合。
+      这反映了零售客户在春节假期期间的大额现金提取行为。期末（2 月 24 日后）
+      余额逐步恢复常态，说明现金需求是短期的、可预测的。
+    expected_affected_dimensions:
+      - branch_level: [SUBBRANCH, CITY]
+      - transaction_period: "2026-02-15 to 2026-02-23"
+    evaluation_criteria:
+      - temporal_analysis: "Agent 是否能关联特定时间窗口与业务事件"
+      - customer_behavior: "Agent 是否推断出现金需求的临时性和可预测性"
+
+  # ============================================================
+  # 针对 lpr_cut_q2 事件的题目
+  # ============================================================
+
+  - id: attribution_q005
+    question: |
+      6 月 20 日前后，我们的贷款申请量开始上升，持续增长约 2 周。这背后
+      的驱动因素是什么？是营销活动还是政策变化？
+    related_event: lpr_cut_q2
+    expected_root_cause: |
+      二季度 LPR 下调 10bp（6 月 20 日发布），刺激借款人需求。贷款申请量
+      在政策发布后 7-14 天开始明显增长（+12%），反映了政策反应的滞后性。
+      个人消费贷款和房屋贷款响应最快，企业贷款响应较慢。这是典型的
+      宏观政策向微观行为传导的案例。
+    expected_affected_dimensions:
+      - transaction_type: LOAN
+      - policy_date: "2026-06-20"
+    expected_key_metrics:
+      - metric: loan_application_count
+        change_direction: up
+        magnitude: ~12%
+        delay_days: 7
+      - metric: loan_balance
+        change_direction: up
+        magnitude: ~5.5%
+    evaluation_criteria:
+      - policy_recognition: "Agent 是否识别出 LPR 下调政策"
+      - causal_inference: "Agent 是否建立政策与贷款增长的因果关系"
+      - lag_analysis: "Agent 是否识别出 7 天的政策传导滞后"
+
+  # ============================================================
+  # 针对 qixi_deposit_campaign 事件的题目
+  # ============================================================
+
+  - id: attribution_q006
+    question: |
+      8 月中旬，杭州和南京分行的定期存款余额增长了 12%。这是市场
+      竞争导致的定期存款流入吗？还是我们的营销活动产生了效果？
+    related_event: qixi_deposit_campaign
+    expected_root_cause: |
+      七夕情侣定期存款营销活动（8 月 10 日启动）在抖音和微信朋友圈投放，
+      针对 MASS 和 AFFLUENT 层客户。客户响应延迟 2-5 天，导致 8 月 12-17 日
+      定期存款迅速增长 12%。这是典型的营销活动驱动，而非市场竞争。
+    expected_affected_dimensions:
+      - branch_id: [BR_CITY_0000, BR_CITY_0002]
+      - customer_tier: [MASS, AFFLUENT]
+      - campaign_id: "CAMP_QIXI"
+    expected_key_metrics:
+      - metric: saving_deposit_balance
+        change_direction: up
+        magnitude: ~12%
+    evaluation_criteria:
+      - campaign_attribution: "Agent 是否将增长归因于七夕营销活动"
+      - channel_identification: "Agent 是否提到抖音/微信等渠道"
+      - segmentation: "Agent 是否指出 MASS/AFFLUENT 层的高响应度"
+      - conversion_window: "Agent 是否识别出 2-5 天的响应延迟"
+
+  # ============================================================
+  # 混合/困难题：多事件干扰
+  # ============================================================
+
+  - id: attribution_q007
+    question: |
+      5 月 14-20 日期间，全行存款和 AUM 指标都出现了波动。在这 7 天内发生了
+      什么？是单一原因还是多个因素共同作用？请分离信号。
+    related_events: [anxin_90_expire]  # 可能有多个同期事件
+    expected_root_cause: |
+      主要原因是安鑫 90 天理财产品到期，但其影响范围受限于高净值客户和
+      上海分行。全行 AUM 下降 3.2% 主要由此产生。其他分行或客户层级
+      的指标波动应归因于常规交易或其他因素，而非此事件。
+    expected_affected_dimensions:
+      - branch_id: BR_CITY_0006
+      - customer_tier: HIGH_NET_WORTH
+    evaluation_criteria:
+      - signal_separation: "Agent 是否能分离多个同期因素"
+      - scope_delimitation: "Agent 是否精确界定事件的影响范围（而非全行）"
+
+  - id: attribution_q008
+    question: |
+      如果我想设计一个"客户续作率"的早期预警模型，可以基于哪些指标？
+      基于现有数据，哪个产品的续作率最值得关注？
+    related_event: anxin_90_expire
+    expected_root_cause: |
+      基于安鑫 90 天产品的实际续作率 42%，可以建立如下预警指标：
+      1. 到期前 7 天的客户联系率（活跃度）
+      2. 到期日前后的余额变化率
+      3. 同期其他理财产品的净流入
+      4. 客户风险偏好与产品风险等级的匹配度
+
+      安鑫 90 天的 42% 续作率已低于阈值，应作为优先监控目标。
+    expected_affected_dimensions:
+      - product_id: PROD_WEA_0000
+      - product_name: "安鑫 90 天"
+    evaluation_criteria:
+      - predictive_insight: "Agent 是否从数据推断出可预测的早期信号"
+      - threshold_setting: "Agent 是否合理设定 continuation_rate 阈值"

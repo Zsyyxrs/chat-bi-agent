@@ -1,0 +1,232 @@
+# P2 多步分析集：Multi-step Analysis
+# 每道题测试 Analysis Agent 的多步骤推理和关联分析能力
+# 结构：
+#   - question: 用户提问（需要多步查询和业务逻辑推理）
+#   - analysis_steps: 解题所需的关键步骤
+#   - expected_insights: 期望发现的业务洞察
+#   - data_sources: 需要查询的表
+#   - evaluation_criteria: 评估标准
+
+evaluation_questions:
+  # ============================================================
+  # 对比分析类题目
+  # ============================================================
+
+  - id: multi_step_q001
+    question: |
+      对比春节前（2 月 1-14 日）和春节假期（2 月 15-23 日）的现金支取行为。
+      包括总额、日均、涉及的客户数量和主要渠道分布。
+    analysis_steps:
+      - step1: "查询 2 月 1-14 日期间 WITHDRAW 交易的总额、交易笔数、客户数"
+      - step2: "查询 2 月 15-23 日期间 WITHDRAW 交易的总额、交易笔数、客户数"
+      - step3: "计算两个时期的日均值和增长率"
+      - step4: "按渠道（ATM/COUNTER）分别统计两个时期的交易笔数"
+      - step5: "对比并总结变化特征"
+    expected_insights:
+      - seasonality_detection: "识别出春节是季节性高峰而非异常"
+      - volume_increase: "2 月 15-23 日现金支取量增加约 25%"
+      - channel_shift: "ATM 和 COUNTER 是主要增长渠道"
+      - customer_count_increase: "涉及的客户数量明显增加"
+    data_sources:
+      - fct_transaction (WITHDRAW type)
+      - dim_customer (customer_tier)
+      - dim_date (date attributes)
+    evaluation_criteria:
+      - temporal_comparison: "Agent 是否正确对比了两个时间段"
+      - multi_metric: "Agent 是否计算了多个关键指标（总额、笔数、客户数）"
+      - segmentation: "Agent 是否按渠道等维度分段分析"
+      - insight_extraction: "Agent 是否得出了合理的业务洞察"
+
+  - id: multi_step_q002
+    question: |
+      分析 LPR 下调（2026-06-20）前后的贷款申请趋势。
+      对比政策发布前 7 天、发布后 7 天和发布后 14 天的贷款申请量、平均金额和申请来源。
+    analysis_steps:
+      - step1: "定义三个时间窗口：6-13~6-19、6-20~6-26、6-27~7-04"
+      - step2: "查询各窗口内 LOAN 交易的笔数、总金额、平均金额"
+      - step3: "计算环比增长率"
+      - step4: "按交易渠道和客户等级分析申请来源"
+      - step5: "识别政策效应的传导延迟"
+    expected_insights:
+      - policy_lag: "政策发布后 7-14 天内申请量明显增长（+12%）"
+      - demand_surge: "个人消费贷款响应最快，企业贷款响应较慢"
+      - sustained_effect: "贷款余额在第二窗口持续增长"
+      - customer_segmentation: "高净值客户和 AFFLUENT 层响应度更高"
+    data_sources:
+      - fct_transaction (LOAN type)
+      - dim_customer (customer_tier)
+      - dim_date (date attributes)
+    evaluation_criteria:
+      - policy_context: "Agent 是否理解了宏观政策背景"
+      - lag_identification: "Agent 是否识别了政策传导延迟"
+      - granular_segmentation: "Agent 是否按多维度（渠道、客户等级）分段"
+      - causal_reasoning: "Agent 是否建立了政策与需求的因果关系"
+
+  # ============================================================
+  # 产品生命周期分析题目
+  # ============================================================
+
+  - id: multi_step_q003
+    question: |
+      安鑫 90 天理财产品（PROD_WEA_0000）在到期日（2026-05-14）前后的持有人行为分析。
+      包括：到期前 7 天的持有人数、到期后赎回率、续作率和资金流向。
+    analysis_steps:
+      - step1: "从 fct_holding 查询 2026-05-07 的 PROD_WEA_0000 持有人数和总持有额"
+      - step2: "从 fct_transaction 查询 2026-05-14 当天的赎回交易"
+      - step3: "从 fct_transaction 查询 2026-05-15~2026-05-21 的续作转入交易"
+      - step4: "计算续作客户转入的其他产品 ID"
+      - step5: "计算赎回率和续作率"
+    expected_insights:
+      - maturity_redemption: "到期日产生 58% 的赎回率"
+      - continuation_pattern: "42% 的续作客户转入 PROD_WEA_0002、PROD_WEA_0003"
+      - net_outflow: "整体资金流出行外超过 50%"
+      - customer_churn: "高净值客户在上海分行的 AUM 下降 3.2%"
+    data_sources:
+      - fct_holding (snapshot_dt)
+      - fct_transaction (WITHDRAW type, TRANSFER type)
+      - dim_customer (branch_id, customer_tier)
+    evaluation_criteria:
+      - product_tracking: "Agent 是否能追踪特定产品的完整生命周期"
+      - behavior_pattern: "Agent 是否识别出赎回→续作→转入的行为链"
+      - cohort_analysis: "Agent 是否进行了持有人群体分析"
+      - flow_tracing: "Agent 是否追踪了资金流向和流出"
+
+  - id: multi_step_q004
+    question: |
+      七夕营销活动（2026-08-10 启动）的转化效果评估。
+      对比活动前 7 天、活动后 3 天、活动后 7 天的定期存款新增客户和金额。
+    analysis_steps:
+      - step1: "定义时间窗口：8-03~8-09（前）、8-10~8-12（后 3 天）、8-10~8-16（后 7 天）"
+      - step2: "查询各窗口内 DEPOSIT 交易的笔数、总金额、涉及客户数"
+      - step3: "从 fct_campaign_response 找出 CAMP_QIXI 的转化数据"
+      - step4: "按分行和客户等级分段活动效果"
+      - step5: "计算活动的增量 ROI（定期存款增长 / 基础增长）"
+    expected_insights:
+      - campaign_uplift: "定期存款余额增长 12%，主要在杭州和南京分行"
+      - response_delay: "客户响应延迟 2-5 天，高峰在 8-12~8-16"
+      - segment_differences: "MASS 和 AFFLUENT 层响应度最高"
+      - channel_effectiveness: "抖音和微信朋友圈的渠道转化率显著"
+    data_sources:
+      - fct_transaction (DEPOSIT type)
+      - fct_campaign_response (CAMP_QIXI)
+      - fct_balance_daily (defining_deposit_balance)
+      - dim_customer (branch_id, customer_tier)
+    evaluation_criteria:
+      - campaign_attribution: "Agent 是否将变化正确归因于营销活动"
+      - response_timing: "Agent 是否识别出 2-5 天的响应延迟窗口"
+      - segment_analysis: "Agent 是否识别出不同客户等级的异质性响应"
+      - uplift_calculation: "Agent 是否隔离了基础增长与活动驱动增长"
+
+  # ============================================================
+  # 跨维度关联分析题目
+  # ============================================================
+
+  - id: multi_step_q005
+    question: |
+      分析 2026 年 2 月和 5 月两个特殊时期，不同客户等级在现金支取和定期存款行为上的差异。
+      对比 BASIC、MASS、AFFLUENT、HIGH_NET_WORTH 四个层级的行为模式。
+    analysis_steps:
+      - step1: "聚合 2 月的 WITHDRAW 交易：按 customer_tier 统计笔数、金额、客户数"
+      - step2: "聚合 5 月的 WITHDRAW、DEPOSIT、TRANSFER 交易，按 customer_tier 统计"
+      - step3: "聚合 5 月的定期存款余额变化，按分行和 customer_tier 分析"
+      - step4: "计算各层级的人均交易金额和交易频率"
+      - step5: "对比两个月的行为差异，识别层级特异性"
+    expected_insights:
+      - tier_behavioral_patterns: "BASIC/MASS 层春节现金支取占比高；HIGH_NET_WORTH 更关注理财产品"
+      - seasonal_differences: "2 月春节现金支取季节性；5 月理财产品到期驱动定期存款下降"
+      - branch_concentration: "高净值客户集中在一二线城市分行（上海、杭州、南京）"
+      - transaction_frequency: "客户等级越高，交易频率和平均单笔金额越大"
+    data_sources:
+      - fct_transaction (multi-type)
+      - fct_balance_daily
+      - dim_customer (customer_tier, branch_id)
+      - dim_date (special_period flags)
+    evaluation_criteria:
+      - multi_dimensional_analysis: "Agent 是否同时考虑了时间、客户等级、行为类型三个维度"
+      - segment_comparison: "Agent 是否进行了 4 个客户等级的对比分析"
+      - pattern_synthesis: "Agent 是否综合多个指标得出整体模式"
+      - business_implication: "Agent 是否推导出对营销和产品设计的启示"
+
+  - id: multi_step_q006
+    question: |
+      基于 5 月 14 日安鑫产品到期事件和 2 月 15-23 日春节假期现金支取事件，
+      对比两个事件的传导机制、影响范围和持续时间。
+      哪个事件的影响更深远？为什么？
+    analysis_steps:
+      - step1: "定义两个事件的时间窗口和主要指标（AUM、定期存款、现金流出）"
+      - step2: "追踪 5 月 14 日事件的客户、分行、产品维度影响"
+      - step3: "追踪 2 月 15-23 日事件的客户等级、渠道维度影响"
+      - step4: "计算两个事件的影响持续时间（何时恢复常态）"
+      - step5: "对比事件的深度（涉及金额）和广度（涉及客户数）"
+    expected_insights:
+      - depth_vs_breadth: "春节事件广（涉及 BASIC/MASS 层），但浅（短期现金需求）；产品到期事件深（涉及大额资金），但窄（高净值客户）"
+      - recovery_pattern: "春节现金支取在 2 月 24 日后恢复常态；产品到期的资金流出持久（续作率仅 42%）"
+      - systemic_impact: "产品到期的 AUM 下降是系统性的；春节的现金支取是周期性的"
+      - predictability: "两个事件都高度可预测，表明客户行为可被模型化"
+    data_sources:
+      - fct_transaction (multi-period, multi-type)
+      - fct_balance_daily (multi-period)
+      - fct_holding (snapshot_dt)
+      - dim_customer (all dimensions)
+    evaluation_criteria:
+      - comparative_framework: "Agent 是否建立了统一的比较框架"
+      - multi_level_analysis: "Agent 是否在客户、分行、产品多个层级进行了分析"
+      - pattern_synthesis: "Agent 是否识别出两个事件的本质差异（可预测的周期 vs 可预测的产品生命周期）"
+      - strategic_insight: "Agent 是否推导出对风险管理和客户运营的战略启示"
+
+  # ============================================================
+  # 预测和趋势外推题目
+  # ============================================================
+
+  - id: multi_step_q007
+    question: |
+      基于已有数据（2025-01 到 2026-05），预测：
+      1. 2026 年 6 月的贷款申请量会达到多少？（LPR 下调的延后效应）
+      2. 2026 年 9-10 月是否会出现新的营销活动驱动的定期存款增长？
+    analysis_steps:
+      - step1: "拆解已知的因果模式：LPR 下调（6-20）→ 贷款申请（7 天延迟）→ 增长持续（14 天）"
+      - step2: "从历史数据推断营销活动的季节性（春节、七夕、国庆？）"
+      - step3: "建立基础增长率基准（不含事件影响）"
+      - step4: "在基础增长率上叠加已知事件影响"
+      - step5: "对 6 月的贷款申请量和 9-10 月的定期存款进行点估计或区间估计"
+    expected_insights:
+      - q2_lpr_lag: "6 月贷款申请量应在 5 月基础上增长 10-15%（政策传导效应持续）"
+      - seasonal_campaigns: "9-10 月可能启动国庆相关活动，预期定期存款增长 5-10%"
+      - predictability_level: "在已知事件框架下，预测准确度较高；不可知事件是主要风险"
+    data_sources:
+      - fct_transaction (historical, by month)
+      - dim_date (event calendar)
+      - historical_campaign_data (inferred from fct_campaign_response)
+    evaluation_criteria:
+      - causal_reasoning: "Agent 是否基于已识别的因果关系进行推断"
+      - baseline_definition: "Agent 是否明确定义了基础增长率基准"
+      - uncertainty_quantification: "Agent 是否量化了预测的不确定性"
+      - scenario_planning: "Agent 是否提出了最好/最坏情景"
+
+  - id: multi_step_q008
+    question: |
+      设计一个"客户流失风险"预警模型，基于现有数据识别：
+      1. 哪些客户群体（按分行、等级、产品类型）最可能发生大额赎回？
+      2. 哪些指标组合可以作为早期预警信号？
+      3. 建议采取什么样的干预策略？
+    analysis_steps:
+      - step1: "回顾安鑫产品的历史：持有人数、续作率、赎回金额、赎回客户群体"
+      - step2: "识别高风险客户特征：高净值客户、短期理财持有人、离到期日接近"
+      - step3: "从交易数据推断客户活跃度和风险偏好指标"
+      - step4: "构建预警指标体系：持有期限、产品风险等级、客户联系频率、资金流入流出"
+      - step5: "为不同风险等级的客户群体设计差异化干预策略"
+    expected_insights:
+      - risk_segmentation: "HIGH_NET_WORTH + 理财产品 = 最高赎回风险；BASIC 层定期存款稳定性高"
+      - early_signals: "到期前 7 天的活跃度下降可能预示赎回倾向；产品评级下调会加速赎回"
+      - intervention_tactics: "高风险客户需要主动联系和转换提议；低风险客户可采用自动续作"
+      - threshold_setting: "续作率跌破 50% 时应触发预警；AUM 环比下降超过 5% 需调查"
+    data_sources:
+      - fct_holding (historical snapshots)
+      - fct_transaction (customer behavior)
+      - fct_campaign_response (customer engagement)
+      - dim_customer (all attributes)
+    evaluation_criteria:
+      - root_cause_analysis: "Agent 是否识别出赎回的根本驱动因素（产品到期、风险等级、市场环境）"
+      - indicator_selection: "Agent 是否选择了可观测、可预测的指标"
+      - business_feasibility: "Agent 建议的干预策略是否在运营上可行"
+      - scalability: "模型是否可扩展到全产品线"

@@ -1,0 +1,143 @@
+# 产品到期事件库
+# 用于模拟理财产品到期后的客户行为变化（续作/赎回/转换）
+
+events:
+  - id: anxin_90_expire
+    name: 安鑫90天理财到期
+    type: PRODUCT_EXPIRY
+    date: 2026-05-14
+    description: 短期理财产品普遍到期，触发大额赎回和余额下降
+    affected_dimensions:
+      branch_id: [BR_CITY_0006]  # 上海分行城分行
+      customer_tier: [HIGH_NET_WORTH, AFFLUENT]
+      product_id: [PROD_WEA_0000, PROD_WEA_0001]
+
+    propagation:
+      # 主体效应：存款余额下降
+      - target_table: fct_balance_daily
+        target_column: balance
+        metric_name: retail_deposit_balance
+        delta: -8.5  # -8.5% 下降幅度
+        delay_days: 1
+        ramp_days: 3  # 渐变 3 天，不是一天到位
+        ramp_type: linear
+        renewal_rate: 0.42  # 42% 客户续作其他产品，不完全流出
+        affected_account_sample: 0.6  # 只影响 60% 的持有账户
+
+      # 进阶效应：部分续作到其他产品
+      - target_table: fct_balance_daily
+        target_column: balance
+        metric_name: wealth_product_balance
+        delta: 1.8  # +1.8% 其他理财产品余额增加
+        delay_days: 3
+        affected_account_sample: 0.25  # 仅 25% 续作率
+        related_products: [PROD_WEA_0002, PROD_WEA_0003]
+
+    # 评估标准：归因 Agent 是否能识别这个根因
+    expected_rca_conclusion: |
+      上海分行高净值客户的活期存款下降 8.5%，主要原因是「安鑫 90 天」
+      理财产品在 2026-05-14 达到到期日期。历史数据显示，该产品历史到期客户
+      续作率仅 42%（低于行业均值 65%），大部分资金流出行外，仅小部分客户
+      在 3 天内转入其他理财产品。
+
+    expected_main_dimensions:
+      - branch_id: BR_CITY_0006
+      - product_id: PROD_WEA_0000
+      - customer_tier: HIGH_NET_WORTH
+
+  - id: qixi_deposit_campaign
+    name: 七夕情侣定期存款活动
+    type: MARKETING_EVENT
+    date: 2026-08-10
+    description: 营销活动拉动定期存款
+    affected_dimensions:
+      branch_id: [BR_CITY_0000, BR_CITY_0002]  # 杭州、南京分行
+      customer_tier: [MASS, AFFLUENT]
+      gender: [M, F]  # 情侣客户
+
+    propagation:
+      - target_table: fct_balance_daily
+        target_column: balance
+        metric_name: saving_deposit_balance
+        delta: 12.0  # +12% 定期存款增长
+        delay_days: 2
+        ramp_days: 5
+        affected_account_sample: 0.35
+        related_products: [PROD_DEP_0001, PROD_DEP_0004]
+
+    expected_rca_conclusion: |
+      杭州、南京分行 MASS 层客户定期存款在 2026-08-10 前后出现明显增长（+12%）。
+      根因是「七夕情侣定期存款」营销活动，该活动在抖音和微信朋友圈投放高强度广告，
+      客户响应延迟 2-5 天。活动对 MASS 层和 AFFLUENT 层均有拉动，但 BASIC 层客户
+      响应度较低。
+
+    expected_main_dimensions:
+      - branch_id: BR_CITY_0000
+      - customer_tier: MASS
+      - channel: MOBILE
+
+  - id: lpr_cut_q2
+    name: 二季度 LPR 下调 10bp
+    type: MACRO_EVENT
+    date: 2026-06-20
+    description: 央行政策利率下调，刺激贷款投放
+    affected_dimensions:
+      branch_id: []  # 全行影响
+      customer_tier: []  # 全客户层级
+
+    propagation:
+      - target_table: fct_transaction
+        target_column: amount
+        metric_name: loan_application_count
+        delta: 12.0  # +12% 贷款申请量
+        delay_days: 7  # 政策反应滞后 7 天
+        ramp_days: 14
+        transaction_type: LOAN
+        affected_account_sample: 0.08
+
+      - target_table: fct_balance_daily
+        target_column: balance
+        metric_name: loan_balance
+        delta: 5.5  # +5.5% 贷款余额增长
+        delay_days: 14
+        ramp_days: 21
+        affected_account_sample: 0.12
+
+    expected_rca_conclusion: |
+      2026 年二季度，全行贷款申请量在 6 月中旬开始上升，较月初增长 12%，
+      贷款余额也随之上升 5.5%。根本原因是 LPR 于 2026-06-20 下调 10bp，
+      虽然政策信号立即发出，但客户行为变化存在 1-2 周的滞后。特别是
+      个人消费贷款和房屋贷款申请量增长最快，企业贷款响应较慢。
+
+  - id: spring_festival_withdrawal
+    name: 春节大额现金支取
+    type: SEASONAL_EVENT
+    date: 2026-02-15
+    description: 春节传统放假，客户大额取现备年货
+    affected_dimensions:
+      customer_tier: [BASIC, MASS]  # 主要影响零售客户
+      branch_level: [SUBBRANCH, CITY]  # 网点级别明显
+
+    propagation:
+      - target_table: fct_transaction
+        target_column: amount
+        metric_name: cash_withdrawal_amount
+        delta: 25.0  # +25% 现金支取金额
+        delay_days: 0  # 从腊月廿八（2月15日）开始
+        ramp_days: 9   # 覆盖9天（2月15-23日）
+        transaction_type: WITHDRAW
+        transaction_channel: [ATM, COUNTER]
+        affected_account_sample: 0.45
+
+      - target_table: fct_balance_daily
+        target_column: balance
+        metric_name: daily_balance
+        delta: -18.0  # -18% 期末余额下降
+        delay_days: 0
+        affected_account_sample: 0.45
+
+    expected_rca_conclusion: |
+      春节假期期间（2026-02-15 至 2026-02-23），现金支取量明显增加 25%，
+      柜面和 ATM 交易量都很高。这是典型的春节季节性现象，主要涉及
+      BASIC 和 MASS 层零售客户。期末余额在 2026-02-24 左右返回常态。
+      与天气、促销等因素无关，纯粹是传统文化驱动的现金需求。
