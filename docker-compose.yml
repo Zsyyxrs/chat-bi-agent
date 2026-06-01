@@ -38,7 +38,7 @@ services:
 
   # ===== Langfuse 自托管全栈 =====
   # 主机端口 3001（3000 留给可能并存的外部 Langfuse）
-  # 首次启动后浏览器打开 http://localhost:3001，用 admin@local / admin12345 登录
+  # 首次启动后浏览器打开 http://localhost:3001，用 admin@chatbi.local / admin12345 登录
   # 进入 Settings → API Keys 创建一对 key，回填 .env
   langfuse-db:
     image: postgres:16-alpine
@@ -147,7 +147,7 @@ services:
       TELEMETRY_ENABLED: "false"
       LANGFUSE_INIT_ORG_ID: "chatbi-org"
       LANGFUSE_INIT_PROJECT_ID: "chatbi-p1"
-      LANGFUSE_INIT_USER_EMAIL: "admin@local"
+      LANGFUSE_INIT_USER_EMAIL: "admin@chatbi.local"
       LANGFUSE_INIT_USER_PASSWORD: "admin12345"
       LANGFUSE_INIT_USER_NAME: "Admin"
       CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
