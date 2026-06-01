@@ -92,6 +92,24 @@ services:
       - "9190:9000"
       - "9191:9001"
 
+  # 一次性创建 Langfuse 需要的 OTEL / event bucket，run-once 后退出
+  # 没有它，Langfuse worker 上传 trace 会 500（bucket 不存在）
+  minio-bootstrap:
+    image: minio/mc
+    container_name: chatbi-minio-bootstrap
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      sh -c "
+        until mc alias set local http://minio:9000 minio minio_dev_secret >/dev/null 2>&1; do
+          echo 'waiting for minio...'; sleep 1;
+        done;
+        mc mb --ignore-existing local/langfuse;
+        echo 'langfuse bucket ready';
+      "
+    restart: "no"
+
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     container_name: chatbi-langfuse-worker
