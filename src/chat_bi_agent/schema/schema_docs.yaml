@@ -1,0 +1,267 @@
+# chat-bi-agent · NL2SQL Agent 用的 schema 业务说明
+# 每张表一份文档，embed_text 字段会被 embedding 用于向量检索
+# 注入到 SQL Generator prompt 时，使用 columns 字段的完整 DDL 信息
+
+tables:
+  - name: dim_branch
+    type: dimension
+    domain: 机构
+    description: 机构（分行/支行）维度表，树形结构
+    primary_key: branch_id
+    columns:
+      - {name: branch_id, type: VARCHAR(16), description: "机构编号，业务主键（如 BR_SH_001 或 BR_CITY_0006）"}
+      - {name: branch_name, type: VARCHAR(64), description: "机构名称（如 上海分行）"}
+      - {name: branch_level, type: VARCHAR(16), description: "机构层级：HEAD 总行 / PROVINCE 省分行 / CITY 城分行 / SUBBRANCH 支行"}
+      - {name: parent_branch_id, type: VARCHAR(16), description: "上级机构编号"}
+      - {name: region, type: VARCHAR(16), description: "大区：华东/华北/华南/华中/西南/西北/东北"}
+      - {name: province, type: VARCHAR(32), description: "所在省份"}
+      - {name: city, type: VARCHAR(32), description: "所在城市"}
+      - {name: open_date, type: DATE, description: "机构开业日期"}
+      - {name: is_active, type: BOOLEAN, description: "是否存续"}
+    embed_text: |
+      表名 dim_branch：机构（分行/支行）维度表
+      业务域：机构
+      关键列：branch_id（机构编号 BR_CITY_0006）、branch_name（机构名 上海分行）、branch_level（层级 HEAD/PROVINCE/CITY/SUBBRANCH）、city、province、region
+      典型用途：按分行/城市/大区筛选与聚合；机构树形上下钻
+
+  - name: dim_customer
+    type: dimension
+    domain: 客户
+    description: 零售客户基础信息（脱敏）
+    primary_key: customer_id
+    foreign_keys:
+      - branch_id → dim_branch.branch_id
+    columns:
+      - {name: customer_id, type: VARCHAR(16), description: "客户号（如 CUST_000001）"}
+      - {name: customer_name, type: VARCHAR(64), description: "客户姓名（演示数据，非真实）"}
+      - {name: id_no_masked, type: VARCHAR(32), description: "身份证号脱敏（前 4 + 后 4）"}
+      - {name: gender, type: VARCHAR(8), description: "性别：M 男 / F 女 / U 未知"}
+      - {name: birth_date, type: DATE, description: "出生日期"}
+      - {name: age, type: INT, description: "年龄"}
+      - {name: customer_tier, type: VARCHAR(16), description: "客户层级：HIGH_NET_WORTH 私行 / AFFLUENT 财富 / MASS 大众 / BASIC 基础"}
+      - {name: risk_appetite, type: VARCHAR(8), description: "风险偏好：C1 保守 / C2 稳健 / C3 平衡 / C4 进取 / C5 激进"}
+      - {name: open_date, type: DATE, description: "客户开户日期"}
+      - {name: branch_id, type: VARCHAR(16), description: "归属机构编号（FK → dim_branch）"}
+      - {name: customer_manager_id, type: VARCHAR(16), description: "客户经理工号"}
+      - {name: aum, type: NUMERIC(18,2), description: "AUM 资产管理规模（最新快照，元）"}
+      - {name: is_active, type: BOOLEAN, description: "是否活跃客户"}
+    embed_text: |
+      表名 dim_customer：客户维度表，零售客户基础信息
+      业务域：客户
+      关键列：customer_id（客户号）、customer_name（姓名）、customer_tier（层级 HIGH_NET_WORTH/AFFLUENT/MASS/BASIC）、branch_id（所属分行）、risk_appetite（风险偏好 C1-C5）、aum（资产规模）、age、gender
+      典型用途：按分行/层级/风险偏好筛选客户；高净值/私行/财富客户画像分析
+
+  - name: dim_product
+    type: dimension
+    domain: 产品
+    description: 存款/贷款/理财/基金/保险/卡产品
+    primary_key: product_id
+    columns:
+      - {name: product_id, type: VARCHAR(16), description: "产品编号（如 PROD_FIN_AX90）"}
+      - {name: product_name, type: VARCHAR(64), description: "产品名称"}
+      - {name: product_category, type: VARCHAR(16), description: "产品大类：DEPOSIT 存款 / LOAN 贷款 / WEALTH 理财 / FUND 基金 / INSURANCE 保险 / CARD 银行卡"}
+      - {name: product_subcategory, type: VARCHAR(32), description: "产品子类（活期/定期/T+0/封闭式 等）"}
+      - {name: risk_level, type: VARCHAR(8), description: "风险等级：R1 低 / R2 中低 / R3 中 / R4 中高 / R5 高"}
+      - {name: term_days, type: INT, description: "产品期限（天），活期为 NULL"}
+      - {name: expected_return_rate, type: "NUMERIC(8,4)", description: "预期年化收益率（小数 0.0285 表示 2.85%）"}
+      - {name: min_amount, type: NUMERIC(18,2), description: "起购金额（元）"}
+      - {name: currency, type: VARCHAR(8), description: "币种：CNY/USD/HKD/EUR"}
+      - {name: launch_date, type: DATE, description: "产品发售日期"}
+      - {name: expire_date, type: DATE, description: "产品到期日（封闭式/定期）"}
+      - {name: is_active, type: BOOLEAN, description: "是否在售"}
+    embed_text: |
+      表名 dim_product：产品维度表，覆盖存款/贷款/理财/基金/保险/卡产品
+      业务域：产品
+      关键列：product_id（产品编号）、product_name（产品名）、product_category（大类 DEPOSIT/LOAN/WEALTH/FUND/INSURANCE/CARD 也可能用中文 理财/存款 等）、risk_level（风险 R1-R5）、term_days（期限）、expected_return_rate（预期收益）、min_amount（起购金额）
+      典型用途：按产品大类/风险等级筛选；理财/基金/存款产品的属性查询；产品分类聚合
+
+  - name: dim_account
+    type: dimension
+    domain: 账户
+    description: 客户名下的多个账户（活期/定期/贷款/理财等）
+    primary_key: account_id
+    foreign_keys:
+      - customer_id → dim_customer.customer_id
+      - product_id → dim_product.product_id
+      - branch_id → dim_branch.branch_id
+    columns:
+      - {name: account_id, type: VARCHAR(32), description: "账号（如 6222021234567890001）"}
+      - {name: customer_id, type: VARCHAR(16), description: "所属客户号（FK → dim_customer）"}
+      - {name: account_type, type: VARCHAR(16), description: "账户类型：CURRENT 活期 / SAVING 定期 / LOAN 贷款 / CARD 银行卡 / INVESTMENT 投资。注：业务方也可能用中文 活期存款/定期存款 等"}
+      - {name: account_subtype, type: VARCHAR(32), description: "账户子类型"}
+      - {name: currency, type: VARCHAR(8), description: "账户币种"}
+      - {name: product_id, type: VARCHAR(16), description: "对应产品（活期账户可为 NULL）"}
+      - {name: branch_id, type: VARCHAR(16), description: "开户机构"}
+      - {name: open_date, type: DATE, description: "开户日期"}
+      - {name: close_date, type: DATE, description: "销户日期，未销户为 NULL"}
+      - {name: status, type: VARCHAR(16), description: "账户状态：ACTIVE 正常 / FROZEN 冻结 / CLOSED 销户 / DORMANT 睡眠"}
+    embed_text: |
+      表名 dim_account：账户维度表，一个客户名下的多个账户
+      业务域：账户
+      关键列：account_id（账号）、customer_id（客户）、account_type（类型 CURRENT 活期 / SAVING 定期 / LOAN 贷款 / CARD / INVESTMENT，也可能用 活期存款/定期存款 等中文）、product_id（关联产品）、branch_id（开户机构）、status（ACTIVE/FROZEN/CLOSED/DORMANT）
+      典型用途：按账户类型/产品/分行查询账户；账户级聚合（如某分行的定期存款账户余额）
+
+  - name: dim_date
+    type: dimension
+    domain: 时间
+    description: 时间维度表，date_id 形如 20260528
+    primary_key: date_id
+    columns:
+      - {name: date_id, type: INT, description: "日期主键，INT YYYYMMDD（如 20260528）"}
+      - {name: full_date, type: DATE, description: "完整日期"}
+      - {name: year, type: SMALLINT, description: "年"}
+      - {name: quarter, type: SMALLINT, description: "季度（1-4）"}
+      - {name: month, type: SMALLINT, description: "月（1-12）"}
+      - {name: day, type: SMALLINT, description: "日（1-31）"}
+      - {name: week_of_year, type: SMALLINT, description: "一年中的第几周"}
+      - {name: day_of_week, type: SMALLINT, description: "周几（1=周一, 7=周日）"}
+      - {name: is_weekend, type: BOOLEAN, description: "是否周末"}
+      - {name: is_holiday, type: BOOLEAN, description: "是否法定节假日"}
+      - {name: holiday_name, type: VARCHAR(32), description: "节假日名称（春节/国庆/中秋 等）"}
+      - {name: is_month_end, type: BOOLEAN, description: "是否月末"}
+      - {name: is_quarter_end, type: BOOLEAN, description: "是否季末"}
+      - {name: is_year_end, type: BOOLEAN, description: "是否年末"}
+      - {name: fiscal_quarter, type: VARCHAR(8), description: "财务季度标识（如 2026Q2）"}
+    embed_text: |
+      表名 dim_date：时间维度表
+      业务域：时间
+      关键列：date_id（INT YYYYMMDD）、full_date（DATE）、year/quarter/month/day、is_weekend/is_holiday、holiday_name（春节/国庆/中秋）、is_month_end/is_quarter_end/is_year_end
+      典型用途：与 fct_*.dt 关联做时间维度上钻；按节假日/月末/季末过滤；同比环比时间对齐
+
+  - name: fct_transaction
+    type: fact
+    domain: 交易
+    description: 账户级笔笔交易流水，按月分区
+    primary_key: "(transaction_id, dt)"
+    foreign_keys:
+      - account_id → dim_account.account_id
+      - customer_id → dim_customer.customer_id
+      - branch_id → dim_branch.branch_id
+      - product_id → dim_product.product_id
+    columns:
+      - {name: transaction_id, type: BIGSERIAL, description: "交易流水号（自增）"}
+      - {name: dt, type: DATE, description: "交易日期，分区键。问题里的日期过滤直接用 dt = DATE 'YYYY-MM-DD'"}
+      - {name: transaction_time, type: TIMESTAMPTZ, description: "交易发生时间（毫秒级）"}
+      - {name: account_id, type: VARCHAR(32), description: "本方账号"}
+      - {name: customer_id, type: VARCHAR(16), description: "本方客户号"}
+      - {name: counter_account_id, type: VARCHAR(32), description: "对方账号"}
+      - {name: transaction_type, type: VARCHAR(16), description: "交易类型：DEPOSIT 存入 / WITHDRAW 支取 / TRANSFER 转账 / PAYMENT 消费 / INTEREST 利息 / FEE 手续费 / REPAYMENT 还款"}
+      - {name: transaction_channel, type: VARCHAR(16), description: "交易渠道：MOBILE 手机银行 / INTERNET 网上银行 / COUNTER 柜面 / ATM / AGENT 代理 / API"}
+      - {name: amount, type: NUMERIC(18,2), description: "交易金额（元，正值）"}
+      - {name: currency, type: VARCHAR(8), description: "交易币种"}
+      - {name: balance_after, type: NUMERIC(18,2), description: "交易后账户余额"}
+      - {name: branch_id, type: VARCHAR(16), description: "交易归属机构"}
+      - {name: product_id, type: VARCHAR(16), description: "关联产品（如理财申购）"}
+      - {name: description, type: VARCHAR(255), description: "交易摘要"}
+    embed_text: |
+      表名 fct_transaction：交易流水事实表，账户级笔笔交易
+      业务域：交易
+      关键列：dt（交易日期，分区键）、transaction_time、account_id、customer_id、transaction_type（DEPOSIT/WITHDRAW/TRANSFER/PAYMENT/INTEREST/FEE/REPAYMENT）、transaction_channel（MOBILE/INTERNET/COUNTER/ATM/AGENT/API）、amount、branch_id、product_id
+      典型用途：按日期/类型/渠道查询交易；现金支取/存入/转账统计；春节/节假日交易峰值分析；某日某分行交易明细
+
+  - name: fct_balance_daily
+    type: fact
+    domain: 余额
+    description: 账户日终余额快照，BI 存款/AUM 类口径的核心底表，按月分区
+    primary_key: "(dt, account_id)"
+    foreign_keys:
+      - account_id → dim_account.account_id
+      - customer_id → dim_customer.customer_id
+      - branch_id → dim_branch.branch_id
+      - product_id → dim_product.product_id
+    columns:
+      - {name: dt, type: DATE, description: "业务日期，分区键"}
+      - {name: account_id, type: VARCHAR(32), description: "账号"}
+      - {name: customer_id, type: VARCHAR(16), description: "客户号"}
+      - {name: product_id, type: VARCHAR(16), description: "产品编号"}
+      - {name: branch_id, type: VARCHAR(16), description: "归属机构"}
+      - {name: balance, type: NUMERIC(18,2), description: "日终余额（元）"}
+      - {name: avg_balance_mtd, type: NUMERIC(18,2), description: "月累计日均余额（Month-To-Date）"}
+      - {name: currency, type: VARCHAR(8), description: "币种"}
+    embed_text: |
+      表名 fct_balance_daily：账户日终余额快照
+      业务域：余额（存款/AUM）
+      关键列：dt（业务日期）、account_id、customer_id、product_id、branch_id、balance（日终余额）、avg_balance_mtd（月累计日均）
+      典型用途：存款余额/AUM 统计的核心底表；分行/客户/产品维度的余额聚合；同比环比余额变化；日均余额查询
+
+  - name: fct_holding
+    type: fact
+    domain: 持仓
+    description: 理财/基金/保险/贵金属当日持仓快照
+    primary_key: "(snapshot_dt, account_id, product_id)"
+    foreign_keys:
+      - customer_id → dim_customer.customer_id
+      - account_id → dim_account.account_id
+      - product_id → dim_product.product_id
+      - branch_id → dim_branch.branch_id
+    columns:
+      - {name: snapshot_dt, type: DATE, description: "快照日期"}
+      - {name: customer_id, type: VARCHAR(16), description: "客户号"}
+      - {name: account_id, type: VARCHAR(32), description: "投资账户"}
+      - {name: product_id, type: VARCHAR(16), description: "所持产品"}
+      - {name: branch_id, type: VARCHAR(16), description: "归属机构"}
+      - {name: holding_amount, type: NUMERIC(18,2), description: "持仓本金（元）"}
+      - {name: holding_shares, type: "NUMERIC(18,4)", description: "持仓份额（基金/理财）"}
+      - {name: market_value, type: NUMERIC(18,2), description: "持仓市值（元）"}
+      - {name: cost_basis, type: NUMERIC(18,2), description: "持仓成本（元）"}
+      - {name: pnl, type: NUMERIC(18,2), description: "浮动盈亏 = market_value - cost_basis"}
+      - {name: currency, type: VARCHAR(8), description: "币种"}
+    embed_text: |
+      表名 fct_holding：客户持仓事实表
+      业务域：持仓（理财/基金/保险/贵金属）
+      关键列：snapshot_dt、customer_id、product_id、branch_id、holding_amount（本金）、market_value（市值）、cost_basis（成本）、pnl（浮动盈亏）
+      典型用途：理财/基金持仓查询；客户/产品维度持仓聚合；盈亏分析
+
+  - name: fct_risk_event
+    type: fact
+    domain: 风险
+    description: 风险事件事实表，逾期/欺诈/反洗钱告警/信用降级等
+    primary_key: event_id
+    foreign_keys:
+      - customer_id → dim_customer.customer_id
+      - branch_id → dim_branch.branch_id
+    columns:
+      - {name: event_id, type: BIGSERIAL, description: "事件流水号"}
+      - {name: event_time, type: TIMESTAMPTZ, description: "事件发生时间"}
+      - {name: dt, type: DATE, description: "业务日期"}
+      - {name: customer_id, type: VARCHAR(16), description: "涉及客户"}
+      - {name: account_id, type: VARCHAR(32), description: "涉及账户"}
+      - {name: event_type, type: VARCHAR(32), description: "事件类型：OVERDUE 逾期 / FRAUD 欺诈 / AML_ALERT 反洗钱 / CREDIT_DOWNGRADE 信用降级 / DISPUTE 争议"}
+      - {name: severity, type: VARCHAR(16), description: "严重程度：LOW / MEDIUM / HIGH / CRITICAL"}
+      - {name: amount, type: NUMERIC(18,2), description: "涉及金额（元）"}
+      - {name: status, type: VARCHAR(16), description: "处置状态：OPEN / INVESTIGATING / CLOSED / CONFIRMED"}
+      - {name: branch_id, type: VARCHAR(16), description: "归属机构"}
+      - {name: description, type: VARCHAR(255), description: "事件描述"}
+    embed_text: |
+      表名 fct_risk_event：风险事件事实表
+      业务域：风险
+      关键列：event_time、dt、customer_id、event_type（OVERDUE 逾期/FRAUD 欺诈/AML_ALERT 反洗钱/CREDIT_DOWNGRADE 信用降级/DISPUTE 争议）、severity（LOW/MEDIUM/HIGH/CRITICAL）、status（OPEN/INVESTIGATING/CLOSED/CONFIRMED）、amount
+      典型用途：风险事件统计；逾期/欺诈监控；按严重程度/客户/机构聚合风险
+
+  - name: fct_campaign_response
+    type: fact
+    domain: 营销
+    description: 营销活动响应事实表，触达→点击→转化的全链路
+    primary_key: response_id
+    foreign_keys:
+      - customer_id → dim_customer.customer_id
+      - product_id → dim_product.product_id
+      - branch_id → dim_branch.branch_id
+    columns:
+      - {name: response_id, type: BIGSERIAL, description: "响应记录流水号"}
+      - {name: campaign_id, type: VARCHAR(32), description: "营销活动编号"}
+      - {name: campaign_name, type: VARCHAR(128), description: "营销活动名称（如 七夕定期存款活动）"}
+      - {name: customer_id, type: VARCHAR(16), description: "被触达客户"}
+      - {name: touch_time, type: TIMESTAMPTZ, description: "触达时间"}
+      - {name: dt, type: DATE, description: "触达日期"}
+      - {name: channel, type: VARCHAR(16), description: "触达渠道：SMS 短信 / APP_PUSH 推送 / CALL 外呼 / EMAIL 邮件 / IN_PERSON 网点"}
+      - {name: response_type, type: VARCHAR(16), description: "响应类型：NO_RESPONSE 无响应 / CLICKED 点击 / INTERESTED 感兴趣 / CONVERTED 已转化 / REJECTED 明确拒绝"}
+      - {name: conversion_time, type: TIMESTAMPTZ, description: "转化时间（若已转化）"}
+      - {name: conversion_amount, type: NUMERIC(18,2), description: "转化金额（如理财申购金额）"}
+      - {name: product_id, type: VARCHAR(16), description: "推荐产品"}
+      - {name: branch_id, type: VARCHAR(16), description: "归属机构"}
+    embed_text: |
+      表名 fct_campaign_response：营销活动响应事实表
+      业务域：营销
+      关键列：campaign_id、campaign_name（如 七夕定期存款活动）、customer_id、touch_time、dt、channel（SMS/APP_PUSH/CALL/EMAIL/IN_PERSON）、response_type（NO_RESPONSE/CLICKED/INTERESTED/CONVERTED/REJECTED）、conversion_amount、product_id
+      典型用途：营销 ROI 分析；活动转化率统计；按渠道/分行/产品聚合营销效果
