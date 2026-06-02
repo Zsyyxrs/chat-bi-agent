@@ -1,0 +1,67 @@
+"""通义千问 (DashScope) chat + embedding 封装。
+
+只暴露两个函数：chat() 和 embed()，输入输出都用纯 Python 类型，
+不直接暴露 dashscope 的响应对象。所有调用失败抛 RuntimeError。
+"""
+
+import os
+from dataclasses import dataclass
+
+import dashscope
+from dashscope import Generation, TextEmbedding
+
+
+# 模型名集中放这里，方便统一升级 / 降级（v4 → v3 fallback）
+CHAT_MODEL = "qwen-max"
+EMBED_MODEL = "text-embedding-v4"
+EMBED_DIM = 1024
+
+
+@dataclass
+class ChatResult:
+    content: str
+    prompt_tokens: int
+    completion_tokens: int
+
+
+def _ensure_api_key() -> None:
+    api_key = os.environ.get("DASHSCOPE_API_KEY")
+    if not api_key:
+        raise RuntimeError("DASHSCOPE_API_KEY 环境变量未设置")
+    dashscope.api_key = api_key
+
+
+def chat(system_prompt: str, user_prompt: str, temperature: float = 0.1) -> ChatResult:
+    """单轮聊天调用。低 temperature 适合 NL2SQL。"""
+    _ensure_api_key()
+    resp = Generation.call(
+        model=CHAT_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        result_format="message",
+        temperature=temperature,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"qwen chat 调用失败: {resp.code} {resp.message}")
+    choice = resp.output.choices[0]
+    return ChatResult(
+        content=choice.message.content,
+        prompt_tokens=resp.usage.input_tokens,
+        completion_tokens=resp.usage.output_tokens,
+    )
+
+
+def embed(texts: list[str]) -> list[list[float]]:
+    """批量 embedding。返回 list of 1024-dim 向量。"""
+    _ensure_api_key()
+    resp = TextEmbedding.call(
+        model=EMBED_MODEL,
+        input=texts,
+        dimension=EMBED_DIM,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"qwen embedding 调用失败: {resp.code} {resp.message}")
+    # dashscope 返回的 embeddings 顺序与 input 一致
+    return [item["embedding"] for item in resp.output["embeddings"]]

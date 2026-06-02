@@ -5,6 +5,12 @@ pyyaml>=6.0
 sqlalchemy>=2.0.0
 click>=8.1.0
 
+# Agent layer
+dashscope>=1.20.0
+langfuse>=3.0.0
+python-dotenv>=1.0.0
+numpy>=1.26.0
+
 # Development dependencies (optional)
 pytest>=7.0
 pytest-cov>=4.0

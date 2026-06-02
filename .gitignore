@@ -52,6 +52,7 @@ results/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 .tox/
@@ -59,5 +60,5 @@ htmlcov/
 # Mac
 .DS_Store
 
-# Exclude actual architecture design from git
-金融data\ agent架构设计.md
+# Design / planning docs stay local
+docs/

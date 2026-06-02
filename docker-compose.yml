@@ -11,7 +11,8 @@ services:
       PGTZ: Asia/Shanghai
       LANG: zh_CN.utf8
     ports:
-      - "5432:5432"
+      # 主机端口 5433（5432 留给可能并存的外部 Langfuse PG）；容器内仍为 5432
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -35,5 +36,157 @@ services:
       postgres:
         condition: service_healthy
 
+  # ===== Langfuse 自托管全栈 =====
+  # 主机端口 3001（3000 留给可能并存的外部 Langfuse）
+  # 首次启动后浏览器打开 http://localhost:3001，用 admin@chatbi.local / admin12345 登录
+  # 进入 Settings → API Keys 创建一对 key，回填 .env
+  langfuse-db:
+    image: postgres:16-alpine
+    container_name: chatbi-langfuse-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse_dev
+    volumes:
+      - langfusedb:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: chatbi-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: langfuse
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: langfuse_dev
+    volumes:
+      - clickhousedata:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  redis:
+    image: redis:7-alpine
+    container_name: chatbi-redis
+    restart: unless-stopped
+    command: redis-server --requirepass langfuse_dev
+
+  minio:
+    image: minio/minio
+    container_name: chatbi-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio_dev_secret
+    volumes:
+      - miniodata:/data
+    ports:
+      # 仅调试用；主机端口避开 9000/9001 防止常见冲突
+      - "9190:9000"
+      - "9191:9001"
+
+  # 一次性创建 Langfuse 需要的 OTEL / event bucket，run-once 后退出
+  # 没有它，Langfuse worker 上传 trace 会 500（bucket 不存在）
+  minio-bootstrap:
+    image: minio/mc
+    container_name: chatbi-minio-bootstrap
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      sh -c "
+        until mc alias set local http://minio:9000 minio minio_dev_secret >/dev/null 2>&1; do
+          echo 'waiting for minio...'; sleep 1;
+        done;
+        mc mb --ignore-existing local/langfuse;
+        echo 'langfuse bucket ready';
+      "
+    restart: "no"
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: chatbi-langfuse-worker
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse_dev@langfuse-db:5432/langfuse
+      SALT: "mysalt_change_in_prod"
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: langfuse_dev
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: langfuse_dev
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: minio_dev_secret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+
+  langfuse:
+    image: langfuse/langfuse:3
+    container_name: chatbi-langfuse
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse_dev@langfuse-db:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3001
+      NEXTAUTH_SECRET: "mysecret_change_in_prod"
+      SALT: "mysalt_change_in_prod"
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_INIT_ORG_ID: "chatbi-org"
+      LANGFUSE_INIT_PROJECT_ID: "chatbi-p1"
+      LANGFUSE_INIT_USER_EMAIL: "admin@chatbi.local"
+      LANGFUSE_INIT_USER_PASSWORD: "admin12345"
+      LANGFUSE_INIT_USER_NAME: "Admin"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: langfuse_dev
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: langfuse_dev
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: minio_dev_secret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+    ports:
+      - "3001:3000"
+
 volumes:
   pgdata:
+  langfusedb:
+  clickhousedata:
+  miniodata:
