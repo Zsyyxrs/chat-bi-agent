@@ -2,11 +2,11 @@
 
 import os
 import re
-import psycopg2
 from enum import Enum
+
+import psycopg2
 from langfuse import observe
 from psycopg2.extras import RealDictCursor
-
 
 
 class UnsafeSQLError(Exception):
