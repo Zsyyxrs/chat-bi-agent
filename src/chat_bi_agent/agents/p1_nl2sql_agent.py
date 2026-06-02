@@ -3,7 +3,6 @@
 通过 @observe 装饰让全过程在 Langfuse 形成一个完整 trace。
 """
 
-import math
 import time
 from dataclasses import dataclass
 
@@ -40,9 +39,11 @@ class P1NL2SQLAgent:
 
     @observe(name="p1_nl2sql_run")
     def run(self, question_id: str, question: str) -> P1AgentResult:
-        start = time.time()
+        start = time.perf_counter()
 
         matches = self.schema_linker.link(question)
+        if not matches:
+            raise RuntimeError(f"SchemaLinker 未召回任何表，question: {question!r}")
         top_names = [m.name for m in matches]
 
         schema_ddl = "\n\n".join(self.loader.get_ddl_text(name) for name in top_names)
@@ -53,7 +54,7 @@ class P1NL2SQLAgent:
             execute_fn=self.sql_executor.execute,
         )
 
-        elapsed_ms = math.ceil((time.time() - start) * 1000)
+        elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
 
         return P1AgentResult(
             question_id=question_id,
