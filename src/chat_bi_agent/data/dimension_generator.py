@@ -3,6 +3,7 @@
 import random
 from datetime import date, timedelta
 from typing import Generator
+
 from faker import Faker
 
 fake = Faker("zh_CN")
@@ -36,15 +37,16 @@ class DimensionGenerator:
             "西北": ["陕西", "甘肃", "新疆", "宁夏"],
             "东北": ["辽宁", "吉林", "黑龙江"],
         }
+        # 顺序与编号锚定到评估 YAML：BR_CITY_0000=杭州, BR_CITY_0002=南京, BR_CITY_0006=浦东(上海)
         cities = {
-            "浙江": ["杭州", "宁波", "温州"],
-            "江苏": ["南京", "苏州", "无锡"],
+            "浙江": ["杭州", "宁波"],
+            "江苏": ["南京", "苏州"],
+            "河北": ["石家庄", "唐山"],
             "上海": ["浦东", "黄浦", "静安"],
             "北京": ["朝阳", "海淀", "东城"],
             "广东": ["广州", "深圳", "佛山"],
         }
 
-        branch_counter = 0
         # HEAD
         yield {
             "branch_id": "BR_HEAD_00",
@@ -57,14 +59,15 @@ class DimensionGenerator:
             "open_date": date(2010, 1, 1),
             "is_active": True,
         }
-        branch_counter += 1
         head_id = "BR_HEAD_00"
+        emitted = 1
 
-        # PROVINCE level (one per region)
+        # PROVINCE level (one per region) — counter 独立，从 0 开始
+        prov_counter = 0
         province_ids = {}
         for region in regions:
             for province in provinces.get(region, []):
-                province_id = f"BR_PROV_{branch_counter:04d}"
+                province_id = f"BR_PROV_{prov_counter:04d}"
                 province_ids[province] = province_id
                 yield {
                     "branch_id": province_id,
@@ -77,16 +80,18 @@ class DimensionGenerator:
                     "open_date": date(2015, 1, 1),
                     "is_active": True,
                 }
-                branch_counter += 1
+                prov_counter += 1
+                emitted += 1
 
-        # CITY level
+        # CITY level — counter 独立从 0；cities 字典顺序决定 BR_CITY_NNNN 编号
+        city_counter = 0
         city_ids = {}
         for province, city_list in cities.items():
             prov_id = province_ids.get(province)
             if not prov_id:
                 continue
             for city in city_list:
-                city_id = f"BR_CITY_{branch_counter:04d}"
+                city_id = f"BR_CITY_{city_counter:04d}"
                 city_ids[city] = city_id
                 yield {
                     "branch_id": city_id,
@@ -99,13 +104,15 @@ class DimensionGenerator:
                     "open_date": date(2018, 1, 1),
                     "is_active": True,
                 }
-                branch_counter += 1
+                city_counter += 1
+                emitted += 1
 
-        # SUBBRANCH level
+        # SUBBRANCH level — counter 独立从 0
+        sub_counter = 0
         subbranch_names = ["营业部", "营销中心", "小微部", "财富部"]
         for city, city_id in list(city_ids.items())[:min(10, len(city_ids))]:
-            for i, sb_name in enumerate(subbranch_names):
-                sb_id = f"BR_SUB_{branch_counter:04d}"
+            for sb_name in subbranch_names:
+                sb_id = f"BR_SUB_{sub_counter:04d}"
                 yield {
                     "branch_id": sb_id,
                     "branch_name": f"{city}{sb_name}",
@@ -117,8 +124,9 @@ class DimensionGenerator:
                     "open_date": date(2020, 1, 1),
                     "is_active": True,
                 }
-                branch_counter += 1
-                if branch_counter >= count:
+                sub_counter += 1
+                emitted += 1
+                if emitted >= count:
                     return
 
     # ============================================================
