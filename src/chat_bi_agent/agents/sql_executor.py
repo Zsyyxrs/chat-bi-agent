@@ -2,12 +2,11 @@
 
 import os
 import re
-from dataclasses import dataclass
-from enum import Enum
-
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from enum import Enum
 from langfuse import observe
+from psycopg2.extras import RealDictCursor
+
 
 
 class UnsafeSQLError(Exception):
@@ -21,6 +20,8 @@ class SQLErrorClass(str, Enum):
     OTHER = "OTHER"
 
 
+# SET / EXECUTE / CALL are not listed: each execute() call uses a fresh connection,
+# so session effects (search_path tampering, prepared statements) cannot persist.
 FORBIDDEN_PATTERN = re.compile(
     r"\b(DROP|TRUNCATE|DELETE|UPDATE|INSERT|ALTER|GRANT|REVOKE|CREATE|COPY|VACUUM|MERGE)\b",
     re.IGNORECASE,
@@ -77,8 +78,8 @@ class SQLExecutor:
         msg = error_msg.lower()
         if "syntax error" in msg:
             return SQLErrorClass.SYNTAX_ERROR
-        if "relation" in msg and "does not exist" in msg:
-            return SQLErrorClass.UNKNOWN_TABLE
         if "column" in msg and "does not exist" in msg:
             return SQLErrorClass.UNKNOWN_COLUMN
+        if "relation" in msg and "does not exist" in msg:
+            return SQLErrorClass.UNKNOWN_TABLE
         return SQLErrorClass.OTHER
