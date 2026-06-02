@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import dashscope
 from dashscope import Generation, TextEmbedding
-
+from langfuse import get_client, observe
 
 # 模型名集中放这里，方便统一升级 / 降级（v4 → v3 fallback）
 CHAT_MODEL = "qwen-max"
@@ -31,6 +31,7 @@ def _ensure_api_key() -> None:
     dashscope.api_key = api_key
 
 
+@observe(as_type="generation", name="qwen_chat")
 def chat(system_prompt: str, user_prompt: str, temperature: float = 0.1) -> ChatResult:
     """单轮聊天调用。低 temperature 适合 NL2SQL。"""
     _ensure_api_key()
@@ -46,6 +47,14 @@ def chat(system_prompt: str, user_prompt: str, temperature: float = 0.1) -> Chat
     if resp.status_code != 200:
         raise RuntimeError(f"qwen chat 调用失败: {resp.code} {resp.message}")
     choice = resp.output.choices[0]
+    get_client().update_current_generation(
+        model=CHAT_MODEL,
+        model_parameters={"temperature": temperature},
+        usage_details={
+            "input": resp.usage.input_tokens,
+            "output": resp.usage.output_tokens,
+        },
+    )
     return ChatResult(
         content=choice.message.content,
         prompt_tokens=resp.usage.input_tokens,
@@ -53,6 +62,7 @@ def chat(system_prompt: str, user_prompt: str, temperature: float = 0.1) -> Chat
     )
 
 
+@observe(as_type="embedding", name="qwen_embed")
 def embed(texts: list[str]) -> list[list[float]]:
     """批量 embedding。返回 list of 1024-dim 向量。"""
     _ensure_api_key()
@@ -63,5 +73,13 @@ def embed(texts: list[str]) -> list[list[float]]:
     )
     if resp.status_code != 200:
         raise RuntimeError(f"qwen embedding 调用失败: {resp.code} {resp.message}")
+    # embedding 的 resp.usage 是 dict，只有 total_tokens；chat 的是对象有 input/output_tokens
+    usage = getattr(resp, "usage", None) or {}
+    input_tokens = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
+    get_client().update_current_generation(
+        model=EMBED_MODEL,
+        model_parameters={"dimension": EMBED_DIM, "batch_size": len(texts)},
+        usage_details={"input": input_tokens, "output": 0},
+    )
     # dashscope 返回的 embeddings 顺序与 input 一致
     return [item["embedding"] for item in resp.output["embeddings"]]
