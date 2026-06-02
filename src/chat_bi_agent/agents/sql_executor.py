@@ -1,4 +1,4 @@
-"""执行 SQL：只读 PG 用户 + SELECT 白名单 + 错误分类。"""
+"""执行 SQL：只读 PG 用户 + SELECT 白名单 + 错误分类 + statement_timeout。"""
 
 import os
 import re
@@ -17,7 +17,10 @@ class SQLErrorClass(str, Enum):
     SYNTAX_ERROR = "SYNTAX_ERROR"
     UNKNOWN_TABLE = "UNKNOWN_TABLE"
     UNKNOWN_COLUMN = "UNKNOWN_COLUMN"
+    TIMEOUT = "TIMEOUT"
     OTHER = "OTHER"
+    INVALID_JSON = "INVALID_JSON"          # agent 层从 SQLGenerator 抛出的错误映射
+    VALIDATOR_FAIL = "VALIDATOR_FAIL"      # agent 层从 SQLValidator 失败映射
 
 
 # SET / EXECUTE / CALL are not listed: each execute() call uses a fresh connection,
@@ -29,18 +32,18 @@ FORBIDDEN_PATTERN = re.compile(
 
 
 class SQLExecutor:
-    def __init__(self):
+    def __init__(self, statement_timeout_ms: int = 10_000):
         self.host = os.environ.get("PG_HOST", "localhost")
         self.port = int(os.environ.get("PG_PORT", "5432"))
         self.database = os.environ.get("PG_DATABASE", "chatbi")
         self.user = os.environ.get("PG_READONLY_USER", "chatbi_readonly")
         self.password = os.environ.get("PG_READONLY_PASSWORD", "readonly_dev")
+        self.statement_timeout_ms = statement_timeout_ms
 
     def _is_safe(self, sql: str) -> bool:
         if FORBIDDEN_PATTERN.search(sql):
             return False
         stripped = sql.strip().lower()
-        # 必须以 select 或 with 开头（with 用于 CTE）
         return stripped.startswith("select") or stripped.startswith("with")
 
     @observe(name="sql_execution")
@@ -61,6 +64,7 @@ class SQLExecutor:
                 password=self.password,
                 host=self.host,
                 port=self.port,
+                options=f"-c statement_timeout={self.statement_timeout_ms}",
             )
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql)
@@ -76,6 +80,9 @@ class SQLExecutor:
     @staticmethod
     def classify_error(error_msg: str) -> SQLErrorClass:
         msg = error_msg.lower()
+        # TIMEOUT 必须排在 SYNTAX/UNKNOWN_* 之前，避免错误文本里偶现 "syntax" 子串导致误分类
+        if "canceling statement due to statement timeout" in msg:
+            return SQLErrorClass.TIMEOUT
         if "syntax error" in msg:
             return SQLErrorClass.SYNTAX_ERROR
         if "column" in msg and "does not exist" in msg:
