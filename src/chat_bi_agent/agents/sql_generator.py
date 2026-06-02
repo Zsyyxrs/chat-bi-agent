@@ -60,6 +60,8 @@ class InvalidJsonError(Exception):
     pass
 
 
+# non-greedy `\{.*?\}` 配合 ```fence``` 锚定到第一对完整的 JSON 大括号；
+# 嵌套 brace（如 SQL 中含 {placeholder}）能正确匹配到 fence 之前的最后一个 `}`。
 JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 
@@ -98,10 +100,7 @@ class SQLGenerator:
         if err_class == SQLErrorClass.SYNTAX_ERROR:
             hint = f"你上次生成的 SQL 语法错误：{prev_error}。请修正。"
         elif err_class == SQLErrorClass.UNKNOWN_TABLE:
-            hint = (
-                f"你上次用了不存在的表，请只使用召回的表："
-                f"{prev_tables}；完整错误：{prev_error}"
-            )
+            hint = f"你上次用了不存在的表，请仔细核对上方 schema 中的表名；完整错误：{prev_error}"
         elif err_class == SQLErrorClass.UNKNOWN_COLUMN:
             hint = f"你上次用了不存在的列，请仔细核对 schema 中的列名；完整错误：{prev_error}"
         else:
