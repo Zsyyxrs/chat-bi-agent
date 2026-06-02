@@ -1,15 +1,14 @@
 """SQLGenerator 测试：mock LLM，专注 prompt 拼接 + JSON 解析 + 重试逻辑。"""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from chat_bi_agent.agents.sql_generator import (
+    InvalidJsonError,
     SQLGenerator,
     SQLGenResult,
-    InvalidJsonError,
 )
-from chat_bi_agent.agents.sql_executor import SQLErrorClass
 
 
 @pytest.fixture
@@ -73,7 +72,7 @@ def test_retry_on_invalid_json_then_success(gen):
     with patch("chat_bi_agent.agents.sql_generator.qwen_client.chat") as mock_chat:
         mock_chat.side_effect = [
             _fake_chat_result("not json"),
-            _fake_chat_result('```json\n{"thought": "T", "tables_used": ["t"], "sql": "SELECT 1"}\n```'),
+            _fake_chat_result('```json\n{"thought": "T", "tables_used": ["t"], "sql": "SELECT 1"}\n```'),  # noqa: E501
         ]
         result = gen.generate(
             question="问题",
@@ -96,8 +95,8 @@ def test_retry_on_execution_error_then_success(gen):
 
     with patch("chat_bi_agent.agents.sql_generator.qwen_client.chat") as mock_chat:
         mock_chat.side_effect = [
-            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT foo FROM t"}\n```'),
-            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT bar FROM t"}\n```'),
+            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT foo FROM t"}\n```'),  # noqa: E501
+            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT bar FROM t"}\n```'),  # noqa: E501
         ]
         result = gen.generate(
             question="问题",
@@ -112,7 +111,7 @@ def test_retry_on_execution_error_then_success(gen):
 def test_all_attempts_fail_returns_last_error(gen):
     with patch("chat_bi_agent.agents.sql_generator.qwen_client.chat") as mock_chat:
         mock_chat.side_effect = [
-            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT bad"}\n```'),
+            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT bad"}\n```'),  # noqa: E501
         ] * 3
         result = gen.generate(
             question="问题",
