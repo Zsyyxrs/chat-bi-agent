@@ -40,7 +40,7 @@ def test_syntax_error_attempt1_retries(reflector, top_k_tables):
         "SELEC 1", top_k_tables, attempt=1,
     )
     assert d.action == ReflectAction.RETRY
-    assert "语法" in d.repair_hint or "syntax" in d.repair_hint.lower()
+    assert "语法" in d.repair_hint
 
 
 def test_unknown_column_attempt1_retries(reflector, top_k_tables):

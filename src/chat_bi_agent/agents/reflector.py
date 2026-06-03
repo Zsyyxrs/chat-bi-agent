@@ -37,6 +37,11 @@ class Reflector:
         top_k_tables: list[str],
         attempt: int,
     ) -> ReflectDecision:
+        """决策当前错误是 RETRY 还是 GIVE_UP，并在 RETRY 时拼修复 hint。
+
+        prev_sql 暂未参与 hint 生成（保留参数：后续若要把上次 SQL 回灌给 LLM 做 diff 提示再用）；
+        当前 caller (P1NL2SQLAgent) 仍按契约传入。
+        """
         # 1. TIMEOUT 立即放弃，重试也是再 timeout
         if err_class == SQLErrorClass.TIMEOUT:
             return ReflectDecision(action=ReflectAction.GIVE_UP, repair_hint=None)
@@ -63,8 +68,8 @@ class Reflector:
         if err_class == SQLErrorClass.VALIDATOR_FAIL:
             return (
                 f"上次 SQL 没通过解析：{err_msg}。仅允许 SELECT 或 WITH 顶层语句，"
-                "禁止任何 DML/DDL"
-                "（INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/TRUNCATE/GRANT/COPY/MERGE）。"
+                "禁止任何 DML/DDL（INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/TRUNCATE/"
+                "GRANT/COPY/MERGE）。"
             )
         if err_class == SQLErrorClass.SYNTAX_ERROR:
             return f"上次 SQL 语法错（PG）：{err_msg}。请修正。"
