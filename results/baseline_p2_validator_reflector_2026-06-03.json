@@ -1,0 +1,70 @@
+{
+  "baseline_id": "p2_validator_reflector",
+  "ran_at": "2026-06-03T01:16:55.242197Z",
+  "total_questions": 6,
+  "passed_questions": 6,
+  "pass_rate": 1.0,
+  "avg_score": 0.7625,
+  "per_question": [
+    {
+      "question_id": "precision_q001",
+      "rows": 2,
+      "attempts": 1,
+      "latency_ms": 11224,
+      "score": 0.85,
+      "error_class": null,
+      "reflect_history": [],
+      "sql": "SELECT customer_id, customer_name, customer_tier FROM dim_customer WHERE branch_id = 'BR_CITY_0006' AND customer_tier = 'HIGH_NET_WORTH'"
+    },
+    {
+      "question_id": "precision_q002",
+      "rows": 1,
+      "attempts": 1,
+      "latency_ms": 6496,
+      "score": 0.725,
+      "error_class": null,
+      "reflect_history": [],
+      "sql": "SELECT COUNT(*) FROM dim_product WHERE product_category = 'WEALTH' AND risk_level = 'MEDIUM'"
+    },
+    {
+      "question_id": "precision_q003",
+      "rows": 0,
+      "attempts": 1,
+      "latency_ms": 10015,
+      "score": 0.7,
+      "error_class": null,
+      "reflect_history": [],
+      "sql": "SELECT transaction_id, account_id, amount, transaction_type FROM fct_transaction WHERE dt = DATE '2026-05-14'"
+    },
+    {
+      "question_id": "precision_q004",
+      "rows": 1,
+      "attempts": 1,
+      "latency_ms": 18265,
+      "score": 0.85,
+      "error_class": null,
+      "reflect_history": [],
+      "sql": "SELECT dt, account_id, amount, transaction_channel FROM fct_transaction WHERE dt BETWEEN DATE '2026-02-15' AND DATE '2026-02-23' AND transaction_type = 'WITHDRAW' AND transaction_channel IN ('ATM', 'COUNTER')"
+    },
+    {
+      "question_id": "precision_q006",
+      "rows": 1,
+      "attempts": 1,
+      "latency_ms": 17787,
+      "score": 0.7,
+      "error_class": null,
+      "reflect_history": [],
+      "sql": "SELECT COUNT(*) FROM dim_customer WHERE branch_id IN ('BR_CITY_0000', 'BR_CITY_0002') AND customer_tier = 'MASS'"
+    },
+    {
+      "question_id": "precision_q007",
+      "rows": 6,
+      "attempts": 1,
+      "latency_ms": 12419,
+      "score": 0.75,
+      "error_class": null,
+      "reflect_history": [],
+      "sql": "SELECT product_category, AVG(CASE WHEN risk_level = 'R1' THEN 1 WHEN risk_level = 'R2' THEN 2 WHEN risk_level = 'R3' THEN 3 WHEN risk_level = 'R4' THEN 4 WHEN risk_level = 'R5' THEN 5 END) AS avg_risk_score FROM dim_product GROUP BY product_category ORDER BY avg_risk_score DESC"
+    }
+  ]
+}

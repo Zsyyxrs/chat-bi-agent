@@ -37,8 +37,11 @@ def load_questions() -> dict[str, dict]:
     return {q["id"]: q for q in data["evaluation_questions"]}
 
 
-@observe(name="p1_eval_batch")
+@observe(name="p2_eval_batch")
 def main() -> int:
+    import json
+    from datetime import datetime
+
     get_client()
     questions = load_questions()
     agent = P1NL2SQLAgent(top_k=4)
@@ -48,8 +51,10 @@ def main() -> int:
     evaluation.total_questions = len(HAPPY_PATH_IDS)
 
     print("=" * 64)
-    print("P1 Happy Path Eval")
+    print("P2 Baseline Eval (Validator + Reflector)")
     print("=" * 64)
+
+    per_question: list[dict] = []
 
     for qid in HAPPY_PATH_IDS:
         q = questions[qid]
@@ -61,6 +66,10 @@ def main() -> int:
         print(f"  SQL: {(agent_result.sql or '<NONE>')[:120]}")
         print(f"  Rows: {len(agent_result.rows) if agent_result.rows else 0}")
         print(f"  Attempts: {agent_result.attempts}, Latency: {agent_result.total_latency_ms}ms")
+        if agent_result.error_class:
+            print(f"  ErrorClass: {agent_result.error_class.value}")
+        if agent_result.reflect_history:
+            print(f"  ReflectHistory: {agent_result.reflect_history}")
 
         score = evaluator.evaluate_response(
             question_id=qid,
@@ -74,10 +83,35 @@ def main() -> int:
         if score.combined_score >= 0.7:
             evaluation.passed_questions += 1
 
+        per_question.append({
+            "question_id": qid,
+            "rows": len(agent_result.rows) if agent_result.rows else 0,
+            "attempts": agent_result.attempts,
+            "latency_ms": agent_result.total_latency_ms,
+            "score": round(score.combined_score, 4),
+            "error_class": agent_result.error_class.value if agent_result.error_class else None,
+            "reflect_history": agent_result.reflect_history,
+            "sql": agent_result.sql,
+        })
+
     print()
     print(evaluation.summary())
     print(f"Pass Rate: {evaluation.pass_rate:.1%}")
     print(f"Avg Score: {evaluation.avg_score:.3f}")
+
+    out_path = Path(__file__).resolve().parents[3] / "results" / \
+        "baseline_p2_validator_reflector_2026-06-03.json"
+    payload = {
+        "baseline_id": "p2_validator_reflector",
+        "ran_at": datetime.utcnow().isoformat() + "Z",
+        "total_questions": evaluation.total_questions,
+        "passed_questions": evaluation.passed_questions,
+        "pass_rate": round(evaluation.pass_rate, 4),
+        "avg_score": round(evaluation.avg_score, 4),
+        "per_question": per_question,
+    }
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+    print(f"\nWrote baseline JSON → {out_path}")
 
     return 0
 
