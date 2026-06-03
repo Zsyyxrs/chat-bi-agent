@@ -8,7 +8,9 @@
     Langfuse 中每题一条 trace
 """
 
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -39,9 +41,6 @@ def load_questions() -> dict[str, dict]:
 
 @observe(name="p2_eval_batch")
 def main() -> int:
-    import json
-    from datetime import datetime
-
     get_client()
     questions = load_questions()
     agent = P1NL2SQLAgent(top_k=4)
