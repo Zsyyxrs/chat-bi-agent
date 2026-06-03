@@ -1,17 +1,19 @@
-"""NL → SQL：通义 qwen-max + 结构化 JSON 输出 + 最多 3 次重试 + 错误分类。"""
+"""NL → SQL：通义 qwen-max + 结构化 JSON 输出（幂等单次生成；不再含重试循环）。
+
+重试/反思逻辑由 P1NL2SQLAgent + Reflector 编排，generator 只关心：
+- system prompt
+- user prompt 拼装（含可选 repair_hint）
+- 调 LLM
+- 解析 JSON（失败抛 InvalidJsonError）
+"""
 
 import json
 import re
-from dataclasses import dataclass, field
-from typing import Callable
+from dataclasses import dataclass
 
 from langfuse import observe
 
-from chat_bi_agent.agents.sql_executor import SQLErrorClass, SQLExecutor
 from chat_bi_agent.llm import qwen_client
-
-MAX_ATTEMPTS = 3
-
 
 SYSTEM_PROMPT = (
     "你是一个银行业务 NL2SQL 助手。根据用户的中文问题和给定的表 schema，"
@@ -40,13 +42,10 @@ SYSTEM_PROMPT = (
 
 @dataclass
 class SQLGenResult:
-    sql: str | None
-    rows: list[dict] | None
-    error: str | None
+    sql: str
     thought: str
     tables_used: list[str]
-    attempts: int
-    llm_history: list[dict] = field(default_factory=list)
+    raw_response: str
 
 
 @dataclass
@@ -73,10 +72,14 @@ class SQLGenerator:
         try:
             data = json.loads(candidate)
         except json.JSONDecodeError as e:
-            raise InvalidJsonError(f"无法解析为 JSON: {e}; raw 前 200 字符: {raw[:200]}")
+            raise InvalidJsonError(
+                f"无法解析为 JSON: {e}; raw 前 200 字符: {raw[:200]}"
+            ) from e
         for key in ("thought", "tables_used", "sql"):
             if key not in data:
-                raise InvalidJsonError(f"缺少字段 {key}; 实际: {list(data.keys())}")
+                raise InvalidJsonError(
+                    f"缺少字段 {key}; 实际: {list(data.keys())}"
+                )
         if not isinstance(data["tables_used"], list):
             raise InvalidJsonError("tables_used 必须是 list")
         return _ParsedLLMOutput(
@@ -89,96 +92,29 @@ class SQLGenerator:
         self,
         question: str,
         schema_ddl: str,
-        prev_error: str | None,
-        prev_sql: str | None,
-        prev_tables: list[str] | None,
+        repair_hint: str | None,
     ) -> str:
         head = f"可用 schema：\n\n{schema_ddl}\n\n用户问题：{question}\n"
-        if prev_error is None:
+        if repair_hint is None:
             return head + "\n请输出 JSON。"
-        err_class = SQLExecutor.classify_error(prev_error)
-        if err_class == SQLErrorClass.SYNTAX_ERROR:
-            hint = f"你上次生成的 SQL 语法错误：{prev_error}。请修正。"
-        elif err_class == SQLErrorClass.UNKNOWN_TABLE:
-            hint = f"你上次用了不存在的表，请仔细核对上方 schema 中的表名；完整错误：{prev_error}"
-        elif err_class == SQLErrorClass.UNKNOWN_COLUMN:
-            hint = f"你上次用了不存在的列，请仔细核对 schema 中的列名；完整错误：{prev_error}"
-        else:
-            hint = f"你上次执行失败：{prev_error}。请修正。"
-        return head + f"\n上次尝试的 SQL：\n{prev_sql}\n\n{hint}\n\n请重新输出 JSON。"
-
-    def _build_user_prompt_for_invalid_json(self, question: str, schema_ddl: str) -> str:
-        return (
-            f"可用 schema：\n\n{schema_ddl}\n\n"
-            f"用户问题：{question}\n\n"
-            "你上次输出不是合法 JSON 或缺字段。请严格用 ```json``` 代码块包裹，"
-            "包含 thought、tables_used、sql 三个字段。"
-        )
+        return head + f"\n{repair_hint}\n\n请重新输出 JSON。"
 
     @observe(name="sql_generation")
     def generate(
         self,
         question: str,
         schema_ddl: str,
-        execute_fn: Callable[[str], tuple[list[dict] | None, str | None]],
+        repair_hint: str | None = None,
     ) -> SQLGenResult:
-        prev_error: str | None = None
-        prev_sql: str | None = None
-        prev_tables: list[str] | None = None
-        history: list[dict] = []
-
-        last_parsed: _ParsedLLMOutput | None = None
-        last_rows: list[dict] | None = None
-        last_error: str | None = None
-
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            if prev_error == "__INVALID_JSON__":
-                user_prompt = self._build_user_prompt_for_invalid_json(question, schema_ddl)
-            else:
-                user_prompt = self._build_user_prompt(
-                    question, schema_ddl, prev_error, prev_sql, prev_tables,
-                )
-
-            chat_result = qwen_client.chat(
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-            )
-            history.append({"attempt": attempt, "raw": chat_result.content})
-
-            try:
-                parsed = self._parse(chat_result.content)
-            except InvalidJsonError as e:
-                prev_error = "__INVALID_JSON__"
-                prev_sql = None
-                last_error = str(e)
-                continue
-
-            last_parsed = parsed
-            rows, exec_err = execute_fn(parsed.sql)
-            last_rows = rows
-            last_error = exec_err
-
-            if exec_err is None:
-                return SQLGenResult(
-                    sql=parsed.sql,
-                    rows=rows,
-                    error=None,
-                    thought=parsed.thought,
-                    tables_used=parsed.tables_used,
-                    attempts=attempt,
-                    llm_history=history,
-                )
-
-            prev_error = exec_err
-            prev_sql = parsed.sql
-            prev_tables = parsed.tables_used
-
+        user_prompt = self._build_user_prompt(question, schema_ddl, repair_hint)
+        chat_result = qwen_client.chat(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
+        parsed = self._parse(chat_result.content)
         return SQLGenResult(
-            sql=last_parsed.sql if last_parsed else None,
-            rows=last_rows,
-            error=last_error,
-            thought=last_parsed.thought if last_parsed else "",
-            tables_used=last_parsed.tables_used if last_parsed else [],
-            attempts=MAX_ATTEMPTS,
-            llm_history=history,
+            sql=parsed.sql,
+            thought=parsed.thought,
+            tables_used=parsed.tables_used,
+            raw_response=chat_result.content,
         )
