@@ -59,7 +59,6 @@ class P1NL2SQLAgent:
 
         last_sql: str | None = None
         last_thought: str = ""
-        last_rows: list[dict] | None = None
         last_error_msg: str | None = None
         last_err_class: SQLErrorClass | None = None
         attempt = 0
@@ -94,7 +93,7 @@ class P1NL2SQLAgent:
                     rows, exec_err = self.sql_executor.execute(gen.sql)
                     if exec_err is None:
                         elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
-                        self._tag_trace([], None)
+                        self._tag_trace(reflect_history, None)
                         return P1AgentResult(
                             question_id=question_id,
                             sql=gen.sql,
@@ -136,7 +135,7 @@ class P1NL2SQLAgent:
         return P1AgentResult(
             question_id=question_id,
             sql=last_sql,
-            rows=last_rows,
+            rows=None,   # 失败路径无 rows
             execution_error=last_error_msg,
             error_class=last_err_class,
             schema_link_top_k=top_names,
