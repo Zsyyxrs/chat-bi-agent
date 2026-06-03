@@ -5,7 +5,7 @@
 import time
 from dataclasses import dataclass, field
 
-from langfuse import get_client, observe  # noqa: E402
+from langfuse import get_client, observe
 
 from chat_bi_agent.agents.reflector import ReflectAction, Reflector
 from chat_bi_agent.agents.schema_linker import SchemaLinker
