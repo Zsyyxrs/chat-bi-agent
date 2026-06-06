@@ -8,11 +8,11 @@ import os
 from dataclasses import dataclass
 
 import dashscope
-from dashscope import Generation, TextEmbedding
+from dashscope import Generation, TextEmbedding, MultiModalConversation
 from langfuse import get_client, observe
 
 # 模型名集中放这里，方便统一升级 / 降级（v4 → v3 fallback）
-CHAT_MODEL = "qwen-max"
+CHAT_MODEL = "qwen3.6-plus"
 EMBED_MODEL = "text-embedding-v4"
 EMBED_DIM = 1024
 
@@ -35,13 +35,21 @@ def _ensure_api_key() -> None:
 def chat(system_prompt: str, user_prompt: str, temperature: float = 0.1) -> ChatResult:
     """单轮聊天调用。低 temperature 适合 NL2SQL。"""
     _ensure_api_key()
-    resp = Generation.call(
+    # resp = Generation.call(
+    #     model=CHAT_MODEL,
+    #     messages=[
+    #         {"role": "system", "content": system_prompt},
+    #         {"role": "user", "content": user_prompt},
+    #     ],
+    #     result_format="message",
+    #     temperature=temperature,
+    # )
+    resp = MultiModalConversation.call(
         model=CHAT_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        result_format="message",
         temperature=temperature,
     )
     if resp.status_code != 200:
@@ -56,7 +64,8 @@ def chat(system_prompt: str, user_prompt: str, temperature: float = 0.1) -> Chat
         },
     )
     return ChatResult(
-        content=choice.message.content,
+        # content=choice.message.content,
+        content=choice.message.content[0]['text'],
         prompt_tokens=resp.usage.input_tokens,
         completion_tokens=resp.usage.output_tokens,
     )

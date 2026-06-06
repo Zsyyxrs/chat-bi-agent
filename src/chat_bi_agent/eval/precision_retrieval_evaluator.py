@@ -1,9 +1,21 @@
 """P1 Precision Data Retrieval Evaluator: assess NL2SQL accuracy of Retrieval Agent."""
 
-import yaml
+import re
+import textwrap
 from dataclasses import dataclass, field
-from typing import Optional
 from pathlib import Path
+from typing import Optional
+
+import yaml
+
+AGG_PATTERN = re.compile(r"\b(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
+
+
+def _jaccard(a: set, b: set) -> float:
+    """|A ∩ B| / |A ∪ B|；并集为空时返回 1.0（双方都空视为 vacuous match）。"""
+    if not a and not b:
+        return 1.0
+    return len(a & b) / len(a | b)
 
 
 @dataclass
@@ -12,9 +24,9 @@ class PrecisionScore:
 
     question_id: str
     sql_syntactically_correct: bool = False  # SQL 语法是否正确
-    table_selection_correct: bool = False  # 是否选择了正确的表
+    table_score: float = 0.0  # 0-1: 表选择 Jaccard 相似度 |∩|/|∪|
     filter_accuracy: float = 0.0  # 0-1: 过滤条件的准确度
-    column_selection_correct: bool = False  # 返回列是否正确
+    column_score: float = 0.0  # 0-1: 列选择 Jaccard 相似度 |∩|/|∪|
     aggregation_correct: bool = False  # 聚合函数是否正确（如适用）
     result_count_correct: bool = False  # 返回行数是否在预期范围内
     response_time_seconds: float = 0.0
@@ -32,9 +44,9 @@ class PrecisionScore:
         }
 
         score = (
-            (1.0 if self.table_selection_correct else 0.0) * weights["table_selection"]
+            self.table_score * weights["table_selection"]
             + self.filter_accuracy * weights["filter_accuracy"]
-            + (1.0 if self.column_selection_correct else 0.0) * weights["column_selection"]
+            + self.column_score * weights["column_selection"]
             + (1.0 if self.aggregation_correct else 0.0) * weights["aggregation"]
             + (1.0 if self.result_count_correct else 0.0) * weights["result_count"]
             + (1.0 if self.sql_syntactically_correct else 0.0) * weights["syntax"]
@@ -67,17 +79,17 @@ class PrecisionEvaluation:
 
     def summary(self) -> str:
         """生成评估摘要。"""
-        return f"""
-P1 Precision Retrieval Evaluation Summary
-==========================================
-Total Questions: {self.total_questions}
-Passed (>= 0.7): {self.passed_questions}
-Pass Rate: {self.pass_rate:.1%}
-Average Score: {self.avg_score:.3f}
+        return textwrap.dedent(f"""\
+            P1 Precision Retrieval Evaluation Summary
+            ==========================================
+            Total Questions: {self.total_questions}
+            Passed (>= 0.7): {self.passed_questions}
+            Pass Rate: {self.pass_rate:.1%}
+            Average Score: {self.avg_score:.3f}
 
-Details:
---------
-"""
+            Details:
+            --------
+        """)
 
 
 class PrecisionRetrievalEvaluator:
@@ -151,47 +163,50 @@ class PrecisionRetrievalEvaluator:
         else:
             score.sql_syntactically_correct = True
 
-        # 2. 表选择正确性 (table_selection_correct)
+        # 2. 表选择 (table_score: Jaccard 相似度)
         expected_tables = self._extract_tables_from_expected_sql(
             question.get("expected_sql", "")
         )
         actual_tables = self._extract_tables_from_sql(generated_sql)
-        if expected_tables and actual_tables:
-            score.table_selection_correct = len(expected_tables & actual_tables) > 0
+        score.table_score = _jaccard(expected_tables, actual_tables)
 
         # 3. 过滤条件准确度 (filter_accuracy)
         expected_filters = question.get("expected_filters", [])
+        sql_lower = generated_sql.lower()
         filter_matches = 0
-        if expected_filters:
-            for filter_cond in expected_filters:
-                for key, value in filter_cond.items():
-                    if isinstance(value, list):
-                        for v in value:
-                            if str(v).lower() in generated_sql.lower():
-                                filter_matches += 1
-                    else:
-                        if str(value).lower() in generated_sql.lower():
-                            filter_matches += 1
-            total_filters = sum(
-                len(fc.values()) if isinstance(list(fc.values())[0], list) else 1
-                for fc in expected_filters
-                for fc_val in fc.values()
-            )
-            score.filter_accuracy = min(1.0, filter_matches / max(1, total_filters))
+        total_filters = 0
 
-        # 4. 列选择正确性 (column_selection_correct)
+        for filter_cond in expected_filters or []:
+            for value in filter_cond.values():
+                values = value if isinstance(value, list) else [value]
+                for v in values:
+                    total_filters += 1
+                    if re.search(rf"\b{re.escape(str(v).lower())}\b", sql_lower):
+                        filter_matches += 1
+
+        if total_filters:
+            score.filter_accuracy = filter_matches / total_filters
+        else:
+            # 无期望过滤条件 = 空真为真，与 _jaccard 双空匹配语义一致
+            score.filter_accuracy = 1.0
+
+        # 4. 列选择 (column_score: Jaccard 相似度)
+        # 期望列为空 = 全是别名（聚合题），豁免本项检查
         expected_columns = set(question.get("expected_result_columns", []))
-        if expected_columns and actual_results:
-            actual_columns = set(actual_results[0].keys()) if actual_results else set()
-            score.column_selection_correct = len(expected_columns & actual_columns) > 0
+        if not expected_columns:
+            score.column_score = 1.0
+        elif actual_results:
+            actual_columns = set(actual_results[0].keys())
+            # 剥掉 SELECT 里 AS 别名的输出列（聚合/计算列），与 expected 对齐到"真实 schema 列"
+            aliased = {m.lower() for m in re.findall(r"\bAS\s+(\w+)", generated_sql, re.IGNORECASE)}
+            actual_real = {c for c in actual_columns if c.lower() not in aliased}
+            score.column_score = _jaccard(expected_columns, actual_real)
+        # else: 期望非空但无实际结果 → 保持默认 0.0（漏选）
 
         # 5. 聚合函数正确性 (aggregation_correct)
-        expected_sql = question.get("expected_sql", "").upper()
-        if any(agg in expected_sql for agg in ["COUNT", "SUM", "AVG", "MIN", "MAX"]):
-            if any(agg in generated_sql.upper() for agg in ["COUNT", "SUM", "AVG", "MIN", "MAX"]):
-                score.aggregation_correct = True
-        else:
-            score.aggregation_correct = True
+        expected_has_agg = bool(AGG_PATTERN.search(question.get("expected_sql", "")))
+        generated_has_agg = bool(AGG_PATTERN.search(generated_sql))
+        score.aggregation_correct = expected_has_agg == generated_has_agg
 
         # 6. 结果行数正确性 (result_count_correct)
         expected_count_range = question.get("expected_result_count", {})
@@ -205,17 +220,12 @@ class PrecisionRetrievalEvaluator:
 
     def _extract_tables_from_expected_sql(self, sql: str) -> set[str]:
         """从期望的 SQL 中提取表名。"""
-        import re
-
-        # 简单的正则表达式，提取 FROM 和 JOIN 后的表名
         pattern = r"(?:FROM|JOIN)\s+(\w+)"
         matches = re.findall(pattern, sql, re.IGNORECASE)
         return set(m.lower() for m in matches)
 
     def _extract_tables_from_sql(self, sql: str) -> set[str]:
         """从生成的 SQL 中提取表名。"""
-        import re
-
         pattern = r"(?:FROM|JOIN)\s+(\w+)"
         matches = re.findall(pattern, sql, re.IGNORECASE)
         return set(m.lower() for m in matches)

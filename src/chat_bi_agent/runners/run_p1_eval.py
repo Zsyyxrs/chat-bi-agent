@@ -10,7 +10,7 @@
 
 import json
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -50,7 +50,7 @@ def main() -> int:
     evaluation.total_questions = len(HAPPY_PATH_IDS)
 
     print("=" * 64)
-    print("P2 Baseline Eval (Validator + Reflector)")
+    print("Baseline Eval (Validator + Reflector)")
     print("=" * 64)
 
     per_question: list[dict] = []
@@ -102,7 +102,7 @@ def main() -> int:
         "baseline_p2_validator_reflector_2026-06-03.json"
     payload = {
         "baseline_id": "p2_validator_reflector",
-        "ran_at": datetime.utcnow().isoformat() + "Z",
+        "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "total_questions": evaluation.total_questions,
         "passed_questions": evaluation.passed_questions,
         "pass_rate": round(evaluation.pass_rate, 4),

@@ -26,33 +26,31 @@ evaluation_questions:
       - branch_id: BR_CITY_0006
       - customer_tier: HIGH_NET_WORTH
     expected_result_count:
-      min: 8
-      max: 15
+      min: 2
+      max: 2
     evaluation_criteria:
       - table_selection: "Agent 是否正确选择 dim_customer 表"
       - filter_accuracy: "Agent 是否正确应用两个过滤条件"
       - column_selection: "Agent 是否选择了正确的列"
-      - no_unnecessary_joins: "Agent 是否避免了不必要的 JOIN"
 
   - id: precision_q002
     question: |
-      统计有多少个产品分类为 '理财' 且风险等级为 'MEDIUM'？
+      统计有多少个产品分类为理财且风险等级为高？
     expected_sql: |
       SELECT COUNT(*) as product_count
       FROM dim_product
-      WHERE product_category = '理财'
-        AND risk_level = 'MEDIUM'
-    expected_result_columns: [product_count]
+      WHERE product_category = 'WEALTH'
+        AND risk_level = 'R5'
+    expected_result_columns: []
     expected_filters:
-      - product_category: 理财
-      - risk_level: MEDIUM
+      - product_category: WEALTH
+      - risk_level: R5
     expected_result_count:
       min: 1
       max: 1
     evaluation_criteria:
       - aggregation_function: "Agent 是否使用了 COUNT 聚合函数"
       - filter_conditions: "Agent 是否正确组合了两个过滤条件（AND）"
-      - alias_clarity: "Agent 是否为聚合结果提供了清晰的别名"
 
   # ============================================================
   # 时间窗口过滤类题目
@@ -60,17 +58,17 @@ evaluation_questions:
 
   - id: precision_q003
     question: |
-      查询 2026 年 5 月 14 日当天发生的所有交易，返回交易 ID、账户 ID、交易金额和交易类型。
+      查询 2026 年 4 月 28 日当天发生的所有交易，返回交易 ID、账户 ID、交易金额和交易类型。
     expected_sql: |
       SELECT transaction_id, account_id, amount, transaction_type
       FROM fct_transaction
-      WHERE dt = DATE '2026-05-14'
+      WHERE dt = DATE '2026-04-28'
     expected_result_columns: [transaction_id, account_id, amount, transaction_type]
     expected_filters:
-      - dt: "2026-05-14"
+      - dt: "2026-04-28"
     expected_result_count:
-      min: 10
-      max: 200
+      min: 49
+      max: 49
     evaluation_criteria:
       - date_filter: "Agent 是否正确理解日期过滤条件"
       - exact_match: "Agent 是否使用了等号（=）而非范围"
@@ -93,8 +91,8 @@ evaluation_questions:
       - transaction_type: WITHDRAW
       - transaction_channel: [ATM, COUNTER]
     expected_result_count:
-      min: 50
-      max: 500
+      min: 1
+      max: 1
     evaluation_criteria:
       - date_range: "Agent 是否正确处理了日期范围（BETWEEN 或 >= AND <=）"
       - multi_value_filter: "Agent 是否使用了 IN 或 OR 处理多个渠道"
@@ -106,21 +104,21 @@ evaluation_questions:
 
   - id: precision_q005
     question: |
-      杭州分行（BR_CITY_0000）在 2026 年 8 月的定期存款余额总和是多少？
+      杭州分行（BR_CITY_0000）在 2026 年 2 月的定期存款余额总和是多少？
     expected_sql: |
       SELECT COALESCE(SUM(balance), 0) as total_balance
       FROM fct_balance_daily fbd
       JOIN dim_account da ON fbd.account_id = da.account_id
       WHERE da.branch_id = 'BR_CITY_0000'
         AND EXTRACT(YEAR FROM fbd.dt) = 2026
-        AND EXTRACT(MONTH FROM fbd.dt) = 8
-        AND da.account_type = '定期存款'
-    expected_result_columns: [total_balance]
+        AND EXTRACT(MONTH FROM fbd.dt) = 2
+        AND da.account_type = 'SAVING'
+    expected_result_columns: []
     expected_filters:
       - branch_id: BR_CITY_0000
       - year: 2026
-      - month: 8
-      - account_type: 定期存款
+      - month: 2
+      - account_type: SAVING
     expected_result_count:
       min: 1
       max: 1
@@ -132,14 +130,14 @@ evaluation_questions:
 
   - id: precision_q006
     question: |
-      统计杭州（BR_CITY_0000）和南京（BR_CITY_0002）分行的 MASS 层客户数量。
+      分别统计杭州（BR_CITY_0000）和南京（BR_CITY_0002）两个分行的大众客户层级客户数量。
     expected_sql: |
       SELECT branch_id, COUNT(DISTINCT customer_id) as customer_count
       FROM dim_customer
       WHERE branch_id IN ('BR_CITY_0000', 'BR_CITY_0002')
         AND customer_tier = 'MASS'
       GROUP BY branch_id
-    expected_result_columns: [branch_id, customer_count]
+    expected_result_columns: [branch_id]
     expected_filters:
       - branch_id: [BR_CITY_0000, BR_CITY_0002]
       - customer_tier: MASS
@@ -159,16 +157,23 @@ evaluation_questions:
     question: |
       按产品分类统计各类产品的平均风险等级评分，并按评分从高到低排序。
     expected_sql: |
-      SELECT product_category, AVG(risk_score) as avg_risk_score
+      SELECT product_category,
+             AVG(CASE risk_level
+                   WHEN 'R1' THEN 1
+                   WHEN 'R2' THEN 2
+                   WHEN 'R3' THEN 3
+                   WHEN 'R4' THEN 4
+                   WHEN 'R5' THEN 5
+                 END) as avg_risk_level
       FROM dim_product
       WHERE product_category IS NOT NULL
       GROUP BY product_category
-      ORDER BY avg_risk_score DESC
-    expected_result_columns: [product_category, avg_risk_score]
+      ORDER BY avg_risk_level DESC
+    expected_result_columns: [product_category]
     expected_filters: []
     expected_result_count:
-      min: 3
-      max: 10
+      min: 6
+      max: 6
     evaluation_criteria:
       - aggregation_with_grouping: "Agent 是否正确使用了 AVG + GROUP BY"
       - ordering: "Agent 是否按 DESC 排序"
@@ -176,29 +181,32 @@ evaluation_questions:
 
   - id: precision_q008
     question: |
-      列出 2026 年 5 月 14 日前后（前 7 天、后 7 天）定期存款余额变化最大的账户，
+      列出 2026 年 4 月 14 日前后（前 7 天、后 7 天）定期存款余额变化最大的账户，
       返回账户 ID、初始余额、末日余额和变化百分比。
     expected_sql: |
-      SELECT
-        account_id,
-        MIN(CASE WHEN dt < '2026-05-14' THEN balance END) as start_balance,
-        MAX(CASE WHEN dt >= '2026-05-14' THEN balance END) as end_balance,
-        ROUND(
-          (MAX(CASE WHEN dt >= '2026-05-14' THEN balance END) -
-           MIN(CASE WHEN dt < '2026-05-14' THEN balance END)) /
-          NULLIF(MIN(CASE WHEN dt < '2026-05-14' THEN balance END), 0) * 100, 2
-        ) as change_pct
-      FROM fct_balance_daily
-      WHERE dt >= DATE '2026-05-07'
-        AND dt <= DATE '2026-05-21'
-      GROUP BY account_id
+      SELECT *
+      FROM (
+        SELECT
+          account_id,
+          MIN(CASE WHEN dt < '2026-04-14' THEN balance END) AS start_balance,
+          MAX(CASE WHEN dt >= '2026-04-14' THEN balance END) AS end_balance,
+          ROUND(
+            (MAX(CASE WHEN dt >= '2026-04-14' THEN balance END) -
+            MIN(CASE WHEN dt < '2026-04-14' THEN balance END)) /
+            NULLIF(MIN(CASE WHEN dt < '2026-04-14' THEN balance END), 0) * 100, 2
+          ) AS change_pct
+        FROM fct_balance_daily
+        WHERE dt >= DATE '2026-04-07'
+          AND dt <= DATE '2026-04-21'
+        GROUP BY account_id
+      ) t
       ORDER BY ABS(change_pct) DESC
       LIMIT 10
-    expected_result_columns: [account_id, start_balance, end_balance, change_pct]
+    expected_result_columns: [account_id]
     expected_filters:
-      - dt_range: ["2026-05-07", "2026-05-21"]
+      - dt_range: ["2026-04-07", "2026-04-21"]
     expected_result_count:
-      min: 1
+      min: 10
       max: 10
     evaluation_criteria:
       - window_analysis: "Agent 是否正确定义了时间窗口"
