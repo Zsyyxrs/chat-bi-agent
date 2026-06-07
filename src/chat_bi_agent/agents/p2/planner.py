@@ -69,6 +69,29 @@ def _validate_plan_dict(parsed: dict) -> None:
                 )
 
 
+def _validate_plan_structure(parsed: dict) -> None:
+    """Validate top-level fields and per-step fields only (no step-count check).
+
+    Used by Replanner where the count constraint applies to the combined total
+    (executed + new), not to the new steps alone.
+    """
+    if "plan_type" not in parsed or "steps" not in parsed:
+        raise PlanValidationError(
+            f"缺少顶层字段; 实际: {list(parsed.keys())}"
+        )
+    steps = parsed["steps"]
+    if not isinstance(steps, list):
+        raise PlanValidationError("steps 必须是 list")
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            raise PlanValidationError(f"step[{i}] 不是 dict")
+        for f in REQUIRED_STEP_FIELDS:
+            if f not in s:
+                raise PlanValidationError(
+                    f"step[{i}] 缺少字段 {f!r}; 实际: {list(s.keys())}"
+                )
+
+
 def _format_few_shots() -> str:
     parts = []
     for i, ex in enumerate(FEW_SHOTS, start=1):
@@ -177,7 +200,7 @@ class Replanner:
         )
 
         parsed = _parse_plan_json(chat_result.content)
-        _validate_plan_dict(parsed)
+        _validate_plan_structure(parsed)
         new_count = len(parsed["steps"])
         total = len(executed_steps) + new_count
         if total < MIN_STEPS or total > MAX_STEPS:
