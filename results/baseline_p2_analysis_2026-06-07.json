@@ -1,0 +1,63 @@
+{
+  "baseline_id": "p2_analysis_mvp",
+  "ran_at": "2026-06-07T15:30:00Z",
+  "partial": true,
+  "notes": "Sampled 3/8 questions during MVP eval (stopped early due to per-question latency 5-9 min). Remaining 5 questions deferred; expect comparable scores given consistent reasoning/biz=1.0 from prompt steering. Fields plan_type and final_answer_preview omitted (not captured in log).",
+  "total_questions": 3,
+  "passed_questions": 3,
+  "pass_rate": 1.0,
+  "avg_score": 0.7403,
+  "per_question": [
+    {
+      "question_id": "multi_step_q001",
+      "step_count": 2,
+      "skipped_steps": 0,
+      "fact_count": 9,
+      "insight_count": 4,
+      "replan_count": 0,
+      "latency_ms": 539287,
+      "score": 0.755,
+      "sub_scores": {
+        "step_completeness": 0.40,
+        "multi_metric_coverage": 1.00,
+        "insight_accuracy": 0.50,
+        "reasoning_quality": 1.00,
+        "business_relevance": 1.00
+      }
+    },
+    {
+      "question_id": "multi_step_q002",
+      "step_count": 3,
+      "skipped_steps": 0,
+      "fact_count": 0,
+      "insight_count": 0,
+      "replan_count": 0,
+      "latency_ms": 306263,
+      "score": 0.733,
+      "sub_scores": {
+        "step_completeness": 0.60,
+        "multi_metric_coverage": 1.00,
+        "insight_accuracy": 0.25,
+        "reasoning_quality": 1.00,
+        "business_relevance": 1.00
+      }
+    },
+    {
+      "question_id": "multi_step_q003",
+      "step_count": 3,
+      "skipped_steps": 0,
+      "fact_count": 4,
+      "insight_count": 4,
+      "replan_count": 0,
+      "latency_ms": 491209,
+      "score": 0.733,
+      "sub_scores": {
+        "step_completeness": 0.60,
+        "multi_metric_coverage": 1.00,
+        "insight_accuracy": 0.25,
+        "reasoning_quality": 1.00,
+        "business_relevance": 1.00
+      }
+    }
+  ]
+}
