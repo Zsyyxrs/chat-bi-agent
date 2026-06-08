@@ -2,8 +2,8 @@
 
 import pytest
 
-from chat_bi_agent.agents.reflector import ReflectAction, Reflector
-from chat_bi_agent.agents.sql_executor import SQLErrorClass
+from chat_bi_agent.agents.p1.reflector import ReflectAction, Reflector
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 
 
 @pytest.fixture

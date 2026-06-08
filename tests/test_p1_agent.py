@@ -7,11 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-from chat_bi_agent.agents.p1_nl2sql_agent import P1AgentResult, P1NL2SQLAgent
-from chat_bi_agent.agents.reflector import ReflectAction, ReflectDecision
-from chat_bi_agent.agents.sql_executor import SQLErrorClass
-from chat_bi_agent.agents.sql_generator import InvalidJsonError, SQLGenResult
-from chat_bi_agent.agents.sql_validator import ValidationResult
+from chat_bi_agent.agents.p1.nl2sql_agent import P1AgentResult, P1NL2SQLAgent
+from chat_bi_agent.agents.p1.reflector import ReflectAction, ReflectDecision
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
+from chat_bi_agent.agents.p1.sql_generator import InvalidJsonError, SQLGenResult
+from chat_bi_agent.agents.p1.sql_validator import ValidationResult
 
 
 class _StubMatch:
@@ -21,12 +21,12 @@ class _StubMatch:
 
 def _make_agent_with_mocks():
     """构造 agent 并把所有依赖换成 mock；schema_ddl 用 stub。"""
-    with patch("chat_bi_agent.agents.p1_nl2sql_agent.SchemaLoader") as ml, \
-         patch("chat_bi_agent.agents.p1_nl2sql_agent.SchemaLinker") as msl, \
-         patch("chat_bi_agent.agents.p1_nl2sql_agent.SQLGenerator") as msg, \
-         patch("chat_bi_agent.agents.p1_nl2sql_agent.SQLValidator") as msv, \
-         patch("chat_bi_agent.agents.p1_nl2sql_agent.SQLExecutor") as mse, \
-         patch("chat_bi_agent.agents.p1_nl2sql_agent.Reflector") as mr:
+    with patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLoader") as ml, \
+         patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLinker") as msl, \
+         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLGenerator") as msg, \
+         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLValidator") as msv, \
+         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLExecutor") as mse, \
+         patch("chat_bi_agent.agents.p1.nl2sql_agent.Reflector") as mr:
         loader_instance = ml.return_value
         loader_instance.load.return_value = None
         loader_instance.build_index.return_value = None

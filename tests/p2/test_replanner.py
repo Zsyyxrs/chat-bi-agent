@@ -10,7 +10,7 @@ from chat_bi_agent.agents.p2.planner import (
     Replanner,
 )
 from chat_bi_agent.agents.p2.types import P2Plan, PlanStep, StepResult
-from chat_bi_agent.agents.sql_executor import SQLErrorClass
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 
 
 def _mock_chat(content: str):

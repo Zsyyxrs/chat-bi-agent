@@ -13,8 +13,8 @@ from chat_bi_agent.agents.p2.prompts.planner_few_shots import FEW_SHOTS
 from chat_bi_agent.agents.p2.prompts.planner_system import PLANNER_SYSTEM_PROMPT
 from chat_bi_agent.agents.p2.prompts.replanner_system import REPLANNER_SYSTEM_PROMPT
 from chat_bi_agent.agents.p2.types import P2Plan, PlanStep, StepResult
-from chat_bi_agent.agents.schema_linker import SchemaLinker
-from chat_bi_agent.agents.sql_executor import SQLErrorClass
+from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 from chat_bi_agent.llm import qwen_client
 from chat_bi_agent.schema.loader import SchemaLoader
 

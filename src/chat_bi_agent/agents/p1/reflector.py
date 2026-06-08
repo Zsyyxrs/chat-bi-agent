@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from chat_bi_agent.agents.sql_executor import SQLErrorClass
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 
 
 class ReflectAction(str, Enum):

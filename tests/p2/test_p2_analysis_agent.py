@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from chat_bi_agent.agents.p2.p2_analysis_agent import P2MultiStepAnalysisAgent
 from chat_bi_agent.agents.p2.types import AnalysisReport
-from chat_bi_agent.agents.sql_executor import SQLErrorClass
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 
 PLAN_2_STEPS = """```json
 {

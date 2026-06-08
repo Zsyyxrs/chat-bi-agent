@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from chat_bi_agent.agents.sql_executor import SQLErrorClass
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 
 
 @dataclass

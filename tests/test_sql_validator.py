@@ -2,7 +2,7 @@
 
 import pytest
 
-from chat_bi_agent.agents.sql_validator import SQLValidator, ValidationResult
+from chat_bi_agent.agents.p1.sql_validator import SQLValidator, ValidationResult
 
 
 @pytest.fixture

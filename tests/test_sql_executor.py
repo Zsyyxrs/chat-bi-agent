@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from chat_bi_agent.agents.sql_executor import (
+from chat_bi_agent.agents.shared.sql_executor import (
     SQLErrorClass,
     SQLExecutor,
     UnsafeSQLError,
@@ -134,7 +134,7 @@ def test_connect_options_includes_statement_timeout(monkeypatch):
         raise RuntimeError("stop here — we only care about kwargs")
 
     monkeypatch.setattr(
-        "chat_bi_agent.agents.sql_executor.psycopg2.connect",
+        "chat_bi_agent.agents.shared.sql_executor.psycopg2.connect",
         fake_connect,
     )
     executor = SQLExecutor(statement_timeout_ms=10_000)
