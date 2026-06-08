@@ -4,7 +4,7 @@ import time
 
 from langfuse import observe
 
-from chat_bi_agent.agents.p1_nl2sql_agent import P1NL2SQLAgent
+from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent
 from chat_bi_agent.agents.p2.context_injector import inject_context
 from chat_bi_agent.agents.p2.fact_extractor import FactExtractor
 from chat_bi_agent.agents.p2.insight_synthesizer import InsightSynthesizer
@@ -21,7 +21,7 @@ from chat_bi_agent.agents.p2.types import (
     PlanStep,
     StepResult,
 )
-from chat_bi_agent.agents.schema_linker import SchemaLinker
+from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.schema.loader import SchemaLoader
 
 

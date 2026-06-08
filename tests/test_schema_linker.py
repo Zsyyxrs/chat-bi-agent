@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from chat_bi_agent.schema.loader import SchemaLoader
-from chat_bi_agent.agents.schema_linker import SchemaLinker, TableMatch
+from chat_bi_agent.agents.shared.schema_linker import SchemaLinker, TableMatch
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ tables:
 
 def test_link_returns_top_k_in_score_order(loader_with_fake_index):
     linker = SchemaLinker(loader=loader_with_fake_index, top_k=4)
-    with patch("chat_bi_agent.agents.schema_linker.qwen_client.embed") as mock_embed:
+    with patch("chat_bi_agent.agents.shared.schema_linker.qwen_client.embed") as mock_embed:
         mock_embed.return_value = [[1.0, 0.0]]
         matches = linker.link("test question")
 
@@ -49,7 +49,7 @@ def test_link_returns_top_k_in_score_order(loader_with_fake_index):
 
 def test_link_returns_fewer_if_total_smaller_than_k(loader_with_fake_index):
     linker = SchemaLinker(loader=loader_with_fake_index, top_k=10)
-    with patch("chat_bi_agent.agents.schema_linker.qwen_client.embed") as mock_embed:
+    with patch("chat_bi_agent.agents.shared.schema_linker.qwen_client.embed") as mock_embed:
         mock_embed.return_value = [[1.0, 0.0]]
         matches = linker.link("test question")
     assert len(matches) == 5  # 只有 5 张表

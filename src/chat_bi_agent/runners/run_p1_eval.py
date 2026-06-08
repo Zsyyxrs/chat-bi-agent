@@ -20,7 +20,7 @@ load_dotenv()
 
 from langfuse import observe  # noqa: E402
 
-from chat_bi_agent.agents.p1_nl2sql_agent import P1NL2SQLAgent  # noqa: E402
+from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent  # noqa: E402
 from chat_bi_agent.eval.precision_retrieval_evaluator import (  # noqa: E402
     PrecisionEvaluation,
     PrecisionRetrievalEvaluator,

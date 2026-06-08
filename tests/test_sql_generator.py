@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from chat_bi_agent.agents.sql_generator import (
+from chat_bi_agent.agents.p1.sql_generator import (
     InvalidJsonError,
     SQLGenerator,
     SQLGenResult,
@@ -33,7 +33,7 @@ SAMPLE_OK_RESPONSE = (
 def test_generate_returns_sqlgenresult():
     gen = SQLGenerator()
     with patch(
-        "chat_bi_agent.agents.sql_generator.qwen_client.chat",
+        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat",
         return_value=_mock_chat(SAMPLE_OK_RESPONSE),
     ):
         r = gen.generate(
@@ -57,7 +57,7 @@ def test_generate_passes_repair_hint_into_user_prompt():
         return _mock_chat(SAMPLE_OK_RESPONSE)
 
     with patch(
-        "chat_bi_agent.agents.sql_generator.qwen_client.chat", side_effect=fake_chat,
+        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat,
     ):
         gen.generate(
             question="所有分行有哪些？",
@@ -77,7 +77,7 @@ def test_generate_without_hint_omits_repair_section():
         return _mock_chat(SAMPLE_OK_RESPONSE)
 
     with patch(
-        "chat_bi_agent.agents.sql_generator.qwen_client.chat", side_effect=fake_chat,
+        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat,
     ):
         gen.generate(
             question="所有分行有哪些？",
@@ -89,7 +89,7 @@ def test_generate_without_hint_omits_repair_section():
 def test_generate_raises_invalid_json_on_unparseable():
     gen = SQLGenerator()
     with patch(
-        "chat_bi_agent.agents.sql_generator.qwen_client.chat",
+        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat",
         return_value=_mock_chat("this is not json at all"),
     ):
         with pytest.raises(InvalidJsonError):
@@ -101,7 +101,7 @@ def test_generate_raises_invalid_json_on_missing_field():
     bad = '```json\n{"thought": "t", "tables_used": []}\n```'
     gen = SQLGenerator()
     with patch(
-        "chat_bi_agent.agents.sql_generator.qwen_client.chat",
+        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat",
         return_value=_mock_chat(bad),
     ):
         with pytest.raises(InvalidJsonError):
@@ -113,7 +113,7 @@ def test_generate_parses_json_without_fence():
     raw = '{"thought":"t","tables_used":["x"],"sql":"SELECT 1"}'
     gen = SQLGenerator()
     with patch(
-        "chat_bi_agent.agents.sql_generator.qwen_client.chat",
+        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat",
         return_value=_mock_chat(raw),
     ):
         r = gen.generate(question="q", schema_ddl="ddl")

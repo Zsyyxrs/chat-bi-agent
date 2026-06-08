@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 
 from langfuse import get_client, observe
 
-from chat_bi_agent.agents.reflector import ReflectAction, Reflector
-from chat_bi_agent.agents.schema_linker import SchemaLinker
-from chat_bi_agent.agents.sql_executor import SQLErrorClass, SQLExecutor
-from chat_bi_agent.agents.sql_generator import InvalidJsonError, SQLGenerator
-from chat_bi_agent.agents.sql_validator import SQLValidator
+from chat_bi_agent.agents.p1.reflector import ReflectAction, Reflector
+from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass, SQLExecutor
+from chat_bi_agent.agents.p1.sql_generator import InvalidJsonError, SQLGenerator
+from chat_bi_agent.agents.p1.sql_validator import SQLValidator
 from chat_bi_agent.schema.loader import SchemaLoader
 
 MAX_ATTEMPTS = 3
