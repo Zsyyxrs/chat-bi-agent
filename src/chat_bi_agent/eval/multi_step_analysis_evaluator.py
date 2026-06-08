@@ -1,9 +1,28 @@
 """P2 Multi-step Analysis Evaluator: assess analytical reasoning of Analysis Agent."""
 
-import yaml
 from dataclasses import dataclass, field
-from typing import Optional
 from pathlib import Path
+from typing import Optional
+
+import yaml
+
+
+def _yaml_listdict_to_dict(value) -> dict:
+    """YAML 里 analysis_steps / expected_insights 都是 list of single-key dict
+    （如 [{"step1": "..."}, {"step2": "..."}]）。把它平铺成 dict 以便迭代。
+    若已是 dict 或空，原样/空 dict 返回。
+    """
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        merged: dict = {}
+        for item in value:
+            if isinstance(item, dict):
+                merged.update(item)
+        return merged
+    return {}
 
 
 @dataclass
@@ -147,7 +166,7 @@ class MultiStepAnalysisEvaluator:
         score = AnalysisScore(question_id=question_id)
 
         # 1. 步骤完整性 (step_completeness)
-        expected_steps = question.get("analysis_steps", {})
+        expected_steps = _yaml_listdict_to_dict(question.get("analysis_steps"))
         if expected_steps:
             step_count = len([s for s in mentioned_steps if s])
             expected_step_count = len(expected_steps)
@@ -165,7 +184,7 @@ class MultiStepAnalysisEvaluator:
             )
 
         # 3. 洞察准确度 (insight_accuracy)
-        expected_insights = question.get("expected_insights", {})
+        expected_insights = _yaml_listdict_to_dict(question.get("expected_insights"))
         if expected_insights:
             matched_insights = 0
             for exp_insight_key, exp_insight_val in expected_insights.items():
@@ -210,7 +229,7 @@ class MultiStepAnalysisEvaluator:
     def _extract_key_metrics(self, question: dict) -> list[str]:
         """从问题的期望洞察中提取关键指标。"""
         metrics = []
-        expected_insights = question.get("expected_insights", {})
+        expected_insights = _yaml_listdict_to_dict(question.get("expected_insights"))
         for key in expected_insights.keys():
             # 将 key 转换为可搜索的指标关键词
             if "rate" in key or "比例" in key or "率" in key:

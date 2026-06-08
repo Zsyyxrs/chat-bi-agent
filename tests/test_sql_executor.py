@@ -8,9 +8,9 @@ import os
 import pytest
 
 from chat_bi_agent.agents.sql_executor import (
+    SQLErrorClass,
     SQLExecutor,
     UnsafeSQLError,
-    SQLErrorClass,
 )
 
 
@@ -92,3 +92,52 @@ def test_unknown_table_against_real_pg():
     assert rows is None
     assert err is not None
     assert SQLExecutor.classify_error(err) == SQLErrorClass.UNKNOWN_TABLE
+
+
+# --- P2 新增：timeout + TIMEOUT 分类 ---
+
+
+def test_executor_accepts_statement_timeout_param():
+    executor = SQLExecutor(statement_timeout_ms=5000)
+    assert executor.statement_timeout_ms == 5000
+
+
+def test_executor_default_timeout_is_10s():
+    executor = SQLExecutor()
+    assert executor.statement_timeout_ms == 10_000
+
+
+def test_classify_timeout():
+    msg = "canceling statement due to statement timeout"
+    assert SQLExecutor.classify_error(msg) == SQLErrorClass.TIMEOUT
+
+
+def test_classify_timeout_takes_priority_over_syntax():
+    """timeout 文本即使含 'syntax' 子串也归 TIMEOUT 而非 SYNTAX_ERROR。"""
+    msg = "canceling statement due to statement timeout near 'syntax'"
+    assert SQLExecutor.classify_error(msg) == SQLErrorClass.TIMEOUT
+
+
+def test_sql_error_class_has_new_members():
+    """扩展枚举：TIMEOUT / INVALID_JSON / VALIDATOR_FAIL 必须存在。"""
+    assert SQLErrorClass.TIMEOUT.value == "TIMEOUT"
+    assert SQLErrorClass.INVALID_JSON.value == "INVALID_JSON"
+    assert SQLErrorClass.VALIDATOR_FAIL.value == "VALIDATOR_FAIL"
+
+
+def test_connect_options_includes_statement_timeout(monkeypatch):
+    """psycopg2.connect 收到的 options 字符串必须含 statement_timeout=10000。"""
+    captured = {}
+
+    def fake_connect(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop here — we only care about kwargs")
+
+    monkeypatch.setattr(
+        "chat_bi_agent.agents.sql_executor.psycopg2.connect",
+        fake_connect,
+    )
+    executor = SQLExecutor(statement_timeout_ms=10_000)
+    with pytest.raises(RuntimeError):
+        executor.execute("SELECT 1")
+    assert "statement_timeout=10000" in captured.get("options", "")

@@ -1,6 +1,6 @@
-"""SQLGenerator 测试：mock LLM，专注 prompt 拼接 + JSON 解析 + 重试逻辑。"""
+"""SQLGenerator 单测：幂等单次生成 + repair_hint 注入。所有测试 mock qwen_client。"""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -11,134 +11,110 @@ from chat_bi_agent.agents.sql_generator import (
 )
 
 
-@pytest.fixture
-def gen():
-    return SQLGenerator()
+def _mock_chat(content: str):
+    """构造一个返回固定 content 的 ChatResult 替身。"""
+    class _R:
+        def __init__(self, c):
+            self.content = c
+    return _R(content)
 
 
-def _fake_chat_result(content: str):
-    """模拟 qwen_client.chat() 的返回。"""
-    m = MagicMock()
-    m.content = content
-    m.prompt_tokens = 100
-    m.completion_tokens = 50
-    return m
+SAMPLE_OK_RESPONSE = (
+    "```json\n"
+    "{\n"
+    '  "thought": "查 dim_branch 的所有分行",\n'
+    '  "tables_used": ["dim_branch"],\n'
+    '  "sql": "SELECT branch_id, branch_name FROM dim_branch"\n'
+    "}\n"
+    "```\n"
+)
 
 
-def test_parse_valid_json(gen):
-    raw = '```json\n{"thought": "x", "tables_used": ["t1"], "sql": "SELECT 1"}\n```'
-    parsed = gen._parse(raw)
-    assert parsed.thought == "x"
-    assert parsed.tables_used == ["t1"]
-    assert parsed.sql == "SELECT 1"
-
-
-def test_parse_json_without_code_fence(gen):
-    raw = '{"thought": "x", "tables_used": ["t1"], "sql": "SELECT 1"}'
-    parsed = gen._parse(raw)
-    assert parsed.sql == "SELECT 1"
-
-
-def test_parse_invalid_json_raises(gen):
-    with pytest.raises(InvalidJsonError):
-        gen._parse("this is not json")
-
-
-def test_parse_missing_field_raises(gen):
-    raw = '```json\n{"thought": "x", "sql": "SELECT 1"}\n```'
-    with pytest.raises(InvalidJsonError):
-        gen._parse(raw)
-
-
-def test_first_attempt_success(gen):
-    with patch("chat_bi_agent.agents.sql_generator.qwen_client.chat") as mock_chat:
-        mock_chat.return_value = _fake_chat_result(
-            '```json\n{"thought": "T", "tables_used": ["t"], "sql": "SELECT 1"}\n```'
+def test_generate_returns_sqlgenresult():
+    gen = SQLGenerator()
+    with patch(
+        "chat_bi_agent.agents.sql_generator.qwen_client.chat",
+        return_value=_mock_chat(SAMPLE_OK_RESPONSE),
+    ):
+        r = gen.generate(
+            question="所有分行有哪些？",
+            schema_ddl="CREATE TABLE dim_branch (branch_id TEXT, branch_name TEXT)",
         )
-        result = gen.generate(
-            question="问题",
-            schema_ddl="-- ddl",
-            execute_fn=lambda sql: ([], None),
-        )
-    assert isinstance(result, SQLGenResult)
-    assert result.attempts == 1
-    assert result.sql == "SELECT 1"
-    assert result.rows == []
-    assert result.error is None
+    assert isinstance(r, SQLGenResult)
+    assert r.sql == "SELECT branch_id, branch_name FROM dim_branch"
+    assert r.tables_used == ["dim_branch"]
+    assert r.thought == "查 dim_branch 的所有分行"
+    assert r.raw_response == SAMPLE_OK_RESPONSE
 
 
-def test_retry_on_invalid_json_then_success(gen):
-    """第一次输出非法 JSON，第二次正常。"""
-    with patch("chat_bi_agent.agents.sql_generator.qwen_client.chat") as mock_chat:
-        mock_chat.side_effect = [
-            _fake_chat_result("not json"),
-            _fake_chat_result('```json\n{"thought": "T", "tables_used": ["t"], "sql": "SELECT 1"}\n```'),  # noqa: E501
-        ]
-        result = gen.generate(
-            question="问题",
-            schema_ddl="-- ddl",
-            execute_fn=lambda sql: ([], None),
-        )
-    assert result.attempts == 2
-    assert result.sql == "SELECT 1"
-    assert result.error is None
+def test_generate_passes_repair_hint_into_user_prompt():
+    """repair_hint 必须出现在传给 qwen_client.chat 的 user_prompt 中。"""
+    gen = SQLGenerator()
+    captured = {}
 
+    def fake_chat(system_prompt, user_prompt):
+        captured["user_prompt"] = user_prompt
+        return _mock_chat(SAMPLE_OK_RESPONSE)
 
-def test_retry_on_execution_error_then_success(gen):
-    """第一次执行报 unknown column，第二次修正成功。"""
-    sqls = []
-    def fake_exec(sql):
-        sqls.append(sql)
-        if len(sqls) == 1:
-            return None, 'column "foo" does not exist'
-        return [{"x": 1}], None
-
-    with patch("chat_bi_agent.agents.sql_generator.qwen_client.chat") as mock_chat:
-        mock_chat.side_effect = [
-            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT foo FROM t"}\n```'),  # noqa: E501
-            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT bar FROM t"}\n```'),  # noqa: E501
-        ]
-        result = gen.generate(
-            question="问题",
-            schema_ddl="-- ddl",
-            execute_fn=fake_exec,
-        )
-    assert result.attempts == 2
-    assert result.sql == "SELECT bar FROM t"
-    assert result.rows == [{"x": 1}]
-
-
-def test_all_attempts_fail_returns_last_error(gen):
-    with patch("chat_bi_agent.agents.sql_generator.qwen_client.chat") as mock_chat:
-        mock_chat.side_effect = [
-            _fake_chat_result('```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT bad"}\n```'),  # noqa: E501
-        ] * 3
-        result = gen.generate(
-            question="问题",
-            schema_ddl="-- ddl",
-            execute_fn=lambda sql: (None, "syntax error at ..."),
-        )
-    assert result.attempts == 3
-    assert result.sql == "SELECT bad"
-    assert result.rows is None
-    assert result.error is not None
-    assert "syntax error" in result.error
-
-
-def test_retry_prompt_includes_error_class_for_unknown_column(gen):
-    captured_prompts = []
-
-    def capture(system_prompt, user_prompt, **kwargs):
-        captured_prompts.append(user_prompt)
-        return _fake_chat_result(
-            '```json\n{"thought":"T","tables_used":["t"],"sql":"SELECT foo FROM t"}\n```'
-        )
-
-    with patch("chat_bi_agent.agents.sql_generator.qwen_client.chat", side_effect=capture):
+    with patch(
+        "chat_bi_agent.agents.sql_generator.qwen_client.chat", side_effect=fake_chat,
+    ):
         gen.generate(
-            question="问题",
-            schema_ddl="-- ddl",
-            execute_fn=lambda sql: (None, 'column "foo" does not exist'),
+            question="所有分行有哪些？",
+            schema_ddl="CREATE TABLE dim_branch (branch_id TEXT)",
+            repair_hint="上次用了不存在的列 foo，请改用 branch_id",
         )
+    assert "上次用了不存在的列 foo" in captured["user_prompt"]
 
-    assert "column" in captured_prompts[1].lower() or "列" in captured_prompts[1]
+
+def test_generate_without_hint_omits_repair_section():
+    """无 repair_hint 时 user_prompt 不含 '上次' 字样（避免空 hint 段）。"""
+    gen = SQLGenerator()
+    captured = {}
+
+    def fake_chat(system_prompt, user_prompt):
+        captured["user_prompt"] = user_prompt
+        return _mock_chat(SAMPLE_OK_RESPONSE)
+
+    with patch(
+        "chat_bi_agent.agents.sql_generator.qwen_client.chat", side_effect=fake_chat,
+    ):
+        gen.generate(
+            question="所有分行有哪些？",
+            schema_ddl="CREATE TABLE dim_branch (branch_id TEXT)",
+        )
+    assert "上次" not in captured["user_prompt"]
+
+
+def test_generate_raises_invalid_json_on_unparseable():
+    gen = SQLGenerator()
+    with patch(
+        "chat_bi_agent.agents.sql_generator.qwen_client.chat",
+        return_value=_mock_chat("this is not json at all"),
+    ):
+        with pytest.raises(InvalidJsonError):
+            gen.generate(question="q", schema_ddl="ddl")
+
+
+def test_generate_raises_invalid_json_on_missing_field():
+    """缺 sql 字段也算 InvalidJsonError。"""
+    bad = '```json\n{"thought": "t", "tables_used": []}\n```'
+    gen = SQLGenerator()
+    with patch(
+        "chat_bi_agent.agents.sql_generator.qwen_client.chat",
+        return_value=_mock_chat(bad),
+    ):
+        with pytest.raises(InvalidJsonError):
+            gen.generate(question="q", schema_ddl="ddl")
+
+
+def test_generate_parses_json_without_fence():
+    """无 ```json``` fence 但内容是合法 JSON 也应解析成功。"""
+    raw = '{"thought":"t","tables_used":["x"],"sql":"SELECT 1"}'
+    gen = SQLGenerator()
+    with patch(
+        "chat_bi_agent.agents.sql_generator.qwen_client.chat",
+        return_value=_mock_chat(raw),
+    ):
+        r = gen.generate(question="q", schema_ddl="ddl")
+    assert r.sql == "SELECT 1"
