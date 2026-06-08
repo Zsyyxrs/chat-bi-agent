@@ -46,6 +46,8 @@ MANIFEST
 .claude/
 result/
 results/
+!results/README.md
+!results/baseline_*.json
 *.log
 *.sqlite
 *.db
