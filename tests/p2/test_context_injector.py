@@ -46,7 +46,7 @@ def test_inject_handles_missing_prior_step_gracefully():
         context_keys=["step9.rows.foo"],
     )
     out = inject_context(step, {})
-    assert "q" in out
+    assert out == "q"
 
 
 def test_inject_truncates_long_row_lists():
@@ -60,4 +60,4 @@ def test_inject_truncates_long_row_lists():
     prior = {"step1": _sr("step1", long_rows)}
     out = inject_context(step, prior)
     assert "C0000" in out
-    assert "100" in out or "省略" in out or "..." in out
+    assert "仅展示" in out
