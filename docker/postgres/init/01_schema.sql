@@ -124,7 +124,7 @@ CREATE TABLE dim_account (
     open_date      DATE         NOT NULL,
     close_date     DATE,
     status         VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
-    is_event_anchor      BOOLEAN      NOT NULL DEFAULT FALSE,
+    is_event_anchor BOOLEAN      NOT NULL DEFAULT FALSE,
     create_time    TIMESTAMPTZ  NOT NULL DEFAULT now(),
     update_time    TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
