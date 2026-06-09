@@ -1,6 +1,9 @@
 """P3 drill-down executor: per-dimension P1 call + Pareto TopN contribution."""
 
 from numbers import Real
+from typing import Any
+
+from chat_bi_agent.agents.p3.types import DrillRequest, DrillResult
 
 
 def _infer_value_col(rows: list[dict], dim_hint: str) -> str:
@@ -62,3 +65,63 @@ def _compute_pareto(
         if cum >= threshold or len(out) >= top_k_cap:
             break
     return out
+
+
+def run_drill_down(
+    question_id: str,
+    requests: list[DrillRequest],
+    p1_agent: Any,
+) -> list[DrillResult]:
+    """Execute each DrillRequest via P1 and compute Pareto TopN.
+
+    Each drill is independent: a failure in one does not stop the others.
+    """
+    results: list[DrillResult] = []
+    for i, req in enumerate(requests):
+        sub_qid = f"{question_id}__drill_{i}"
+        p1_result = p1_agent.run(sub_qid, req.nl_question)
+
+        # Failure cases → skip but keep a stub
+        if p1_result.rows is None or p1_result.sql is None or not p1_result.rows:
+            results.append(
+                DrillResult(
+                    dimension=req.dimension,
+                    nl_question=req.nl_question,
+                    sql=p1_result.sql or "",
+                    rows=p1_result.rows or [],
+                    pareto_top_k=[],
+                    error_class=p1_result.error_class,
+                    skipped=True,
+                )
+            )
+            continue
+
+        try:
+            value_col = _infer_value_col(p1_result.rows, dim_hint=req.dimension)
+            top_k = _compute_pareto(p1_result.rows, value_col=value_col)
+        except ValueError:
+            results.append(
+                DrillResult(
+                    dimension=req.dimension,
+                    nl_question=req.nl_question,
+                    sql=p1_result.sql,
+                    rows=p1_result.rows,
+                    pareto_top_k=[],
+                    error_class=None,
+                    skipped=True,
+                )
+            )
+            continue
+
+        results.append(
+            DrillResult(
+                dimension=req.dimension,
+                nl_question=req.nl_question,
+                sql=p1_result.sql,
+                rows=p1_result.rows,
+                pareto_top_k=top_k,
+                error_class=None,
+                skipped=False,
+            )
+        )
+    return results
