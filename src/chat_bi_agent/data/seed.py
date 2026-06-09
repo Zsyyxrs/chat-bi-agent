@@ -1,13 +1,15 @@
 """Seed script: orchestrate all dimension and fact table generation."""
 
 import sys
-import click
 from datetime import date
+
+import click
+
 from chat_bi_agent.data.db import DatabaseConfig, get_cursor
 from chat_bi_agent.data.dimension_generator import DimensionGenerator
-from chat_bi_agent.data.transaction_generator import TransactionGenerator
 from chat_bi_agent.data.event_loader import EventLoader
 from chat_bi_agent.data.propagation_engine import PropagationEngine, PropagationRule
+from chat_bi_agent.data.transaction_generator import TransactionGenerator
 
 
 def insert_rows(cursor, table: str, rows: list[dict], batch_size: int = 1000) -> int:
@@ -95,7 +97,10 @@ def seed_dimensions(
         print("⏳ Seeding dim_account...", file=sys.stderr)
         accounts = list(
             generator.generate_accounts(
-                customer_ids=customer_ids, product_ids=product_ids, branch_ids=branch_ids, count=10000
+                customer_ids=customer_ids,
+                product_ids=product_ids,
+                branch_ids=branch_ids,
+                count=10000,
             )
         )
         counts["dim_account"] = insert_rows(cursor, "dim_account", accounts)

@@ -1,10 +1,11 @@
 """Load and parse event YAML files."""
 
-from pathlib import Path
-from typing import Optional
-import yaml
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
+from typing import Optional
+
+import yaml
 
 
 @dataclass

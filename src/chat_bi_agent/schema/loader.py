@@ -14,7 +14,6 @@ import yaml
 
 from chat_bi_agent.llm import qwen_client
 
-
 DEFAULT_YAML_PATH = Path(__file__).parent / "schema_docs.yaml"
 
 

@@ -212,7 +212,11 @@ class DimensionGenerator:
     # ============================================================
 
     def generate_accounts(
-        self, customer_ids: list[str], product_ids: list[str], branch_ids: list[str], count: int = 20000
+        self,
+        customer_ids: list[str],
+        product_ids: list[str],
+        branch_ids: list[str],
+        count: int = 20000,
     ) -> Generator[dict, None, None]:
         """Generate account dimension data."""
         account_types = ["CURRENT", "SAVING", "LOAN", "CARD", "INVESTMENT"]

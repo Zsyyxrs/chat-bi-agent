@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass
 
 import dashscope
-from dashscope import Generation, TextEmbedding, MultiModalConversation
+from dashscope import MultiModalConversation, TextEmbedding
 from langfuse import get_client, observe
 
 # 模型名集中放这里，方便统一升级 / 降级（v4 → v3 fallback）
