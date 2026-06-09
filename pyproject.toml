@@ -53,6 +53,7 @@ select = ["E", "F", "W", "I"]
 [tool.ruff.lint.per-file-ignores]
 "src/chat_bi_agent/agents/p2/prompts/*.py" = ["E501"]
 "src/chat_bi_agent/agents/p3/prompts/*.py" = ["E501"]
+"tests/test_schema_linker.py" = ["E501"]
 
 [tool.pytest.ini_options]
 markers = [

@@ -1,9 +1,10 @@
 """RCA (Root Cause Analysis) Evaluator: assess attribution accuracy of RCA Agent."""
 
-import yaml
 from dataclasses import dataclass, field
-from typing import Optional
 from pathlib import Path
+from typing import Optional
+
+import yaml
 
 
 @dataclass

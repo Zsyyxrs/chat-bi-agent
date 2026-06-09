@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from chat_bi_agent.schema.loader import SchemaLoader
 from chat_bi_agent.agents.shared.schema_linker import SchemaLinker, TableMatch
+from chat_bi_agent.schema.loader import SchemaLoader
 
 
 @pytest.fixture

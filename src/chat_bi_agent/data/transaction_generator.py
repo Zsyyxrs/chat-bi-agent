@@ -3,6 +3,7 @@
 import random
 from datetime import date, datetime, timedelta
 from typing import Generator
+
 from faker import Faker
 
 fake = Faker("zh_CN")
@@ -208,7 +209,11 @@ class TransactionGenerator:
                     "account_id": random.choice(account_ids) if random.random() > 0.3 else None,
                     "event_type": random.choice(event_types),
                     "severity": random.choice(severities),
-                    "amount": round(random.uniform(1000, 100000), 2) if random.random() > 0.3 else None,
+                    "amount": (
+                        round(random.uniform(1000, 100000), 2)
+                        if random.random() > 0.3
+                        else None
+                    ),
                     "status": random.choice(["OPEN", "INVESTIGATING", "CLOSED", "CONFIRMED"]),
                     "branch_id": random.choice(branch_ids),
                     "description": fake.sentence(nb_words=5),
@@ -273,7 +278,9 @@ class TransactionGenerator:
                     "response_type": response_type,
                     "conversion_time": conversion_time,
                     "conversion_amount": conversion_amount,
-                    "product_id": random.choice(product_ids) if response_type == "CONVERTED" else None,
+                    "product_id": (
+                        random.choice(product_ids) if response_type == "CONVERTED" else None
+                    ),
                     "branch_id": random.choice(branch_ids),
                 }
 

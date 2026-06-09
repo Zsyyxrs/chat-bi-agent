@@ -9,9 +9,9 @@ import pytest
 
 from chat_bi_agent.agents.p1.nl2sql_agent import P1AgentResult, P1NL2SQLAgent
 from chat_bi_agent.agents.p1.reflector import ReflectAction, ReflectDecision
-from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 from chat_bi_agent.agents.p1.sql_generator import InvalidJsonError, SQLGenResult
 from chat_bi_agent.agents.p1.sql_validator import ValidationResult
+from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 
 
 class _StubMatch:
