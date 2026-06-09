@@ -57,6 +57,7 @@ CREATE TABLE dim_customer (
     customer_manager_id VARCHAR(16),
     aum                 NUMERIC(18,2) NOT NULL DEFAULT 0,
     is_active           BOOLEAN      NOT NULL DEFAULT TRUE,
+    is_event_anchor     BOOLEAN      NOT NULL DEFAULT FALSE,
     create_time         TIMESTAMPTZ  NOT NULL DEFAULT now(),
     update_time         TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
@@ -74,6 +75,7 @@ COMMENT ON COLUMN dim_customer.branch_id           IS '归属机构编号';
 COMMENT ON COLUMN dim_customer.customer_manager_id IS '客户经理工号';
 COMMENT ON COLUMN dim_customer.aum                 IS 'AUM 资产管理规模（最新快照，单位：元）';
 COMMENT ON COLUMN dim_customer.is_active           IS '是否活跃客户';
+COMMENT ON COLUMN dim_customer.is_event_anchor     IS '是否为事件埋雷锚定客户（scenario_anchor 注入，便于追溯）';
 
 -- =============================================================
 -- 3. dim_product · 产品维度
@@ -122,6 +124,7 @@ CREATE TABLE dim_account (
     open_date      DATE         NOT NULL,
     close_date     DATE,
     status         VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
+    is_event_anchor      BOOLEAN      NOT NULL DEFAULT FALSE,
     create_time    TIMESTAMPTZ  NOT NULL DEFAULT now(),
     update_time    TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
@@ -136,6 +139,7 @@ COMMENT ON COLUMN dim_account.branch_id        IS '开户机构';
 COMMENT ON COLUMN dim_account.open_date        IS '开户日期';
 COMMENT ON COLUMN dim_account.close_date       IS '销户日期，未销户为 NULL';
 COMMENT ON COLUMN dim_account.status           IS '账户状态：ACTIVE 正常 / FROZEN 冻结 / CLOSED 销户 / DORMANT 睡眠';
+COMMENT ON COLUMN dim_account.is_event_anchor  IS '是否为事件埋雷锚定账户（scenario_anchor 注入，便于追溯）';
 
 -- =============================================================
 -- 5. dim_date · 时间维度
@@ -284,6 +288,7 @@ CREATE TABLE fct_holding (
     cost_basis     NUMERIC(18,2),
     pnl            NUMERIC(18,2),
     currency       VARCHAR(8)   NOT NULL DEFAULT 'CNY',
+    is_event_anchor    BOOLEAN      NOT NULL DEFAULT FALSE,
     PRIMARY KEY (snapshot_dt, account_id, product_id)
 );
 COMMENT ON TABLE  fct_holding                IS '客户持仓事实表：理财/基金/保险/贵金属当日持仓快照';
@@ -298,6 +303,7 @@ COMMENT ON COLUMN fct_holding.market_value   IS '持仓市值（元）';
 COMMENT ON COLUMN fct_holding.cost_basis     IS '持仓成本（元）';
 COMMENT ON COLUMN fct_holding.pnl            IS '浮动盈亏：market_value - cost_basis';
 COMMENT ON COLUMN fct_holding.currency       IS '币种';
+COMMENT ON COLUMN fct_holding.is_event_anchor IS '是否为事件埋雷锚定持仓行（scenario_anchor 注入，便于追溯）';
 
 -- =============================================================
 -- 9. fct_risk_event · 风险事件事实表
