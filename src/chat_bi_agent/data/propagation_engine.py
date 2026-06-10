@@ -68,12 +68,15 @@ class PropagationEngine:
         if rule.target_table not in ["fct_transaction", "fct_balance_daily", "dim_customer"]:
             return False
 
-        # 时间窗口检查
+        # === 新版：transient vs sustained ===
         start_date = event_date + timedelta(days=rule.delay_days)
-        end_date = start_date + timedelta(days=rule.ramp_days)
-
-        if current_date < start_date or current_date > end_date:
+        if current_date < start_date:
             return False
+        if rule.effect_type == "transient":
+            end_date = start_date + timedelta(days=rule.ramp_days)
+            if current_date > end_date:
+                return False
+        # sustained: 没有上界
 
         # 交易类型过滤（如果规则指定且行中有该字段）
         if rule.transaction_type and "transaction_type" in row_data:
