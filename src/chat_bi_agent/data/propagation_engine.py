@@ -24,6 +24,14 @@ class PropagationRule:
     transaction_type: Optional[str] = None  # 仅影响特定交易类型
     transaction_channel: Optional[list[str]] = None  # 仅影响特定渠道
     is_percentage: bool = True  # delta 是百分比还是绝对值
+    # 新增：维度过滤字段
+    branch_ids: Optional[list[str]] = None
+    customer_tiers: Optional[list[str]] = None
+    branch_levels: Optional[list[str]] = None
+    product_ids: Optional[list[str]] = None
+    product_subcategories: Optional[list[str]] = None
+    # 新增：效应类型
+    effect_type: str = "transient"  # "transient" | "sustained"
 
 
 class PropagationEngine:
@@ -36,8 +44,17 @@ class PropagationEngine:
     3. 生成客户维度时，检查是否在事件影响的客户范围 → 修改 aum
     """
 
-    def __init__(self, seed: int = 42):
+    def __init__(
+        self,
+        seed: int = 42,
+        customer_index: dict[str, dict] | None = None,
+        branch_index: dict[str, dict] | None = None,
+        product_index: dict[str, dict] | None = None,
+    ):
         self.seed = seed
+        self.customer_index = customer_index
+        self.branch_index = branch_index
+        self.product_index = product_index
         random.seed(seed)
 
     def should_apply_rule(
@@ -71,6 +88,40 @@ class PropagationEngine:
         # 采样过滤（随机决定是否影响这条记录）
         if random.random() > rule.affected_account_sample:
             return False
+
+        # === 新增：维度过滤（Bug A 修复） ===
+        if rule.branch_ids and row_data.get("branch_id") not in rule.branch_ids:
+            return False
+
+        if rule.customer_tiers:
+            if self.customer_index is None:
+                raise RuntimeError(
+                    "PropagationRule.customer_tiers requires Engine customer_index"
+                )
+            cust = self.customer_index.get(row_data.get("customer_id"))
+            if not cust or cust.get("customer_tier") not in rule.customer_tiers:
+                return False
+
+        if rule.branch_levels:
+            if self.branch_index is None:
+                raise RuntimeError(
+                    "PropagationRule.branch_levels requires Engine branch_index"
+                )
+            branch = self.branch_index.get(row_data.get("branch_id"))
+            if not branch or branch.get("branch_level") not in rule.branch_levels:
+                return False
+
+        if rule.product_ids and row_data.get("product_id") not in rule.product_ids:
+            return False
+
+        if rule.product_subcategories:
+            if self.product_index is None:
+                raise RuntimeError(
+                    "PropagationRule.product_subcategories requires Engine product_index"
+                )
+            prod = self.product_index.get(row_data.get("product_id"))
+            if not prod or prod.get("product_subcategory") not in rule.product_subcategories:
+                return False
 
         return True
 
