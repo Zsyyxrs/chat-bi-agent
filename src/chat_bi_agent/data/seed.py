@@ -9,6 +9,7 @@ from chat_bi_agent.data.db import DatabaseConfig, get_cursor
 from chat_bi_agent.data.dimension_generator import DimensionGenerator
 from chat_bi_agent.data.event_loader import EventLoader
 from chat_bi_agent.data.propagation_engine import PropagationEngine, PropagationRule
+from chat_bi_agent.data.scenario_anchor import anchor_event_populations
 from chat_bi_agent.data.transaction_generator import TransactionGenerator
 
 
@@ -61,8 +62,35 @@ def apply_event_propagations(
                 related_products=prop_dict.get("related_products"),
                 transaction_type=prop_dict.get("transaction_type"),
                 transaction_channel=prop_dict.get("transaction_channel"),
+                # 维度过滤：事件级 affected_dimensions 提供 branch/tier 过滤。
+                # product_id / product_subcategories 来自 rule 自身——事件级
+                # affected_dimensions.product_id 是 RCA 叙事用，不能用作 row 过滤。
+                branch_ids=event.affected_dimensions.get("branch_id") or None,
+                customer_tiers=event.affected_dimensions.get("customer_tier") or None,
+                branch_levels=event.affected_dimensions.get("branch_level") or None,
+                product_ids=prop_dict.get("related_products") or None,
+                product_subcategories=prop_dict.get("product_subcategories"),
+                effect_type=prop_dict.get("effect_type", "transient"),
             )
             engine.apply_rule_to_row(rule, row, event.date, current_date, event_id=event.id)
+
+
+def build_dim_indexes(cursor) -> tuple[dict, dict, dict]:
+    """After dimensions seeded, build in-memory indexes used by PropagationEngine."""
+    cursor.execute("SELECT customer_id, customer_tier, branch_id FROM dim_customer")
+    customer_index = {
+        row[0]: {"customer_tier": row[1], "branch_id": row[2]} for row in cursor.fetchall()
+    }
+    cursor.execute("SELECT branch_id, branch_level FROM dim_branch")
+    branch_index = {row[0]: {"branch_level": row[1]} for row in cursor.fetchall()}
+    cursor.execute(
+        "SELECT product_id, product_category, product_subcategory FROM dim_product"
+    )
+    product_index = {
+        row[0]: {"product_category": row[1], "product_subcategory": row[2]}
+        for row in cursor.fetchall()
+    }
+    return customer_index, branch_index, product_index
 
 
 def seed_dimensions(
@@ -128,13 +156,33 @@ def seed_facts(
     account_ids: list[str],
     transaction_rows: int = 100000,
     events: list = None,
+    forced_specs: list | None = None,
+    dim_indexes: tuple[dict, dict, dict] | None = None,
 ) -> dict[str, int]:
     """Seed all fact tables. Returns counts."""
     counts = {}
     events = events or []
-    engine = PropagationEngine() if events else None
+    if events and dim_indexes:
+        customer_index, branch_index, product_index = dim_indexes
+        engine = PropagationEngine(
+            customer_index=customer_index,
+            branch_index=branch_index,
+            product_index=product_index,
+        )
+    elif events:
+        engine = PropagationEngine()
+    else:
+        engine = None
 
     with get_cursor(config) as cursor:
+        # Pull anchor account ids once for use by generate_balance_daily.
+        anchor_account_ids: list[str] = []
+        if engine is not None:
+            cursor.execute(
+                "SELECT account_id FROM dim_account WHERE is_event_anchor = TRUE"
+            )
+            anchor_account_ids = [r[0] for r in cursor.fetchall()]
+
         # fct_transaction
         print(f"⏳ Seeding fct_transaction (~{transaction_rows} rows)...", file=sys.stderr)
         txn_batch = []
@@ -145,8 +193,9 @@ def seed_facts(
             product_ids=product_ids,
             branch_ids=branch_ids,
             start_date=date(2025, 1, 1),
-            end_date=date(2026, 5, 31),
+            end_date=date(2026, 9, 30),
             transactions_per_account_per_month=transaction_rows / len(account_ids) / 17,
+            force_specs=forced_specs,
         ):
             # 应用事件传导规则
             if engine and events:
@@ -172,7 +221,8 @@ def seed_facts(
             product_ids=product_ids,
             branch_ids=branch_ids,
             start_date=date(2025, 1, 1),
-            end_date=date(2026, 5, 31),
+            end_date=date(2026, 9, 30),
+            force_account_ids=anchor_account_ids or None,
         ):
             if engine and events:
                 apply_event_propagations(row, events, engine, row.get("dt"))
@@ -208,7 +258,7 @@ def seed_facts(
             account_ids=account_ids,
             branch_ids=branch_ids,
             start_date=date(2025, 1, 1),
-            end_date=date(2026, 5, 31),
+            end_date=date(2026, 9, 30),
         ):
             risk_batch.append(row)
             if len(risk_batch) >= 1000:
@@ -229,7 +279,7 @@ def seed_facts(
             product_ids=product_ids,
             branch_ids=branch_ids,
             start_date=date(2025, 1, 1),
-            end_date=date(2026, 5, 31),
+            end_date=date(2026, 9, 30),
         ):
             camp_batch.append(row)
             if len(camp_batch) >= 1000:
@@ -349,6 +399,48 @@ def main(
         account_ids,
     ) = seed_dimensions(config, dim_gen, branch_count=50)
 
+    # Anchor event populations into dim tables (if needed)
+    forced_specs = []
+    dim_indexes = None
+    if with_events:
+        print("📌 Anchoring event populations...", file=sys.stderr)
+        with get_cursor(config) as cursor:
+            customer_index, branch_index, product_index = build_dim_indexes(cursor)
+            cursor.execute(
+                "SELECT customer_id, branch_id, customer_tier FROM dim_customer"
+            )
+            existing_customers = [
+                {"customer_id": r[0], "branch_id": r[1], "customer_tier": r[2]}
+                for r in cursor.fetchall()
+            ]
+            cursor.execute(
+                "SELECT account_id, customer_id, product_id FROM dim_account"
+            )
+            existing_accounts = [
+                {"account_id": r[0], "customer_id": r[1], "product_id": r[2]}
+                for r in cursor.fetchall()
+            ]
+
+            report = anchor_event_populations(
+                cursor=cursor,
+                events=events,
+                existing_customers=existing_customers,
+                existing_accounts=existing_accounts,
+                branch_ids=branch_ids,
+                branch_index=branch_index,
+                product_index=product_index,
+            )
+            for entry in report.entries:
+                print(
+                    f"   {entry.event_id}: deficit={entry.deficit}, anchored={entry.anchored}",
+                    file=sys.stderr,
+                )
+            forced_specs = report.forced_specs
+
+        # Rebuild dim indexes after anchor inserts so engine sees anchor customers.
+        with get_cursor(config) as cursor:
+            dim_indexes = build_dim_indexes(cursor)
+
     # Generate facts
     txn_gen = TransactionGenerator(seed=seed, events=events)
     fact_counts = seed_facts(
@@ -360,6 +452,8 @@ def main(
         account_ids=account_ids,
         transaction_rows=rows,
         events=events,
+        forced_specs=forced_specs if with_events else None,
+        dim_indexes=dim_indexes,
     )
 
     all_counts = {**dim_counts, **fact_counts}
