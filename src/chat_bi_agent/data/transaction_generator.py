@@ -162,21 +162,32 @@ class TransactionGenerator:
         start_date: date = date(2025, 1, 1),
         end_date: date = date(2026, 5, 31),
         force_account_ids: list[str] | None = None,
+        anchor_metadata: dict[str, dict] | None = None,
     ) -> Generator[dict, None, None]:
         """Generate daily balance snapshots (one per account per day).
 
         force_account_ids: optional list of anchor accounts to snapshot daily
         regardless of the random sampling rate applied to ``account_ids``.
+        anchor_metadata: optional account_id -> {customer_id, product_id, branch_id}
+        lookup. When set, anchor rows use real dim_account values instead of random
+        picks, so verify_events SQL filters resolve to the anchored cohort.
         """
 
+        meta = anchor_metadata or {}
         current = start_date
         while current <= end_date:
             sampled = account_ids[: max(1, len(account_ids) // 100)]
             anchors = force_account_ids or []
             for account_id in list(sampled) + list(anchors):
-                customer_id = random.choice(customer_ids)
-                product_id = random.choice(product_ids) if random.random() > 0.6 else None
-                branch_id = random.choice(branch_ids)
+                if account_id in meta:
+                    m = meta[account_id]
+                    customer_id = m["customer_id"]
+                    product_id = m["product_id"]
+                    branch_id = m["branch_id"]
+                else:
+                    customer_id = random.choice(customer_ids)
+                    product_id = random.choice(product_ids) if random.random() > 0.6 else None
+                    branch_id = random.choice(branch_ids)
 
                 balance = round(random.expovariate(1 / 100000), 2)
                 avg_balance_mtd = balance * random.uniform(0.8, 1.2)

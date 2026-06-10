@@ -175,13 +175,23 @@ def seed_facts(
         engine = None
 
     with get_cursor(config) as cursor:
-        # Pull anchor account ids once for use by generate_balance_daily.
+        # Pull anchor account ids + metadata once for use by generate_balance_daily.
+        # Without metadata, anchor balance rows would get random customer/product/branch
+        # and verify_events SQL filters would never resolve to the anchored cohort.
         anchor_account_ids: list[str] = []
+        anchor_metadata: dict[str, dict] = {}
         if engine is not None:
             cursor.execute(
-                "SELECT account_id FROM dim_account WHERE is_event_anchor = TRUE"
+                "SELECT account_id, customer_id, product_id, branch_id "
+                "FROM dim_account WHERE is_event_anchor = TRUE"
             )
-            anchor_account_ids = [r[0] for r in cursor.fetchall()]
+            for r in cursor.fetchall():
+                anchor_account_ids.append(r[0])
+                anchor_metadata[r[0]] = {
+                    "customer_id": r[1],
+                    "product_id": r[2],
+                    "branch_id": r[3],
+                }
 
         # fct_transaction
         print(f"⏳ Seeding fct_transaction (~{transaction_rows} rows)...", file=sys.stderr)
@@ -223,6 +233,7 @@ def seed_facts(
             start_date=date(2025, 1, 1),
             end_date=date(2026, 9, 30),
             force_account_ids=anchor_account_ids or None,
+            anchor_metadata=anchor_metadata or None,
         ):
             if engine and events:
                 apply_event_propagations(row, events, engine, row.get("dt"))

@@ -10,7 +10,7 @@ events:
     affected_dimensions:
       branch_id: [BR_CITY_0006]  # 上海分行城分行
       customer_tier: [HIGH_NET_WORTH, AFFLUENT]
-      product_id: [PROD_WEA_0000, PROD_WEA_0001]
+      product_id: [PROD_WEA_0030, PROD_WEA_0031]
 
     propagation:
       # 主体效应：存款余额下降
@@ -33,7 +33,7 @@ events:
         delta: 1.8  # +1.8% 其他理财产品余额增加
         delay_days: 3
         affected_account_sample: 0.25  # 仅 25% 续作率
-        related_products: [PROD_WEA_0002, PROD_WEA_0003]
+        related_products: [PROD_WEA_0032, PROD_WEA_0033]
         effect_type: sustained
 
     required_population:
@@ -42,7 +42,7 @@ events:
       tiers: [HIGH_NET_WORTH, AFFLUENT]
       must_hold:
         - product_subcategory: 活期存款
-        - product_ids: [PROD_WEA_0000, PROD_WEA_0001]
+        - product_ids: [PROD_WEA_0030, PROD_WEA_0031]
 
     # 评估标准：归因 Agent 是否能识别这个根因
     expected_rca_conclusion: |
@@ -53,7 +53,7 @@ events:
 
     expected_main_dimensions:
       - branch_id: BR_CITY_0006
-      - product_id: PROD_WEA_0000
+      - product_id: PROD_WEA_0030
       - customer_tier: HIGH_NET_WORTH
 
   - id: qixi_deposit_campaign
@@ -74,7 +74,7 @@ events:
         delay_days: 2
         ramp_days: 5
         affected_account_sample: 0.35
-        related_products: [PROD_DEP_0001, PROD_DEP_0004]
+        related_products: [PROD_DEP_0005, PROD_DEP_0008]
         effect_type: sustained
         product_subcategories: [定期存款, 大额存单]
 
@@ -84,7 +84,7 @@ events:
       tiers: [MASS, AFFLUENT]
       must_hold:
         - product_subcategory: 定期存款
-        - product_ids: [PROD_DEP_0001, PROD_DEP_0004]
+        - product_ids: [PROD_DEP_0005, PROD_DEP_0008]
 
     expected_rca_conclusion: |
       杭州、南京分行 MASS 层客户定期存款在 2026-08-10 前后出现明显增长（+12%）。
