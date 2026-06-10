@@ -68,7 +68,7 @@ def apply_event_propagations(
                 branch_ids=event.affected_dimensions.get("branch_id") or None,
                 customer_tiers=event.affected_dimensions.get("customer_tier") or None,
                 branch_levels=event.affected_dimensions.get("branch_level") or None,
-                product_ids=prop_dict.get("related_products") or None,
+                product_ids=prop_dict.get("product_ids") or None,
                 product_subcategories=prop_dict.get("product_subcategories"),
                 effect_type=prop_dict.get("effect_type", "transient"),
             )

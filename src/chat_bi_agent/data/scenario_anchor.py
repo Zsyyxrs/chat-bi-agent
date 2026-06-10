@@ -255,11 +255,11 @@ def anchor_event_populations(
                 c for c in qualified
                 if has_holding(c, existing_accounts, hold_spec, product_index)
             ]
-        deficit = max(0, rp.min_customers - len(qualified))
-
-        if deficit == 0:
-            report.entries.append(AnchorReportEntry(event.id, deficit=0, anchored=0))
-            continue
+        # Always anchor min_customers fresh customers, even when existing
+        # customers already match the cohort. Reason: verify_events relies
+        # on anchor accounts having deterministic balance to escape the
+        # CV=1 noise floor of generate_balance_daily's expovariate base.
+        deficit = rp.min_customers
 
         if rp.branches:
             branch_pool = rp.branches

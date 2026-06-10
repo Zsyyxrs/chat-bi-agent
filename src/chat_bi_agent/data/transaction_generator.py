@@ -184,12 +184,16 @@ class TransactionGenerator:
                     customer_id = m["customer_id"]
                     product_id = m["product_id"]
                     branch_id = m["branch_id"]
+                    # Anchor base balance is deterministic — random.expovariate's
+                    # CV=1 makes verify_events percent-change noise dominate the
+                    # event signal on 50-customer cohorts. Propagation still runs.
+                    balance = 100000.0
                 else:
                     customer_id = random.choice(customer_ids)
                     product_id = random.choice(product_ids) if random.random() > 0.6 else None
                     branch_id = random.choice(branch_ids)
+                    balance = round(random.expovariate(1 / 100000), 2)
 
-                balance = round(random.expovariate(1 / 100000), 2)
                 avg_balance_mtd = balance * random.uniform(0.8, 1.2)
 
                 yield {

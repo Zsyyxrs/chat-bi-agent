@@ -174,7 +174,10 @@ def test_anchor_inserts_when_deficit():
     assert report.entries[0].deficit == 5
 
 
-def test_anchor_skips_when_sufficient():
+def test_anchor_creates_min_regardless_of_existing():
+    """Even when existing customers already match the cohort, anchoring still
+    creates min_customers fresh anchors so verify_events can reliably aggregate
+    over deterministic-balance accounts."""
     event = _make_event(
         "evt2",
         {
@@ -205,9 +208,9 @@ def test_anchor_skips_when_sufficient():
         branch_index={"BR_X": {"branch_level": "CITY"}},
         product_index=product_index,
     )
-    assert cur.inserts["dim_customer"] == []
-    assert report.entries[0].anchored == 0
-    assert report.entries[0].deficit == 0
+    assert len(cur.inserts["dim_customer"]) == 2
+    assert report.entries[0].anchored == 2
+    assert report.entries[0].deficit == 2
 
 
 def test_anchor_must_hold_AND_multiple_specs():
