@@ -187,7 +187,7 @@ tables:
   - name: fct_holding
     type: fact
     domain: 持仓
-    description: 理财/基金/保险/贵金属当日持仓快照
+    description: 理财/基金/保险/贵金属持仓快照（仅月末/季初等关键日有数据，非日级；日级余额请用 fct_balance_daily.balance）
     primary_key: "(snapshot_dt, account_id, product_id)"
     foreign_keys:
       - customer_id → dim_customer.customer_id
