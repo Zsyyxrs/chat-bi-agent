@@ -142,7 +142,7 @@ def main(limit: int | None = None) -> int:
     print("=" * 64)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = RESULTS_DIR / f"p3_rca_baseline_{OUTPUT_DATE}.json"
+    out_path = RESULTS_DIR / f"baseline_p3_rca_{OUTPUT_DATE}.json"
     payload = {
         "baseline_id": "p3_rca_mvp",
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
