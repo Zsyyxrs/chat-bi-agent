@@ -25,12 +25,15 @@ def _extract_date_range_from_sql(sql: str) -> tuple[str, str] | None:
 
 
 def _date_overlap(
-    event_date_str: str,
+    event_date: str | date,
     window: tuple[str, str],
     slack_days: int = 7,
 ) -> bool:
-    """True iff event_date is within [window_start - slack, window_end + slack]."""
-    ev = date.fromisoformat(event_date_str)
+    """True iff event_date is within [window_start - slack, window_end + slack].
+
+    PyYAML parses bare YYYY-MM-DD literals as datetime.date, so accept both forms.
+    """
+    ev = event_date if isinstance(event_date, date) else date.fromisoformat(event_date)
     start = date.fromisoformat(window[0]) - timedelta(days=slack_days)
     end = date.fromisoformat(window[1]) + timedelta(days=slack_days)
     return start <= ev <= end
@@ -68,7 +71,7 @@ def match_events(
             MatchedEvent(
                 event_id=e["id"],
                 event_name=e.get("name", e["id"]),
-                effective_date=e.get("date", ""),
+                effective_date=str(e.get("date", "")),
                 relevance="fallback: no date window extracted from SQL",
             )
             for e in events
@@ -84,7 +87,7 @@ def match_events(
                 MatchedEvent(
                     event_id=e["id"],
                     event_name=e.get("name", e["id"]),
-                    effective_date=ev_date,
+                    effective_date=str(ev_date),
                     relevance=(
                         f"event date {ev_date} within window"
                         f" {window[0]}..{window[1]} (slack {slack_days}d)"
