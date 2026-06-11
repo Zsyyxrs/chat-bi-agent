@@ -54,6 +54,14 @@ CREATE INDEX idx_fct_camp_campaign  ON fct_campaign_response (campaign_id, dt);
 CREATE INDEX idx_fct_camp_response  ON fct_campaign_response (response_type, dt);
 CREATE INDEX idx_fct_camp_product   ON fct_campaign_response (product_id, dt);
 
+-- ---------- 事件埋雷锚定索引 ----------
+CREATE INDEX IF NOT EXISTS idx_customer_branch_tier
+    ON dim_customer(branch_id, customer_tier);
+CREATE INDEX IF NOT EXISTS idx_account_anchor
+    ON dim_account(is_event_anchor) WHERE is_event_anchor;
+CREATE INDEX IF NOT EXISTS idx_customer_anchor
+    ON dim_customer(is_event_anchor) WHERE is_event_anchor;
+
 -- ---------- 写入完成后的初始化记号（健康检查可读） ----------
 CREATE TABLE _meta_schema_version (
     version     VARCHAR(16)  PRIMARY KEY,

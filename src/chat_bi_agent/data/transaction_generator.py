@@ -27,16 +27,36 @@ class TransactionGenerator:
         start_date: date = date(2025, 1, 1),
         end_date: date = date(2026, 5, 31),
         transactions_per_account_per_month: float = 2.5,
+        force_specs: list | None = None,
     ) -> Generator[dict, None, None]:
         """
         Generate transaction data with business rules:
         - Month-end effect: higher transaction volume on month-end days
         - Workday effect: weekends have fewer transactions
         - Amount distribution: skewed towards smaller amounts
+        - force_specs: optional list of ForcedTxnSpec for anchor accounts
         """
 
         transaction_id = 1
         current = start_date
+
+        # Pre-compute forced injections per date.
+        forced_inserts: dict[date, list[dict]] = {}
+        if force_specs:
+            for spec in force_specs:
+                window_start = max(start_date, spec.event_date - timedelta(days=5))
+                window_end = min(end_date, spec.event_date + timedelta(days=10))
+                window_days = max(1, (window_end - window_start).days + 1)
+                for acct_id in spec.account_ids:
+                    for k in range(spec.min_txn_per_customer):
+                        offset = (k * 7) % window_days
+                        d = window_start + timedelta(days=offset)
+                        forced_inserts.setdefault(d, []).append({
+                            "_event_id": spec.event_id,
+                            "account_id": acct_id,
+                            "transaction_type": spec.txn_type,
+                            "transaction_channel": (spec.channels or ["MOBILE"])[0],
+                        })
 
         while current <= end_date:
             # Month-end multiplier (5x volume on last 3 days of month)
@@ -111,6 +131,26 @@ class TransactionGenerator:
 
                 transaction_id += 1
 
+            # Inject forced transactions for today
+            for forced in forced_inserts.get(current, []):
+                yield {
+                    "transaction_id": transaction_id,
+                    "dt": current,
+                    "transaction_time": datetime.combine(current, fake.time_object()),
+                    "account_id": forced["account_id"],
+                    "customer_id": random.choice(customer_ids),
+                    "counter_account_id": None,
+                    "transaction_type": forced["transaction_type"],
+                    "transaction_channel": forced["transaction_channel"],
+                    "amount": round(random.uniform(100, 5000), 2),
+                    "currency": "CNY",
+                    "balance_after": round(random.uniform(0, 100000), 2),
+                    "branch_id": random.choice(branch_ids),
+                    "product_id": None,
+                    "description": f"forced txn for event {forced.get('_event_id', '')}",
+                }
+                transaction_id += 1
+
             current += timedelta(days=1)
 
     def generate_balance_daily(
@@ -121,17 +161,39 @@ class TransactionGenerator:
         branch_ids: list[str],
         start_date: date = date(2025, 1, 1),
         end_date: date = date(2026, 5, 31),
+        force_account_ids: list[str] | None = None,
+        anchor_metadata: dict[str, dict] | None = None,
     ) -> Generator[dict, None, None]:
-        """Generate daily balance snapshots (one per account per day)."""
+        """Generate daily balance snapshots (one per account per day).
 
+        force_account_ids: optional list of anchor accounts to snapshot daily
+        regardless of the random sampling rate applied to ``account_ids``.
+        anchor_metadata: optional account_id -> {customer_id, product_id, branch_id}
+        lookup. When set, anchor rows use real dim_account values instead of random
+        picks, so verify_events SQL filters resolve to the anchored cohort.
+        """
+
+        meta = anchor_metadata or {}
         current = start_date
         while current <= end_date:
-            for account_id in account_ids[: max(1, len(account_ids) // 100)]:
-                customer_id = random.choice(customer_ids)
-                product_id = random.choice(product_ids) if random.random() > 0.6 else None
-                branch_id = random.choice(branch_ids)
+            sampled = account_ids[: max(1, len(account_ids) // 100)]
+            anchors = force_account_ids or []
+            for account_id in list(sampled) + list(anchors):
+                if account_id in meta:
+                    m = meta[account_id]
+                    customer_id = m["customer_id"]
+                    product_id = m["product_id"]
+                    branch_id = m["branch_id"]
+                    # Anchor base balance is deterministic — random.expovariate's
+                    # CV=1 makes verify_events percent-change noise dominate the
+                    # event signal on 50-customer cohorts. Propagation still runs.
+                    balance = 100000.0
+                else:
+                    customer_id = random.choice(customer_ids)
+                    product_id = random.choice(product_ids) if random.random() > 0.6 else None
+                    branch_id = random.choice(branch_ids)
+                    balance = round(random.expovariate(1 / 100000), 2)
 
-                balance = round(random.expovariate(1 / 100000), 2)
                 avg_balance_mtd = balance * random.uniform(0.8, 1.2)
 
                 yield {

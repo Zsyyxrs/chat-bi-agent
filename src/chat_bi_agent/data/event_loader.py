@@ -8,6 +8,45 @@ from typing import Optional
 import yaml
 
 
+class EventLoaderError(ValueError):
+    """Raised when an event YAML fails schema validation."""
+
+
+@dataclass
+class RequiredPopulation:
+    """种子数据契约：事件落地所需的最小客户群、必持产品、必备交易。"""
+
+    min_customers: int
+    must_hold: list[dict]
+    branches: list[str] | None = None
+    tiers: list[str] | None = None
+    branch_levels: list[str] | None = None
+    must_have_transactions: dict | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RequiredPopulation":
+        min_customers = data.get("min_customers")
+        if not isinstance(min_customers, int) or min_customers < 1:
+            raise EventLoaderError(
+                f"required_population.min_customers must be int >= 1, got {min_customers!r}"
+            )
+
+        must_hold = data.get("must_hold")
+        if not isinstance(must_hold, list) or not must_hold:
+            raise EventLoaderError(
+                "required_population.must_hold must be a non-empty list"
+            )
+
+        return cls(
+            min_customers=min_customers,
+            must_hold=must_hold,
+            branches=data.get("branches") or None,
+            tiers=data.get("tiers") or None,
+            branch_levels=data.get("branch_levels") or None,
+            must_have_transactions=data.get("must_have_transactions") or None,
+        )
+
+
 @dataclass
 class Event:
     """事件定义：包含触发日期、受影响维度、传导规则、评估标准。"""
@@ -21,6 +60,7 @@ class Event:
     propagation: list[dict] = field(default_factory=list)
     expected_rca_conclusion: str = ""
     expected_main_dimensions: list[dict] = field(default_factory=list)
+    required_population: RequiredPopulation | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Event":
@@ -29,6 +69,11 @@ class Event:
             event_date = date.fromisoformat(data["date"])
         else:
             event_date = data["date"]
+
+        rp_data = data.get("required_population")
+        required_population = (
+            RequiredPopulation.from_dict(rp_data) if rp_data else None
+        )
 
         return cls(
             id=data["id"],
@@ -40,6 +85,7 @@ class Event:
             propagation=data.get("propagation", []),
             expected_rca_conclusion=data.get("expected_rca_conclusion", ""),
             expected_main_dimensions=data.get("expected_main_dimensions", []),
+            required_population=required_population,
         )
 
 
@@ -75,11 +121,8 @@ class EventLoader:
 
         events = []
         for event_dict in data["events"]:
-            try:
-                event = Event.from_dict(event_dict)
-                events.append(event)
-            except Exception as e:
-                print(f"Warning: Failed to parse event {event_dict.get('id')}: {e}")
+            event = Event.from_dict(event_dict)  # let EventLoaderError propagate
+            events.append(event)
 
         return events
 

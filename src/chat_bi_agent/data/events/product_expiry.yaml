@@ -10,7 +10,7 @@ events:
     affected_dimensions:
       branch_id: [BR_CITY_0006]  # 上海分行城分行
       customer_tier: [HIGH_NET_WORTH, AFFLUENT]
-      product_id: [PROD_WEA_0000, PROD_WEA_0001]
+      product_id: [PROD_WEA_0030, PROD_WEA_0031]
 
     propagation:
       # 主体效应：存款余额下降
@@ -22,7 +22,9 @@ events:
         ramp_days: 3  # 渐变 3 天，不是一天到位
         ramp_type: linear
         renewal_rate: 0.42  # 42% 客户续作其他产品，不完全流出
-        affected_account_sample: 0.6  # 只影响 60% 的持有账户
+        affected_account_sample: 1.0  # 锚定队列全部触达，verify_events 才能落入容差
+        effect_type: sustained
+        product_subcategories: [活期存款]
 
       # 进阶效应：部分续作到其他产品
       - target_table: fct_balance_daily
@@ -31,7 +33,17 @@ events:
         delta: 1.8  # +1.8% 其他理财产品余额增加
         delay_days: 3
         affected_account_sample: 0.25  # 仅 25% 续作率
-        related_products: [PROD_WEA_0002, PROD_WEA_0003]
+        related_products: [PROD_WEA_0032, PROD_WEA_0033]  # 续作流向（叙事元数据）
+        product_subcategories: [短期理财]  # 与 related_products 一致；防止溢出到活期存款验证
+        effect_type: sustained
+
+    required_population:
+      min_customers: 50  # 降低 verify AVG 噪声底（√50→±14% vs √20→±22%）
+      branches: [BR_CITY_0006]
+      tiers: [HIGH_NET_WORTH, AFFLUENT]
+      must_hold:
+        - product_subcategory: 活期存款
+        - product_ids: [PROD_WEA_0030, PROD_WEA_0031]
 
     # 评估标准：归因 Agent 是否能识别这个根因
     expected_rca_conclusion: |
@@ -42,7 +54,7 @@ events:
 
     expected_main_dimensions:
       - branch_id: BR_CITY_0006
-      - product_id: PROD_WEA_0000
+      - product_id: PROD_WEA_0030
       - customer_tier: HIGH_NET_WORTH
 
   - id: qixi_deposit_campaign
@@ -62,8 +74,18 @@ events:
         delta: 12.0  # +12% 定期存款增长
         delay_days: 2
         ramp_days: 5
-        affected_account_sample: 0.35
-        related_products: [PROD_DEP_0001, PROD_DEP_0004]
+        affected_account_sample: 1.0  # 锚定队列全部触达，verify_events 才能落入容差
+        related_products: [PROD_DEP_0005, PROD_DEP_0008]  # 营销主推产品（叙事元数据）
+        effect_type: sustained
+        product_subcategories: [定期存款, 大额存单]
+
+    required_population:
+      min_customers: 50  # 降低 verify AVG 噪声底
+      branches: [BR_CITY_0000, BR_CITY_0002]
+      tiers: [MASS, AFFLUENT]
+      must_hold:
+        - product_subcategory: 定期存款
+        - product_ids: [PROD_DEP_0005, PROD_DEP_0008]
 
     expected_rca_conclusion: |
       杭州、南京分行 MASS 层客户定期存款在 2026-08-10 前后出现明显增长（+12%）。
@@ -101,7 +123,17 @@ events:
         delta: 5.5  # +5.5% 贷款余额增长
         delay_days: 14
         ramp_days: 21
-        affected_account_sample: 0.12
+        affected_account_sample: 1.0  # 锚定队列全部触达，verify_events 才能落入容差
+        effect_type: sustained
+        product_subcategories: [个人贷款, 房屋贷款, 小微贷款]
+
+    required_population:
+      min_customers: 80  # 强制锚定 LOAN 队列，降低 verify_events 噪声底
+      must_hold:
+        - product_category: LOAN
+      must_have_transactions:
+        type: LOAN
+        min_txn_per_customer: 2
 
     expected_rca_conclusion: |
       2026 年二季度，全行贷款申请量在 6 月中旬开始上升，较月初增长 12%，
@@ -135,6 +167,17 @@ events:
         delta: -18.0  # -18% 期末余额下降
         delay_days: 0
         affected_account_sample: 0.45
+
+    required_population:
+      min_customers: 50
+      tiers: [BASIC, MASS]
+      branch_levels: [SUBBRANCH, CITY]
+      must_hold:
+        - product_subcategory: 活期存款
+      must_have_transactions:
+        type: WITHDRAW
+        channels: [ATM, COUNTER]
+        min_txn_per_customer: 3
 
     expected_rca_conclusion: |
       春节假期期间（2026-02-15 至 2026-02-23），现金支取量明显增加 25%，

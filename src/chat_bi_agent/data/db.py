@@ -1,5 +1,6 @@
 """Database connection and utilities."""
 
+import os
 from contextlib import contextmanager
 
 import psycopg2
@@ -9,17 +10,17 @@ from psycopg2.extras import RealDictCursor
 class DatabaseConfig:
     def __init__(
         self,
-        host: str = "localhost",
-        port: int = 5432,
-        database: str = "chatbi",
-        user: str = "chatbi",
-        password: str = "chatbi_dev",
+        host: str | None = None,
+        port: int | None = None,
+        database: str | None = None,
+        user: str | None = None,
+        password: str | None = None,
     ):
-        self.host = host
-        self.port = port
-        self.database = database
-        self.user = user
-        self.password = password
+        self.host = host if host is not None else os.environ.get("PG_HOST", "localhost")
+        self.port = port if port is not None else int(os.environ.get("PG_PORT", "5432"))
+        self.database = database if database is not None else os.environ.get("PG_DATABASE", "chatbi")
+        self.user = user if user is not None else os.environ.get("PG_USER", "chatbi")
+        self.password = password if password is not None else os.environ.get("PG_PASSWORD", "chatbi_dev")
 
     def get_connection_string(self) -> str:
         return (
