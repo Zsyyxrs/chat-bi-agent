@@ -8,6 +8,8 @@ import psycopg2
 from langfuse import observe
 from psycopg2.extras import RealDictCursor
 
+from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS
+
 
 class UnsafeSQLError(Exception):
     """SQL 包含禁止的关键字（DML/DDL）。"""
@@ -32,7 +34,7 @@ FORBIDDEN_PATTERN = re.compile(
 
 
 class SQLExecutor:
-    def __init__(self, statement_timeout_ms: int = 10_000):
+    def __init__(self, statement_timeout_ms: int = PG_STATEMENT_TIMEOUT_MS):
         self.host = os.environ.get("PG_HOST", "localhost")
         self.port = int(os.environ.get("PG_PORT", "5432"))
         self.database = os.environ.get("PG_DATABASE", "chatbi")

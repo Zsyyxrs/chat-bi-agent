@@ -42,6 +42,9 @@ MANIFEST
 .env.local
 .env.*.local
 
+# Local runtime config (example template is tracked)
+config/local.yaml
+
 # Project-specific
 .claude/
 result/

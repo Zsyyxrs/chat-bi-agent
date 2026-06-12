@@ -11,10 +11,14 @@ import dashscope
 from dashscope import MultiModalConversation, TextEmbedding
 from langfuse import get_client, observe
 
-# 模型名集中放这里，方便统一升级 / 降级（v4 → v3 fallback）
-CHAT_MODEL = "qwen3.6-plus"
-EMBED_MODEL = "text-embedding-v4"
-EMBED_DIM = 1024
+from chat_bi_agent.config import (
+    CHAT_MODEL,
+    DEFAULT_TEMPERATURE,
+    EMBED_DIM,
+    EMBED_MODEL,
+)
+
+__all__ = ["CHAT_MODEL", "EMBED_MODEL", "EMBED_DIM", "ChatResult", "chat", "embed"]
 
 
 @dataclass
@@ -32,7 +36,11 @@ def _ensure_api_key() -> None:
 
 
 @observe(as_type="generation", name="qwen_chat")
-def chat(system_prompt: str, user_prompt: str, temperature: float = 0.1) -> ChatResult:
+def chat(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = DEFAULT_TEMPERATURE,
+) -> ChatResult:
     """单轮聊天调用。低 temperature 适合 NL2SQL。"""
     _ensure_api_key()
     # resp = Generation.call(

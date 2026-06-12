@@ -15,6 +15,7 @@ from chat_bi_agent.agents.p2.prompts.replanner_system import REPLANNER_SYSTEM_PR
 from chat_bi_agent.agents.p2.types import P2Plan, PlanStep, StepResult
 from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
+from chat_bi_agent.config import TOP_K_PLANNER
 from chat_bi_agent.llm import qwen_client
 from chat_bi_agent.schema.loader import SchemaLoader
 
@@ -109,7 +110,7 @@ class Planner:
         self,
         schema_linker: SchemaLinker,
         loader: SchemaLoader,
-        top_k: int = 8,
+        top_k: int = TOP_K_PLANNER,
     ):
         self.schema_linker = schema_linker
         self.loader = loader
@@ -164,7 +165,7 @@ class Replanner:
         self,
         schema_linker: SchemaLinker,
         loader: SchemaLoader,
-        top_k: int = 8,
+        top_k: int = TOP_K_PLANNER,
     ):
         self.schema_linker = schema_linker
         self.loader = loader

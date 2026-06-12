@@ -12,6 +12,7 @@ from chat_bi_agent.agents.p1.sql_generator import InvalidJsonError, SQLGenerator
 from chat_bi_agent.agents.p1.sql_validator import SQLValidator
 from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass, SQLExecutor
+from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS, TOP_K_NL2SQL
 from chat_bi_agent.schema.loader import SchemaLoader
 
 MAX_ATTEMPTS = 3
@@ -34,7 +35,11 @@ class P1AgentResult:
 class P1NL2SQLAgent:
     """构造时一次性加载 schema + 构建 embedding 索引。"""
 
-    def __init__(self, top_k: int = 4, statement_timeout_ms: int = 10_000):
+    def __init__(
+        self,
+        top_k: int = TOP_K_NL2SQL,
+        statement_timeout_ms: int = PG_STATEMENT_TIMEOUT_MS,
+    ):
         self.loader = SchemaLoader()
         self.loader.load()
         self.loader.build_index()

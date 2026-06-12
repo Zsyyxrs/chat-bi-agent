@@ -1,0 +1,22 @@
+# 本地可调配置 —— 复制为 config/local.yaml 后按需修改。
+# 缺失 / 未提供的键自动 fallback 到代码内默认值（见 src/chat_bi_agent/config.py）。
+
+llm:
+  # DashScope chat 模型 ID。可换 qwen-plus / qwen-max / 带日期的快照版本。
+  chat_model: qwen3.6-plus-2026-04-02
+  # Embedding 模型 ID。
+  embed_model: text-embedding-v4
+  # Embedding 维度，需与 embed_model 匹配。
+  embed_dim: 1024
+  # chat() 未显式传 temperature 时使用的默认值。NL2SQL 场景宜低。
+  default_temperature: 0.1
+
+retrieval:
+  # P2 Planner / Replanner 召回的 schema 表数量。
+  top_k_planner: 8
+  # P1 NL2SQL Agent 召回的 schema 表数量。
+  top_k_nl2sql: 4
+
+db:
+  # 单条 SQL 执行超时（毫秒），由 SQLExecutor 通过 PG statement_timeout 强制。
+  statement_timeout_ms: 10000
