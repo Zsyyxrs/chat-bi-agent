@@ -17,7 +17,7 @@ python -m chat_bi_agent.data.seed \
     --truncate
 
 echo "✅ [3/5] Verify events..."
-python -m chat_bi_agent.data.verify_events
+python scripts/verify_events.py
 
 echo "📊 [4/5] Run P3 RCA eval..."
 python -m chat_bi_agent.runners.run_p3_eval

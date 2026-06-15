@@ -10,12 +10,12 @@
 import sys
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from chat_bi_agent.schema.loader import SchemaLoader
 from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.llm.langfuse_setup import flush
-
+from chat_bi_agent.schema.loader import SchemaLoader
 
 HAPPY_PATH = [
     ("q001", "查询上海分行（BR_CITY_0006）所有高净值客户的客户 ID、姓名和客户等级。",

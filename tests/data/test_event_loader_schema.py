@@ -1,7 +1,5 @@
 """Schema validation tests for EventLoader required_population field."""
 
-from datetime import date
-
 import pytest
 
 from chat_bi_agent.data.event_loader import (

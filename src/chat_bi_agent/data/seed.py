@@ -416,27 +416,11 @@ def main(
     if with_events:
         print("📌 Anchoring event populations...", file=sys.stderr)
         with get_cursor(config) as cursor:
-            customer_index, branch_index, product_index = build_dim_indexes(cursor)
-            cursor.execute(
-                "SELECT customer_id, branch_id, customer_tier FROM dim_customer"
-            )
-            existing_customers = [
-                {"customer_id": r[0], "branch_id": r[1], "customer_tier": r[2]}
-                for r in cursor.fetchall()
-            ]
-            cursor.execute(
-                "SELECT account_id, customer_id, product_id FROM dim_account"
-            )
-            existing_accounts = [
-                {"account_id": r[0], "customer_id": r[1], "product_id": r[2]}
-                for r in cursor.fetchall()
-            ]
+            _, branch_index, product_index = build_dim_indexes(cursor)
 
             report = anchor_event_populations(
                 cursor=cursor,
                 events=events,
-                existing_customers=existing_customers,
-                existing_accounts=existing_accounts,
                 branch_ids=branch_ids,
                 branch_index=branch_index,
                 product_index=product_index,

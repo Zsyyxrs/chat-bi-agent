@@ -46,7 +46,7 @@ def test_reseed_and_verify_anxin():
 
     # Verify anxin
     result = subprocess.run(
-        ["python", "-m", "chat_bi_agent.data.verify_events", "--event-id", "anxin_90_expire"],
+        ["python", "scripts/verify_events.py", "--event-id", "anxin_90_expire"],
         cwd=REPO_ROOT, capture_output=True, text=True,
     )
     print(result.stdout)

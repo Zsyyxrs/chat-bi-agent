@@ -54,6 +54,8 @@ select = ["E", "F", "W", "I"]
 "src/chat_bi_agent/agents/p2/prompts/*.py" = ["E501"]
 "src/chat_bi_agent/agents/p3/prompts/*.py" = ["E501"]
 "tests/shared/test_schema_linker.py" = ["E501"]
+"tests/data/*.py" = ["E501"]
+"scripts/*.py" = ["E402", "E501"]
 
 [tool.pytest.ini_options]
 markers = [

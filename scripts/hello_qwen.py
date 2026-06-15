@@ -9,12 +9,13 @@
 """
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from langfuse import observe
 
-from chat_bi_agent.llm import qwen_client
-from chat_bi_agent.llm.langfuse_setup import get_client, flush
+from chat_bi_agent.llm import qwen_client  # noqa: E402
+from chat_bi_agent.llm.langfuse_setup import flush, get_client
 
 
 @observe(name="hello_qwen_chat")

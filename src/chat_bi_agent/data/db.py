@@ -7,6 +7,10 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 
+def _resolve(value, env_key: str, default: str) -> str:
+    return value if value is not None else os.environ.get(env_key, default)
+
+
 class DatabaseConfig:
     def __init__(
         self,
@@ -16,11 +20,11 @@ class DatabaseConfig:
         user: str | None = None,
         password: str | None = None,
     ):
-        self.host = host if host is not None else os.environ.get("PG_HOST", "localhost")
-        self.port = port if port is not None else int(os.environ.get("PG_PORT", "5432"))
-        self.database = database if database is not None else os.environ.get("PG_DATABASE", "chatbi")
-        self.user = user if user is not None else os.environ.get("PG_USER", "chatbi")
-        self.password = password if password is not None else os.environ.get("PG_PASSWORD", "chatbi_dev")
+        self.host = _resolve(host, "PG_HOST", "localhost")
+        self.port = int(_resolve(port, "PG_PORT", "5432"))
+        self.database = _resolve(database, "PG_DATABASE", "chatbi")
+        self.user = _resolve(user, "PG_USER", "chatbi")
+        self.password = _resolve(password, "PG_PASSWORD", "chatbi_dev")
 
     def get_connection_string(self) -> str:
         return (

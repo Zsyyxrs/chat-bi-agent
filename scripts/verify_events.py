@@ -1,4 +1,7 @@
-"""Run 4 verification SQLs against seeded DB. Returns 0 iff all events landed within ±30% tolerance."""
+"""Run 4 verification SQLs against seeded DB.
+
+Returns 0 iff all events landed within ±30% tolerance.
+"""
 
 import argparse
 import sys
@@ -118,7 +121,12 @@ CHECKS = [
     EventCheck("anxin_90_expire", "上海HNW/AFFLUENT × 活期存款 mid-May 跌", ANXIN_SQL, -8.5),
     EventCheck("qixi_deposit_campaign", "杭州/南京 MASS/AFFLUENT × 定期 八月增", QIXI_SQL, +12.0),
     EventCheck("lpr_cut_q2", "全行 LOAN 贷款余额 7月底 增", LPR_SQL, +5.5),
-    EventCheck("spring_festival_withdrawal", "BASIC/MASS × ATM/COUNTER 春节取现增", SPRING_FESTIVAL_SQL, +25.0),
+    EventCheck(
+        "spring_festival_withdrawal",
+        "BASIC/MASS × ATM/COUNTER 春节取现增",
+        SPRING_FESTIVAL_SQL,
+        +25.0,
+    ),
 ]
 
 

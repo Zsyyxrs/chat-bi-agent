@@ -68,7 +68,7 @@ class PropagationEngine:
         if rule.target_table not in ["fct_transaction", "fct_balance_daily", "dim_customer"]:
             return False
 
-        # === 新版：transient vs sustained ===
+        # === transient vs sustained ===
         start_date = event_date + timedelta(days=rule.delay_days)
         if current_date < start_date:
             return False
@@ -92,7 +92,7 @@ class PropagationEngine:
         if random.random() > rule.affected_account_sample:
             return False
 
-        # === 新增：维度过滤（Bug A 修复） ===
+        # === 新增：维度过滤 ===
         if rule.branch_ids and row_data.get("branch_id") not in rule.branch_ids:
             return False
 

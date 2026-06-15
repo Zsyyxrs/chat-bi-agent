@@ -2,8 +2,8 @@
 
 from datetime import date
 
-from chat_bi_agent.data.transaction_generator import TransactionGenerator
 from chat_bi_agent.data.scenario_anchor import ForcedTxnSpec
+from chat_bi_agent.data.transaction_generator import TransactionGenerator
 
 
 def test_force_account_ids_in_balance_daily():
