@@ -21,6 +21,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "numpy>=1.26.0",
     "sqlglot>=20,<27",
+    "jieba>=0.42.1",
 ]
 
 [project.optional-dependencies]

@@ -1,10 +1,43 @@
 """RCA (Root Cause Analysis) Evaluator: assess attribution accuracy of RCA Agent."""
 
+import logging
+import re
+import string
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import jieba
 import yaml
+
+# jieba prints initialization noise on first call — silence it to keep eval logs clean.
+jieba.setLogLevel(logging.WARNING)
+
+_CHINESE_PUNCT = "。，、；：？！…（）《》「」『』【】“”‘’—－·"
+_PUNCT_CHARS = set(string.punctuation + _CHINESE_PUNCT + " \t\n\r")
+
+# Event-specific keywords used both for event_hit fuzzy match and dim_recall alias expansion.
+# When a product is tied to an event in events YAML, the event's keywords also act as
+# acceptable aliases for that product — so narratives that name the event verbatim
+# ("安鑫 90 天到期") count toward the product_id's dim_recall.
+_EVENT_KEYWORDS: dict[str, list[str]] = {
+    "anxin_90_expire": ["安鑫", "90天", "理财", "到期", "赎回"],
+    "spring_festival_withdrawal": ["春节", "现金", "支取", "ATM", "柜面"],
+    "lpr_cut_q2": ["LPR", "下调", "政策", "贷款", "6月"],
+    "qixi_deposit_campaign": ["七夕", "情侣", "定期", "营销", "活动"],
+}
+
+
+def _tokenize_zh(text: str) -> set[str]:
+    """jieba 分词后剔除纯标点/空白 token，返回小写 token 集合。
+
+    比 .split() 的关键优势：中文按词切分，"理财产品"→{"理财","产品"}，
+    "活期存款"→{"活期","存款"}；Jaccard 时才会有有效重叠。
+    """
+    if not text:
+        return set()
+    tokens = jieba.lcut(text.lower())
+    return {t for t in tokens if t.strip() and not all(c in _PUNCT_CHARS for c in t)}
 
 
 @dataclass
@@ -91,9 +124,55 @@ class RCAEvaluator:
     5. 聚合为最终评分
     """
 
-    def __init__(self):
+    def __init__(self, events_dir: Optional[Path] = None):
         self.eval_dir = Path(__file__).parent.parent / "data"
         self.questions = self._load_evaluation_questions()
+        events_dir = events_dir if events_dir is not None else self.eval_dir / "events"
+        self._dim_aliases = self._build_dim_alias_map(events_dir)
+
+    @staticmethod
+    def _build_dim_alias_map(events_dir: Path) -> dict[str, set[str]]:
+        """从 events YAML 抽 product_id ↔ 事件名/描述 别名。
+
+        narrator 被允许引用业务事件名（如 "安鑫 90 天到期"）而非裸 product_id；
+        dim_recall 应同时接受两种表达。
+        """
+        aliases: dict[str, set[str]] = {}
+        if not events_dir.exists():
+            return aliases
+        for yaml_file in events_dir.glob("*.yaml"):
+            try:
+                data = yaml.safe_load(yaml_file.read_text(encoding="utf-8")) or {}
+            except yaml.YAMLError:
+                continue
+            for event in data.get("events", []) or []:
+                event_id = (event.get("id") or "").strip()
+                event_name = (event.get("name") or "").strip()
+                # Aliases the narrator might use to reference products of this event:
+                #   - bare product_id
+                #   - event.name (and a no-space variant — "安鑫90天到期" ↔ "安鑫 90 天到期")
+                #   - all event_hit fuzzy keywords (e.g. "安鑫"), since narrator naming
+                #     the event verbatim is itself evidence that the product is on topic
+                extras: set[str] = set()
+                if event_name:
+                    extras.add(event_name)
+                    extras.add(event_name.replace(" ", ""))
+                extras.update(_EVENT_KEYWORDS.get(event_id, []))
+
+                affected = event.get("affected_dimensions") or {}
+                for pid in affected.get("product_id") or []:
+                    aliases.setdefault(str(pid), set()).add(str(pid))
+                    aliases[str(pid)].update(extras)
+                for prop in event.get("propagation") or []:
+                    for pid in prop.get("related_products") or []:
+                        aliases.setdefault(str(pid), set()).add(str(pid))
+                        aliases[str(pid)].update(extras)
+        return aliases
+
+    def _value_matches_response(self, value: str, response: str) -> bool:
+        """value 或其别名在 response 里出现即视为命中。"""
+        candidates = self._dim_aliases.get(value, set()) | {value}
+        return any(alias and alias in response for alias in candidates)
 
     def _load_evaluation_questions(self) -> list[dict]:
         """从 YAML 加载评估问题。"""
@@ -160,30 +239,30 @@ class RCAEvaluator:
             score.event_hit = True
 
         # 2. 维度回忆率 (dimension_recall)
+        # 每个 expected_dim 是一个 {key: value | [values]} 的 dict；
+        # 命中条件：value（或其在 events YAML 里的业务别名）在 agent_response 中出现。
+        # 例：product_id=PROD_WEA_0030 也可以靠 narrative 写"安鑫 90 天到期"命中。
         expected_dims = question.get("expected_affected_dimensions", [])
         if expected_dims:
             matched_dims = 0
             for exp_dim in expected_dims:
-                for key, expected_vals in exp_dim.items():
-                    if isinstance(expected_vals, list):
-                        if any(v in agent_response for v in expected_vals):
-                            matched_dims += 1
-                    else:
-                        if str(expected_vals) in agent_response:
-                            matched_dims += 1
+                for _key, expected_vals in exp_dim.items():
+                    vals = expected_vals if isinstance(expected_vals, list) else [expected_vals]
+                    if any(self._value_matches_response(str(v), agent_response) for v in vals):
+                        matched_dims += 1
 
             score.dimension_recall = min(
                 1.0, matched_dims / max(1, sum(len(d.values()) for d in expected_dims))
             )
 
         # 3. 结论相似度 (conclusion_similarity)
+        # 用 jieba 中文分词后取 Jaccard；裸 .split() 在中文上等同于把整句当一个 token。
         expected_conclusion = question.get("expected_root_cause", "")
         if expected_conclusion and agent_conclusion:
-            # 简化的相似度：共同关键词占比
-            expected_keywords = set(expected_conclusion.lower().split())
-            agent_keywords = set(agent_conclusion.lower().split())
-            intersection = expected_keywords & agent_keywords
-            union = expected_keywords | agent_keywords
+            expected_tokens = _tokenize_zh(expected_conclusion)
+            agent_tokens = _tokenize_zh(agent_conclusion)
+            intersection = expected_tokens & agent_tokens
+            union = expected_tokens | agent_tokens
             if union:
                 score.conclusion_similarity = len(intersection) / len(union)
 
@@ -195,14 +274,8 @@ class RCAEvaluator:
         return score
 
     def _get_event_keywords(self, event_id: str) -> list[str]:
-        """获取事件的关键词（用于宽松匹配）。"""
-        keywords_map = {
-            "anxin_90_expire": ["安鑫", "90天", "理财", "到期", "赎回"],
-            "spring_festival_withdrawal": ["春节", "现金", "支取", "ATM", "柜面"],
-            "lpr_cut_q2": ["LPR", "下调", "政策", "贷款", "6月"],
-            "qixi_deposit_campaign": ["七夕", "情侣", "定期", "营销", "活动"],
-        }
-        return keywords_map.get(event_id, [])
+        """获取事件的关键词（用于宽松匹配）；单一来源 _EVENT_KEYWORDS。"""
+        return _EVENT_KEYWORDS.get(event_id, [])
 
     def _detect_hallucination(self, response: str) -> bool:
         """检测是否存在明显的事实幻觉。"""
