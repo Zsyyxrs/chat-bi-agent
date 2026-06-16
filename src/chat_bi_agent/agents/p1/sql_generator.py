@@ -33,13 +33,7 @@ SYSTEM_PROMPT = (
     "   - 上旬=当月 1-10 日；中旬=11-20 日；下旬=21 日至月末\n"
     "   - 月初=前 5 天；月末=后 5 天；月中=11-20 日\n"
     "   - X 月前后 N 天=围绕 X 月某关键日期前后各 N 天（题里若没指日，取月中 15 日）\n"
-    "10. 对比窗口（适用于'为什么/突然下降/上升 N%' 类问题）：\n"
-    "    - 期内窗口=题目说的日期范围（最少 7 天；只给单日则前后各 3 天）\n"
-    "    - 期前窗口=紧邻期内、长度相同、不重叠\n"
-    "    - 用 AVG(...) 聚合而不是单日 snapshot，避免日内噪音\n"
-    "    - SELECT 列必须同时输出当期值和前期值，列名建议 current_avg / prior_avg\n"
-    "    - 例：'五月中旬突然下降' → 当期=2026-05-11 至 2026-05-20，前期=2026-05-01 至 2026-05-10\n"
-    "11. 列名严格按 schema，禁止使用未定义的别名/简写：\n"
+    "10. 列名严格按 schema，禁止使用未定义的别名/简写：\n"
     "    - 用 dim_customer.customer_tier，不要写成 c.tier\n"
     "    - JOIN 时显式 ON 列等值，不要假设隐式连接\n"
     "\n"
@@ -48,7 +42,7 @@ SYSTEM_PROMPT = (
     "{\n"
     '  "thought": "问的是某分行的客户，dim_customer 单表即可",\n'
     '  "tables_used": ["dim_customer"],\n'
-    "  \"sql\": \"SELECT customer_id, customer_name FROM dim_customer"
+    '  "sql": "SELECT customer_id, customer_name FROM dim_customer'
     " WHERE branch_id = 'BR_CITY_0006'\"\n"
     "}\n"
     "```\n"
@@ -80,21 +74,16 @@ JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 
 class SQLGenerator:
-
     def _parse(self, raw: str) -> _ParsedLLMOutput:
         m = JSON_FENCE_RE.search(raw)
         candidate = m.group(1) if m else raw.strip()
         try:
             data = json.loads(candidate)
         except json.JSONDecodeError as e:
-            raise InvalidJsonError(
-                f"无法解析为 JSON: {e}; raw 前 200 字符: {raw[:200]}"
-            ) from e
+            raise InvalidJsonError(f"无法解析为 JSON: {e}; raw 前 200 字符: {raw[:200]}") from e
         for key in ("thought", "tables_used", "sql"):
             if key not in data:
-                raise InvalidJsonError(
-                    f"缺少字段 {key}; 实际: {list(data.keys())}"
-                )
+                raise InvalidJsonError(f"缺少字段 {key}; 实际: {list(data.keys())}")
         if not isinstance(data["tables_used"], list):
             raise InvalidJsonError("tables_used 必须是 list")
         return _ParsedLLMOutput(
