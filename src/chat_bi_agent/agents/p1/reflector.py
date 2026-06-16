@@ -77,9 +77,6 @@ class Reflector:
             return f"上次用了不存在的列，请仔细核对 schema 中的列名；完整错误：{err_msg}"
         if err_class == SQLErrorClass.UNKNOWN_TABLE:
             tables_str = ", ".join(top_k_tables)
-            return (
-                f"上次用了不存在的表，仅允许使用以下表：{tables_str}。"
-                f"完整错误：{err_msg}"
-            )
+            return f"上次用了不存在的表，仅允许使用以下表：{tables_str}。完整错误：{err_msg}"
         # OTHER 兜底
         return f"上次执行失败：{err_msg}。请修正。"

@@ -29,9 +29,7 @@ from chat_bi_agent.eval.multi_step_analysis_evaluator import (  # noqa: E402
 )
 from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
 
-YAML_PATH = (
-    Path(__file__).resolve().parents[1] / "data" / "multi_step_analysis_evaluation.yaml"
-)
+YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "multi_step_analysis_evaluation.yaml"
 
 OUTPUT_DATE = "2026-06-07"
 
@@ -76,50 +74,58 @@ def main() -> int:
             report = p2.run(question_id=qid, question=question_text)
         except Exception as e:
             print(f"  AGENT EXCEPTION: {type(e).__name__}: {e}")
-            per_question.append({
-                "question_id": qid,
-                "agent_exception": f"{type(e).__name__}: {e}",
-            })
+            per_question.append(
+                {
+                    "question_id": qid,
+                    "agent_exception": f"{type(e).__name__}: {e}",
+                }
+            )
             continue
 
         eval_input = report.to_eval_input()
         score = evaluator.evaluate_response(**eval_input)
 
-        print(f"  Plan: {len(report.plan.steps)} steps, "
-              f"replan={report.replan_count}, "
-              f"skipped={sum(1 for s in report.step_results if s.skipped)}")
+        print(
+            f"  Plan: {len(report.plan.steps)} steps, "
+            f"replan={report.replan_count}, "
+            f"skipped={sum(1 for s in report.step_results if s.skipped)}"
+        )
         print(f"  Facts: {len(report.facts)}, Insights: {len(report.insights)}")
         print(f"  Latency: {report.total_latency_ms:.0f}ms")
-        print(f"  Score: {score.combined_score:.3f} "
-              f"(step={score.step_completeness:.2f} "
-              f"metric={score.multi_metric_coverage:.2f} "
-              f"insight={score.insight_accuracy:.2f} "
-              f"reason={score.reasoning_quality:.2f} "
-              f"biz={score.business_relevance:.2f})")
+        print(
+            f"  Score: {score.combined_score:.3f} "
+            f"(step={score.step_completeness:.2f} "
+            f"metric={score.multi_metric_coverage:.2f} "
+            f"insight={score.insight_accuracy:.2f} "
+            f"reason={score.reasoning_quality:.2f} "
+            f"biz={score.business_relevance:.2f})"
+        )
 
         evaluation.scores.append(score)
         if score.combined_score >= 0.7:
             evaluation.passed_questions += 1
 
-        per_question.append({
-            "question_id": qid,
-            "plan_type": report.plan.plan_type,
-            "step_count": len(report.plan.steps),
-            "skipped_steps": sum(1 for s in report.step_results if s.skipped),
-            "fact_count": len(report.facts),
-            "insight_count": len(report.insights),
-            "replan_count": report.replan_count,
-            "latency_ms": round(report.total_latency_ms, 0),
-            "score": round(score.combined_score, 4),
-            "sub_scores": {
-                "step_completeness": round(score.step_completeness, 4),
-                "multi_metric_coverage": round(score.multi_metric_coverage, 4),
-                "insight_accuracy": round(score.insight_accuracy, 4),
-                "reasoning_quality": round(score.reasoning_quality, 4),
-                "business_relevance": round(score.business_relevance, 4),
-            },
-            "final_answer_preview": report.final_answer[:200],
-        })
+        per_question.append(
+            {
+                "question_id": qid,
+                "plan_type": report.plan.plan_type,
+                "step_count": len(report.plan.steps),
+                "skipped_steps": sum(1 for s in report.step_results if s.skipped),
+                "fact_count": len(report.facts),
+                "insight_count": len(report.insights),
+                "replan_count": report.replan_count,
+                "latency_ms": round(report.total_latency_ms, 0),
+                "score": round(score.combined_score, 4),
+                "sub_scores": {
+                    "step_completeness": round(score.step_completeness, 4),
+                    "multi_metric_coverage": round(score.multi_metric_coverage, 4),
+                    "insight_accuracy": round(score.insight_accuracy, 4),
+                    "reasoning_quality": round(score.reasoning_quality, 4),
+                    "business_relevance": round(score.business_relevance, 4),
+                },
+                "final_answer_preview": report.final_answer[:200],
+            }
+        )
 
     print()
     print(evaluation.summary())
@@ -127,8 +133,7 @@ def main() -> int:
     print(f"Avg Score: {evaluation.avg_score:.3f}")
 
     out_path = (
-        Path(__file__).resolve().parents[3]
-        / "results" / f"baseline_p2_analysis_{OUTPUT_DATE}.json"
+        Path(__file__).resolve().parents[3] / "results" / f"baseline_p2_analysis_{OUTPUT_DATE}.json"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {

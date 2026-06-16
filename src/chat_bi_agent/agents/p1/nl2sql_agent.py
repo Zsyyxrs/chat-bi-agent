@@ -125,11 +125,13 @@ class P1NL2SQLAgent:
                 top_k_tables=top_names,
                 attempt=attempt,
             )
-            reflect_history.append({
-                "attempt": attempt,
-                "err_class": err_class.value,
-                "action": decision.action.value,
-            })
+            reflect_history.append(
+                {
+                    "attempt": attempt,
+                    "err_class": err_class.value,
+                    "action": decision.action.value,
+                }
+            )
             if decision.action == ReflectAction.GIVE_UP:
                 break
             hint = decision.repair_hint
@@ -140,7 +142,7 @@ class P1NL2SQLAgent:
         return P1AgentResult(
             question_id=question_id,
             sql=last_sql,
-            rows=None,   # 失败路径无 rows
+            rows=None,  # 失败路径无 rows
             execution_error=last_error_msg,
             error_class=last_err_class,
             schema_link_top_k=top_names,

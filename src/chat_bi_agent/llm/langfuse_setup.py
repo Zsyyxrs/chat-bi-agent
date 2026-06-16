@@ -26,9 +26,7 @@ def get_client() -> Langfuse:
     existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
     for host_lit in ("localhost", "127.0.0.1"):
         if host_lit not in existing_no_proxy:
-            existing_no_proxy = (
-                f"{existing_no_proxy},{host_lit}" if existing_no_proxy else host_lit
-            )
+            existing_no_proxy = f"{existing_no_proxy},{host_lit}" if existing_no_proxy else host_lit
     os.environ["NO_PROXY"] = existing_no_proxy
     os.environ["no_proxy"] = existing_no_proxy
 

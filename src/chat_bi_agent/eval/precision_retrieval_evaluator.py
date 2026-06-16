@@ -164,9 +164,7 @@ class PrecisionRetrievalEvaluator:
             score.sql_syntactically_correct = True
 
         # 2. 表选择 (table_score: Jaccard 相似度)
-        expected_tables = self._extract_tables_from_expected_sql(
-            question.get("expected_sql", "")
-        )
+        expected_tables = self._extract_tables_from_expected_sql(question.get("expected_sql", ""))
         actual_tables = self._extract_tables_from_sql(generated_sql)
         score.table_score = _jaccard(expected_tables, actual_tables)
 

@@ -27,8 +27,14 @@ from chat_bi_agent.eval.precision_retrieval_evaluator import (  # noqa: E402
 )
 from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
 
-HAPPY_PATH_IDS = ["precision_q001", "precision_q002", "precision_q003",
-                  "precision_q004", "precision_q006", "precision_q007"]
+HAPPY_PATH_IDS = [
+    "precision_q001",
+    "precision_q002",
+    "precision_q003",
+    "precision_q004",
+    "precision_q006",
+    "precision_q007",
+]
 
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "precision_retrieval_evaluation.yaml"
 
@@ -82,24 +88,29 @@ def main() -> int:
         if score.combined_score >= 0.7:
             evaluation.passed_questions += 1
 
-        per_question.append({
-            "question_id": qid,
-            "rows": len(agent_result.rows) if agent_result.rows else 0,
-            "attempts": agent_result.attempts,
-            "latency_ms": agent_result.total_latency_ms,
-            "score": round(score.combined_score, 4),
-            "error_class": agent_result.error_class.value if agent_result.error_class else None,
-            "reflect_history": agent_result.reflect_history,
-            "sql": agent_result.sql,
-        })
+        per_question.append(
+            {
+                "question_id": qid,
+                "rows": len(agent_result.rows) if agent_result.rows else 0,
+                "attempts": agent_result.attempts,
+                "latency_ms": agent_result.total_latency_ms,
+                "score": round(score.combined_score, 4),
+                "error_class": agent_result.error_class.value if agent_result.error_class else None,
+                "reflect_history": agent_result.reflect_history,
+                "sql": agent_result.sql,
+            }
+        )
 
     print()
     print(evaluation.summary())
     print(f"Pass Rate: {evaluation.pass_rate:.1%}")
     print(f"Avg Score: {evaluation.avg_score:.3f}")
 
-    out_path = Path(__file__).resolve().parents[3] / "results" / \
-        "baseline_p2_validator_reflector_2026-06-03.json"
+    out_path = (
+        Path(__file__).resolve().parents[3]
+        / "results"
+        / "baseline_p2_validator_reflector_2026-06-03.json"
+    )
     payload = {
         "baseline_id": "p2_validator_reflector",
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),

@@ -73,7 +73,7 @@ def chat(
     )
     return ChatResult(
         # content=choice.message.content,
-        content=choice.message.content[0]['text'],
+        content=choice.message.content[0]["text"],
         prompt_tokens=resp.usage.input_tokens,
         completion_tokens=resp.usage.output_tokens,
     )

@@ -37,15 +37,14 @@ class ReportWriter:
         facts: list[Fact],
         insights: list[Insight],
     ) -> str:
-        plan_summary = "\n".join(
-            f"- {s.id} ({s.rationale}): {s.question}" for s in plan.steps
-        )
+        plan_summary = "\n".join(f"- {s.id} ({s.rationale}): {s.question}" for s in plan.steps)
         facts_json = json.dumps(
-            [asdict(f) for f in facts], ensure_ascii=False, indent=2, default=str,
+            [asdict(f) for f in facts],
+            ensure_ascii=False,
+            indent=2,
+            default=str,
         )
-        insights_lines = "\n".join(
-            f"- [{ins.confidence}] {ins.statement}" for ins in insights
-        )
+        insights_lines = "\n".join(f"- [{ins.confidence}] {ins.statement}" for ins in insights)
         return (
             f"用户原始问题：{question}\n\n"
             f"计划步骤（按执行顺序）：\n{plan_summary}\n\n"

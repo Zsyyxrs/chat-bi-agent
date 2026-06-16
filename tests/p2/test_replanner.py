@@ -17,6 +17,7 @@ def _mock_chat(content: str):
     class _R:
         def __init__(self, c):
             self.content = c
+
     return _R(content)
 
 
@@ -59,10 +60,22 @@ def test_replan_returns_list_of_planstep():
     replanner = _make_replanner()
     failed = _orig_plan().steps[2]
     executed = [
-        StepResult(step=_orig_plan().steps[0], sql="s1", rows=[{}],
-                   error_class=None, error_msg=None, skipped=False),
-        StepResult(step=_orig_plan().steps[1], sql="s2", rows=[{}],
-                   error_class=None, error_msg=None, skipped=False),
+        StepResult(
+            step=_orig_plan().steps[0],
+            sql="s1",
+            rows=[{}],
+            error_class=None,
+            error_msg=None,
+            skipped=False,
+        ),
+        StepResult(
+            step=_orig_plan().steps[1],
+            sql="s2",
+            rows=[{}],
+            error_class=None,
+            error_msg=None,
+            skipped=False,
+        ),
     ]
     with patch(
         "chat_bi_agent.agents.p2.planner.qwen_client.chat",
@@ -91,7 +104,8 @@ def test_replan_includes_failure_context_in_prompt():
         return _mock_chat(VALID_REPLAN)
 
     with patch(
-        "chat_bi_agent.agents.p2.planner.qwen_client.chat", side_effect=fake_chat,
+        "chat_bi_agent.agents.p2.planner.qwen_client.chat",
+        side_effect=fake_chat,
     ):
         replanner.replan(
             original_plan=_orig_plan(),
@@ -144,10 +158,22 @@ def test_replan_raises_on_total_steps_out_of_bounds():
     replanner = _make_replanner()
     failed = _orig_plan().steps[2]
     executed = [
-        StepResult(step=_orig_plan().steps[0], sql="s", rows=[],
-                   error_class=None, error_msg=None, skipped=False),
-        StepResult(step=_orig_plan().steps[1], sql="s", rows=[],
-                   error_class=None, error_msg=None, skipped=False),
+        StepResult(
+            step=_orig_plan().steps[0],
+            sql="s",
+            rows=[],
+            error_class=None,
+            error_msg=None,
+            skipped=False,
+        ),
+        StepResult(
+            step=_orig_plan().steps[1],
+            sql="s",
+            rows=[],
+            error_class=None,
+            error_msg=None,
+            skipped=False,
+        ),
     ]
     with patch(
         "chat_bi_agent.agents.p2.planner.qwen_client.chat",

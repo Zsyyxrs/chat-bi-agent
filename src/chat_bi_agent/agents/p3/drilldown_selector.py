@@ -57,9 +57,7 @@ def _fallback_requests(question: str, available_dims: list[str]) -> list[DrillRe
     ]
 
 
-def _build_user_prompt(
-    question: str, fact_anchor: FactAnchor, available_dims: list[str]
-) -> str:
+def _build_user_prompt(question: str, fact_anchor: FactAnchor, available_dims: list[str]) -> str:
     return (
         f"【用户原问题】\n{question}\n\n"
         f"【事实锚定】\n"

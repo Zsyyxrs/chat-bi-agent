@@ -98,18 +98,14 @@ class PropagationEngine:
 
         if rule.customer_tiers:
             if self.customer_index is None:
-                raise RuntimeError(
-                    "PropagationRule.customer_tiers requires Engine customer_index"
-                )
+                raise RuntimeError("PropagationRule.customer_tiers requires Engine customer_index")
             cust = self.customer_index.get(row_data.get("customer_id"))
             if not cust or cust.get("customer_tier") not in rule.customer_tiers:
                 return False
 
         if rule.branch_levels:
             if self.branch_index is None:
-                raise RuntimeError(
-                    "PropagationRule.branch_levels requires Engine branch_index"
-                )
+                raise RuntimeError("PropagationRule.branch_levels requires Engine branch_index")
             branch = self.branch_index.get(row_data.get("branch_id"))
             if not branch or branch.get("branch_level") not in rule.branch_levels:
                 return False
@@ -150,7 +146,7 @@ class PropagationEngine:
         elif rule.ramp_type == "exponential":
             # 指数缓入缓出
             progress = days_since_start / rule.ramp_days if rule.ramp_days > 0 else 1.0
-            return progress ** 2
+            return progress**2
         else:
             return 1.0
 

@@ -22,20 +22,16 @@ def pick_product_by_subcategory(
     product_index: dict[str, dict], subcategory: str, hash_key: str
 ) -> str:
     candidates = [
-        pid for pid, meta in product_index.items()
-        if meta.get("product_subcategory") == subcategory
+        pid for pid, meta in product_index.items() if meta.get("product_subcategory") == subcategory
     ]
     if not candidates:
         raise LookupError(f"no product with subcategory={subcategory!r}")
     return _det_choice(candidates, hash_key)
 
 
-def pick_product_by_category(
-    product_index: dict[str, dict], category: str, hash_key: str
-) -> str:
+def pick_product_by_category(product_index: dict[str, dict], category: str, hash_key: str) -> str:
     candidates = [
-        pid for pid, meta in product_index.items()
-        if meta.get("product_category") == category
+        pid for pid, meta in product_index.items() if meta.get("product_category") == category
     ]
     if not candidates:
         raise LookupError(f"no product with category={category!r}")
@@ -67,9 +63,7 @@ class AnchorReport:
     forced_specs: list[ForcedTxnSpec] = field(default_factory=list)
 
 
-def _build_anchor_customer(
-    n_idx: int, event_id: str, branch_id: str, tier: str
-) -> dict:
+def _build_anchor_customer(n_idx: int, event_id: str, branch_id: str, tier: str) -> dict:
     # dim_customer.customer_id is VARCHAR(16); use SHA1 prefix of event_id to fit.
     short_evt = hashlib.sha1(event_id.encode("utf-8")).hexdigest()[:4]
     cid = f"CA_{short_evt}_{n_idx:03d}"  # 11 chars, fits VARCHAR(16)
@@ -91,9 +85,7 @@ def _build_anchor_customer(
     }
 
 
-def _build_anchor_account(
-    customer: dict, product_id: str, account_idx: int
-) -> dict:
+def _build_anchor_account(customer: dict, product_id: str, account_idx: int) -> dict:
     # account_id must fit VARCHAR(32). customer_id is already short (CA_XXXX_NNN).
     cid_short = customer["customer_id"]
     return {
@@ -111,9 +103,7 @@ def _build_anchor_account(
     }
 
 
-def _build_anchor_holding(
-    customer: dict, product_id: str, account_id: str
-) -> dict:
+def _build_anchor_holding(customer: dict, product_id: str, account_id: str) -> dict:
     return {
         "snapshot_dt": date(2026, 1, 1),
         "account_id": account_id,
@@ -189,7 +179,8 @@ def anchor_event_populations(
             branch_pool = rp.branches
         elif rp.branch_levels:
             branch_pool = [
-                bid for bid in branch_ids
+                bid
+                for bid in branch_ids
                 if branch_index.get(bid, {}).get("branch_level") in rp.branch_levels
             ]
             if not branch_pool:

@@ -25,7 +25,12 @@ MAX_STEPS = 8
 JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 REQUIRED_STEP_FIELDS = (
-    "id", "question", "rationale", "depends_on", "context_keys", "expected_metrics",
+    "id",
+    "question",
+    "rationale",
+    "depends_on",
+    "context_keys",
+    "expected_metrics",
 )
 
 
@@ -43,31 +48,23 @@ def _parse_plan_json(raw: str) -> dict:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError as e:
-        raise PlanParseError(
-            f"无法解析为 JSON: {e}; raw 前 200 字符: {raw[:200]}"
-        ) from e
+        raise PlanParseError(f"无法解析为 JSON: {e}; raw 前 200 字符: {raw[:200]}") from e
 
 
 def _validate_plan_dict(parsed: dict) -> None:
     if "plan_type" not in parsed or "steps" not in parsed:
-        raise PlanValidationError(
-            f"缺少顶层字段; 实际: {list(parsed.keys())}"
-        )
+        raise PlanValidationError(f"缺少顶层字段; 实际: {list(parsed.keys())}")
     steps = parsed["steps"]
     if not isinstance(steps, list):
         raise PlanValidationError("steps 必须是 list")
     if len(steps) < MIN_STEPS or len(steps) > MAX_STEPS:
-        raise PlanValidationError(
-            f"steps 数 {len(steps)} 越界 [{MIN_STEPS}, {MAX_STEPS}]"
-        )
+        raise PlanValidationError(f"steps 数 {len(steps)} 越界 [{MIN_STEPS}, {MAX_STEPS}]")
     for i, s in enumerate(steps):
         if not isinstance(s, dict):
             raise PlanValidationError(f"step[{i}] 不是 dict")
         for f in REQUIRED_STEP_FIELDS:
             if f not in s:
-                raise PlanValidationError(
-                    f"step[{i}] 缺少字段 {f!r}; 实际: {list(s.keys())}"
-                )
+                raise PlanValidationError(f"step[{i}] 缺少字段 {f!r}; 实际: {list(s.keys())}")
 
 
 def _validate_plan_structure(parsed: dict) -> None:
@@ -77,9 +74,7 @@ def _validate_plan_structure(parsed: dict) -> None:
     (executed + new), not to the new steps alone.
     """
     if "plan_type" not in parsed or "steps" not in parsed:
-        raise PlanValidationError(
-            f"缺少顶层字段; 实际: {list(parsed.keys())}"
-        )
+        raise PlanValidationError(f"缺少顶层字段; 实际: {list(parsed.keys())}")
     steps = parsed["steps"]
     if not isinstance(steps, list):
         raise PlanValidationError("steps 必须是 list")
@@ -88,18 +83,14 @@ def _validate_plan_structure(parsed: dict) -> None:
             raise PlanValidationError(f"step[{i}] 不是 dict")
         for f in REQUIRED_STEP_FIELDS:
             if f not in s:
-                raise PlanValidationError(
-                    f"step[{i}] 缺少字段 {f!r}; 实际: {list(s.keys())}"
-                )
+                raise PlanValidationError(f"step[{i}] 缺少字段 {f!r}; 实际: {list(s.keys())}")
 
 
 def _format_few_shots() -> str:
     parts = []
     for i, ex in enumerate(FEW_SHOTS, start=1):
         plan_json = json.dumps(ex["plan_json"], ensure_ascii=False, indent=2)
-        parts.append(
-            f"示例 {i}：\n问题：{ex['question']}\n输出：\n```json\n{plan_json}\n```"
-        )
+        parts.append(f"示例 {i}：\n问题：{ex['question']}\n输出：\n```json\n{plan_json}\n```")
     return "\n\n".join(parts)
 
 
@@ -232,11 +223,14 @@ class Replanner:
         executed_steps: list[StepResult],
         schema_ddl: str,
     ) -> str:
-        executed_summary = "\n".join(
-            f"- {s.step.id} ({s.step.rationale}): "
-            f"{'OK, ' + str(len(s.rows or [])) + ' rows' if not s.skipped else 'SKIPPED'}"
-            for s in executed_steps
-        ) or "（无已成功步骤）"
+        executed_summary = (
+            "\n".join(
+                f"- {s.step.id} ({s.step.rationale}): "
+                f"{'OK, ' + str(len(s.rows or [])) + ' rows' if not s.skipped else 'SKIPPED'}"
+                for s in executed_steps
+            )
+            or "（无已成功步骤）"
+        )
         return (
             f"原始用户问题：{original_plan.question}\n\n"
             f"原始 plan_type：{original_plan.plan_type}\n\n"

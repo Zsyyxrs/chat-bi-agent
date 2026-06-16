@@ -15,6 +15,7 @@ def _mock_chat(content: str):
     class _R:
         def __init__(self, c):
             self.content = c
+
     return _R(content)
 
 
@@ -38,9 +39,14 @@ SAMPLE_RESPONSE = """```json
 
 def test_extract_returns_facts():
     extractor = FactExtractor()
-    sr1 = StepResult(step=_mk_step("step1"), sql="SELECT 1",
-                     rows=[{"amount": 1000, "channel": "ATM"}],
-                     error_class=None, error_msg=None, skipped=False)
+    sr1 = StepResult(
+        step=_mk_step("step1"),
+        sql="SELECT 1",
+        rows=[{"amount": 1000, "channel": "ATM"}],
+        error_class=None,
+        error_msg=None,
+        skipped=False,
+    )
     with patch(
         "chat_bi_agent.agents.p2.fact_extractor.qwen_client.chat",
         return_value=_mock_chat(SAMPLE_RESPONSE),
@@ -54,10 +60,22 @@ def test_extract_returns_facts():
 
 def test_extract_skips_skipped_steps_in_prompt():
     extractor = FactExtractor()
-    sr1 = StepResult(step=_mk_step("step1"), sql="SELECT 1",
-                     rows=[{"x": 1}], error_class=None, error_msg=None, skipped=False)
-    sr2 = StepResult(step=_mk_step("step2"), sql=None, rows=None,
-                     error_class=None, error_msg="failed", skipped=True)
+    sr1 = StepResult(
+        step=_mk_step("step1"),
+        sql="SELECT 1",
+        rows=[{"x": 1}],
+        error_class=None,
+        error_msg=None,
+        skipped=False,
+    )
+    sr2 = StepResult(
+        step=_mk_step("step2"),
+        sql=None,
+        rows=None,
+        error_class=None,
+        error_msg="failed",
+        skipped=True,
+    )
     captured = {}
 
     def fake_chat(system_prompt, user_prompt):
@@ -75,8 +93,9 @@ def test_extract_skips_skipped_steps_in_prompt():
 
 def test_extract_empty_when_all_skipped():
     extractor = FactExtractor()
-    sr = StepResult(step=_mk_step("step1"), sql=None, rows=None,
-                    error_class=None, error_msg="x", skipped=True)
+    sr = StepResult(
+        step=_mk_step("step1"), sql=None, rows=None, error_class=None, error_msg="x", skipped=True
+    )
     with patch(
         "chat_bi_agent.agents.p2.fact_extractor.qwen_client.chat",
     ) as mock_chat:
@@ -87,8 +106,14 @@ def test_extract_empty_when_all_skipped():
 
 def test_extract_raises_on_invalid_json():
     extractor = FactExtractor()
-    sr = StepResult(step=_mk_step("step1"), sql="SELECT 1", rows=[{"x": 1}],
-                    error_class=None, error_msg=None, skipped=False)
+    sr = StepResult(
+        step=_mk_step("step1"),
+        sql="SELECT 1",
+        rows=[{"x": 1}],
+        error_class=None,
+        error_msg=None,
+        skipped=False,
+    )
     with patch(
         "chat_bi_agent.agents.p2.fact_extractor.qwen_client.chat",
         return_value=_mock_chat("garbage"),
@@ -99,8 +124,14 @@ def test_extract_raises_on_invalid_json():
 
 def test_extract_raises_on_missing_facts_key():
     extractor = FactExtractor()
-    sr = StepResult(step=_mk_step("step1"), sql="SELECT 1", rows=[{"x": 1}],
-                    error_class=None, error_msg=None, skipped=False)
+    sr = StepResult(
+        step=_mk_step("step1"),
+        sql="SELECT 1",
+        rows=[{"x": 1}],
+        error_class=None,
+        error_msg=None,
+        skipped=False,
+    )
     with patch(
         "chat_bi_agent.agents.p2.fact_extractor.qwen_client.chat",
         return_value=_mock_chat('```json\n{"wrong_key": []}\n```'),

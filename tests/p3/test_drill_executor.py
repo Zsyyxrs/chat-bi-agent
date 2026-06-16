@@ -1,4 +1,5 @@
 """Tests for run_drill_down (wraps P1NL2SQLAgent + Pareto)."""
+
 from chat_bi_agent.agents.p3.drill_executor import run_drill_down
 from chat_bi_agent.agents.p3.types import DrillRequest
 from tests.p3.conftest import FakeP1Agent, FakeP1Result

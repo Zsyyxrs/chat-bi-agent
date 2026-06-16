@@ -42,20 +42,12 @@ def inject_context(
         total = len(prior.rows)
         preview = prior.rows[:MAX_ROWS_INLINED]
         preview_json = json.dumps(preview, ensure_ascii=False, default=str)
-        suffix = (
-            f"（共 {total} 行，仅展示前 {len(preview)} 行）"
-            if total > len(preview)
-            else ""
-        )
-        context_parts.append(
-            f"- 来自 {sid} 的 rows{suffix}: {preview_json}"
-        )
+        suffix = f"（共 {total} 行，仅展示前 {len(preview)} 行）" if total > len(preview) else ""
+        context_parts.append(f"- 来自 {sid} 的 rows{suffix}: {preview_json}")
 
     if not context_parts:
         return step.question
 
-    return (
-        f"{step.question}\n\n"
-        f"背景信息（来自前置步骤的结果，用于本步参考）：\n"
-        + "\n".join(context_parts)
+    return f"{step.question}\n\n背景信息（来自前置步骤的结果，用于本步参考）：\n" + "\n".join(
+        context_parts
     )

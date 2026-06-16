@@ -19,6 +19,7 @@ def _mock_chat(content: str):
     class _R:
         def __init__(self, c):
             self.content = c
+
     return _R(content)
 
 
@@ -84,7 +85,8 @@ def test_plan_injects_schema_into_user_prompt():
         return _mock_chat(VALID_PLAN_JSON)
 
     with patch(
-        "chat_bi_agent.agents.p2.planner.qwen_client.chat", side_effect=fake_chat,
+        "chat_bi_agent.agents.p2.planner.qwen_client.chat",
+        side_effect=fake_chat,
     ):
         planner.plan(question="春节对比")
     assert "CREATE TABLE x" in captured["user_prompt"]
@@ -100,7 +102,8 @@ def test_plan_includes_few_shot_examples_in_prompt():
         return _mock_chat(VALID_PLAN_JSON)
 
     with patch(
-        "chat_bi_agent.agents.p2.planner.qwen_client.chat", side_effect=fake_chat,
+        "chat_bi_agent.agents.p2.planner.qwen_client.chat",
+        side_effect=fake_chat,
     ):
         planner.plan(question="春节对比")
     assert "春节前" in captured["user_prompt"]
@@ -135,15 +138,27 @@ def test_plan_raises_validation_error_on_too_few_steps():
 def test_plan_raises_validation_error_on_too_many_steps():
     steps = [
         {
-            "id": f"step{i}", "question": "q", "rationale": "r",
-            "depends_on": [], "context_keys": [], "expected_metrics": [],
+            "id": f"step{i}",
+            "question": "q",
+            "rationale": "r",
+            "depends_on": [],
+            "context_keys": [],
+            "expected_metrics": [],
         }
         for i in range(1, 10)
     ]
     import json as _json
-    bad = "```json\n" + _json.dumps({
-        "plan_type": "temporal_comparison", "steps": steps,
-    }) + "\n```"
+
+    bad = (
+        "```json\n"
+        + _json.dumps(
+            {
+                "plan_type": "temporal_comparison",
+                "steps": steps,
+            }
+        )
+        + "\n```"
+    )
     planner = _make_planner_with_mock_linker()
     with patch(
         "chat_bi_agent.agents.p2.planner.qwen_client.chat",

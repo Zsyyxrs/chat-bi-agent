@@ -29,7 +29,9 @@ def test_transient_skips_after_ramp_end():
     rule = _rule(effect_type="transient", delay_days=1, ramp_days=3)
     event_date = date(2026, 5, 14)
     # delay 1 + ramp 3 → ramp ends day +4 (5/18). Day +5 (5/19) → skip.
-    assert engine.should_apply_rule(rule, _row(), event_date, event_date + timedelta(days=5)) is False
+    assert (
+        engine.should_apply_rule(rule, _row(), event_date, event_date + timedelta(days=5)) is False
+    )
 
 
 def test_sustained_applies_after_ramp_end():
@@ -37,7 +39,9 @@ def test_sustained_applies_after_ramp_end():
     rule = _rule(effect_type="sustained", delay_days=1, ramp_days=3)
     event_date = date(2026, 5, 14)
     # Day +10 → still apply with multiplier 1.0
-    assert engine.should_apply_rule(rule, _row(), event_date, event_date + timedelta(days=10)) is True
+    assert (
+        engine.should_apply_rule(rule, _row(), event_date, event_date + timedelta(days=10)) is True
+    )
 
 
 def test_sustained_multiplier_is_1_after_ramp():

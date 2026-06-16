@@ -179,9 +179,7 @@ class MultiStepAnalysisEvaluator:
             mentioned_key_metrics = sum(
                 1 for metric in key_metrics if any(m in agent_response for m in metric)
             )
-            score.multi_metric_coverage = min(
-                1.0, mentioned_key_metrics / max(1, len(key_metrics))
-            )
+            score.multi_metric_coverage = min(1.0, mentioned_key_metrics / max(1, len(key_metrics)))
 
         # 3. 洞察准确度 (insight_accuracy)
         expected_insights = _yaml_listdict_to_dict(question.get("expected_insights"))
@@ -197,9 +195,7 @@ class MultiStepAnalysisEvaluator:
                     if any(item in agent_response for item in exp_insight_val):
                         matched_insights += 1
 
-            score.insight_accuracy = min(
-                1.0, matched_insights / max(1, len(expected_insights))
-            )
+            score.insight_accuracy = min(1.0, matched_insights / max(1, len(expected_insights)))
 
         # 4. 推理质量 (reasoning_quality)
         # 评估是否包含因果关系、对比、条件推理等

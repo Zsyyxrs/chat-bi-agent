@@ -51,12 +51,14 @@ class TransactionGenerator:
                     for k in range(spec.min_txn_per_customer):
                         offset = (k * 7) % window_days
                         d = window_start + timedelta(days=offset)
-                        forced_inserts.setdefault(d, []).append({
-                            "_event_id": spec.event_id,
-                            "account_id": acct_id,
-                            "transaction_type": spec.txn_type,
-                            "transaction_channel": (spec.channels or ["MOBILE"])[0],
-                        })
+                        forced_inserts.setdefault(d, []).append(
+                            {
+                                "_event_id": spec.event_id,
+                                "account_id": acct_id,
+                                "transaction_type": spec.txn_type,
+                                "transaction_channel": (spec.channels or ["MOBILE"])[0],
+                            }
+                        )
 
         while current <= end_date:
             # Month-end multiplier (5x volume on last 3 days of month)
@@ -79,14 +81,10 @@ class TransactionGenerator:
             for _ in range(max(1, daily_transaction_count)):
                 account_id = random.choice(account_ids)
                 customer_id = random.choice(customer_ids)
-                counter_account_id = (
-                    random.choice(account_ids) if random.random() > 0.2 else None
-                )
+                counter_account_id = random.choice(account_ids) if random.random() > 0.2 else None
 
                 txn_types = ["DEPOSIT", "WITHDRAW", "TRANSFER", "PAYMENT", "INTEREST", "FEE"]
-                txn_type_dist = random.choices(
-                    txn_types, weights=[15, 20, 30, 25, 5, 5]
-                )[0]
+                txn_type_dist = random.choices(txn_types, weights=[15, 20, 30, 25, 5, 5])[0]
 
                 channels = ["MOBILE", "INTERNET", "COUNTER", "ATM", "AGENT", "API"]
                 channel_dist = random.choices(channels, weights=[40, 30, 10, 10, 5, 5])[0]
@@ -108,9 +106,7 @@ class TransactionGenerator:
 
                 balance_after = round(random.uniform(0, 10000000), 2)
 
-                transaction_time = datetime.combine(
-                    current, fake.time_object()
-                )
+                transaction_time = datetime.combine(current, fake.time_object())
 
                 yield {
                     "transaction_id": transaction_id,
@@ -272,9 +268,7 @@ class TransactionGenerator:
                     "event_type": random.choice(event_types),
                     "severity": random.choice(severities),
                     "amount": (
-                        round(random.uniform(1000, 100000), 2)
-                        if random.random() > 0.3
-                        else None
+                        round(random.uniform(1000, 100000), 2) if random.random() > 0.3 else None
                     ),
                     "status": random.choice(["OPEN", "INVESTIGATING", "CLOSED", "CONFIRMED"]),
                     "branch_id": random.choice(branch_ids),
@@ -297,9 +291,7 @@ class TransactionGenerator:
         """Generate marketing campaign responses."""
 
         response_id = 1
-        campaigns = [
-            f"CAMP_{i:04d}" for i in range(50)
-        ]
+        campaigns = [f"CAMP_{i:04d}" for i in range(50)]
         campaign_names = [
             "春节储蓄活动",
             "理财产品推荐",
@@ -316,9 +308,7 @@ class TransactionGenerator:
                 campaign_id = random.choice(campaigns)
                 response_types = ["NO_RESPONSE", "CLICKED", "INTERESTED", "CONVERTED", "REJECTED"]
 
-                response_type = random.choices(
-                    response_types, weights=[50, 20, 15, 10, 5]
-                )[0]
+                response_type = random.choices(response_types, weights=[50, 20, 15, 10, 5])[0]
 
                 conversion_time = None
                 conversion_amount = None

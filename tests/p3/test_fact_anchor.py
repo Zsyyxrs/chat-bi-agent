@@ -1,4 +1,5 @@
 """Tests for fact_anchor module: _compute_change pure logic."""
+
 import pytest
 
 from chat_bi_agent.agents.p3.fact_anchor import _compute_change, run_fact_anchor

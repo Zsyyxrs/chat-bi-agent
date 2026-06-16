@@ -1,4 +1,5 @@
 """Tests for _compute_pareto (pure pandas algorithm, no LLM)."""
+
 import pytest
 
 from chat_bi_agent.agents.p3.drill_executor import _compute_pareto, _infer_value_col

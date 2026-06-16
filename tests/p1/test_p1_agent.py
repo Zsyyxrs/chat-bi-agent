@@ -21,12 +21,14 @@ class _StubMatch:
 
 def _make_agent_with_mocks():
     """构造 agent 并把所有依赖换成 mock；schema_ddl 用 stub。"""
-    with patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLoader") as ml, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLinker") as msl, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLGenerator") as msg, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLValidator") as msv, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLExecutor") as mse, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.Reflector") as mr:
+    with (
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLoader") as ml,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLinker") as msl,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLGenerator") as msg,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLValidator") as msv,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLExecutor") as mse,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.Reflector") as mr,
+    ):
         loader_instance = ml.return_value
         loader_instance.load.return_value = None
         loader_instance.build_index.return_value = None
@@ -40,7 +42,8 @@ def _make_agent_with_mocks():
         agent.reflector = mr.return_value
 
         agent.schema_linker.link.return_value = [
-            _StubMatch("dim_branch"), _StubMatch("dim_customer"),
+            _StubMatch("dim_branch"),
+            _StubMatch("dim_customer"),
         ]
         return agent
 
@@ -48,7 +51,10 @@ def _make_agent_with_mocks():
 def test_happy_path_single_attempt():
     agent = _make_agent_with_mocks()
     agent.sql_generator.generate.return_value = SQLGenResult(
-        sql="SELECT 1", thought="t", tables_used=["dim_branch"], raw_response="raw",
+        sql="SELECT 1",
+        thought="t",
+        tables_used=["dim_branch"],
+        raw_response="raw",
     )
     agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
     agent.sql_executor.execute.return_value = ([{"a": 1}], None)
@@ -70,7 +76,12 @@ def test_unknown_table_then_success_two_attempts():
     agent = _make_agent_with_mocks()
     agent.sql_generator.generate.side_effect = [
         SQLGenResult(sql="SELECT * FROM foo", thought="t", tables_used=["foo"], raw_response="r1"),
-        SQLGenResult(sql="SELECT * FROM dim_branch", thought="t", tables_used=["dim_branch"], raw_response="r2"),  # noqa: E501
+        SQLGenResult(
+            sql="SELECT * FROM dim_branch",
+            thought="t",
+            tables_used=["dim_branch"],
+            raw_response="r2",
+        ),  # noqa: E501
     ]
     agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
     agent.sql_executor.execute.side_effect = [
@@ -79,7 +90,8 @@ def test_unknown_table_then_success_two_attempts():
     ]
     agent.sql_executor.classify_error.return_value = SQLErrorClass.UNKNOWN_TABLE
     agent.reflector.reflect.return_value = ReflectDecision(
-        action=ReflectAction.RETRY, repair_hint="只能用 dim_branch",
+        action=ReflectAction.RETRY,
+        repair_hint="只能用 dim_branch",
     )
 
     r = agent.run(question_id="q1", question="x")
@@ -96,15 +108,20 @@ def test_unknown_table_then_success_two_attempts():
 def test_timeout_gives_up_immediately():
     agent = _make_agent_with_mocks()
     agent.sql_generator.generate.return_value = SQLGenResult(
-        sql="SELECT pg_sleep(99)", thought="t", tables_used=["dim_branch"], raw_response="r",
+        sql="SELECT pg_sleep(99)",
+        thought="t",
+        tables_used=["dim_branch"],
+        raw_response="r",
     )
     agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
     agent.sql_executor.execute.return_value = (
-        None, "canceling statement due to statement timeout",
+        None,
+        "canceling statement due to statement timeout",
     )
     agent.sql_executor.classify_error.return_value = SQLErrorClass.TIMEOUT
     agent.reflector.reflect.return_value = ReflectDecision(
-        action=ReflectAction.GIVE_UP, repair_hint=None,
+        action=ReflectAction.GIVE_UP,
+        repair_hint=None,
     )
 
     r = agent.run(question_id="q1", question="x")
@@ -128,7 +145,8 @@ def test_validator_fail_then_success():
     ]
     agent.sql_executor.execute.return_value = ([{"a": 1}], None)
     agent.reflector.reflect.return_value = ReflectDecision(
-        action=ReflectAction.RETRY, repair_hint="禁 DML/DDL",
+        action=ReflectAction.RETRY,
+        repair_hint="禁 DML/DDL",
     )
 
     r = agent.run(question_id="q1", question="x")
@@ -148,7 +166,8 @@ def test_invalid_json_then_success():
     agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
     agent.sql_executor.execute.return_value = ([{"a": 1}], None)
     agent.reflector.reflect.return_value = ReflectDecision(
-        action=ReflectAction.RETRY, repair_hint="请用 ```json``` 包裹",
+        action=ReflectAction.RETRY,
+        repair_hint="请用 ```json``` 包裹",
     )
 
     r = agent.run(question_id="q1", question="x")
@@ -160,7 +179,10 @@ def test_invalid_json_then_success():
 def test_three_attempts_all_fail():
     agent = _make_agent_with_mocks()
     agent.sql_generator.generate.return_value = SQLGenResult(
-        sql="SELECT * FROM foo", thought="t", tables_used=["foo"], raw_response="r",
+        sql="SELECT * FROM foo",
+        thought="t",
+        tables_used=["foo"],
+        raw_response="r",
     )
     agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
     agent.sql_executor.execute.return_value = (None, 'relation "foo" does not exist')

@@ -67,9 +67,7 @@ class AnalysisReport:
         return {
             "question_id": self.question_id,
             "agent_response": self.final_answer,
-            "mentioned_steps": [
-                s.step.rationale for s in self.step_results if not s.skipped
-            ],
+            "mentioned_steps": [s.step.rationale for s in self.step_results if not s.skipped],
             "mentioned_metrics": sorted({f.metric for f in self.facts}),
             "extracted_insights": [i.statement for i in self.insights],
         }

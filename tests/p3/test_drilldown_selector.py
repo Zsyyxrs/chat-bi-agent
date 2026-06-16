@@ -1,4 +1,5 @@
 """Tests for drilldown_selector (LLM JSON + fallback)."""
+
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -57,7 +58,7 @@ def test_select_drilldown_dims_happy():
         '{"sub_questions": ['
         '{"dimension": "branch_id", "nl_question": "按 branch_id 拆解原问题"},'
         '{"dimension": "customer_tier", "nl_question": "按 customer_tier 拆解"}'
-        ']}'
+        "]}"
     )
     out = select_drilldown_dims(
         question="why?",
@@ -88,7 +89,7 @@ def test_select_drilldown_dims_unknown_dim_filtered():
         '{"sub_questions": ['
         '{"dimension": "branch_id", "nl_question": "按 branch_id 拆解"},'
         '{"dimension": "made_up_dim", "nl_question": "按 made_up_dim 拆解"}'
-        ']}'
+        "]}"
     )
     out = select_drilldown_dims(
         question="why?",

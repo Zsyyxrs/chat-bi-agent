@@ -7,7 +7,9 @@ import pytest
 from chat_bi_agent.data.propagation_engine import PropagationEngine, PropagationRule
 
 
-def _balance_row(account_id="A0", customer_id="C0", branch_id="BR_CITY_0006", product_id="P0", balance=100.0):
+def _balance_row(
+    account_id="A0", customer_id="C0", branch_id="BR_CITY_0006", product_id="P0", balance=100.0
+):
     return {
         "account_id": account_id,
         "customer_id": customer_id,
@@ -71,11 +73,24 @@ def test_branch_filter_skips():
 
 
 def test_customer_tier_filter_requires_index():
-    customer_index = {"C_HNW": {"customer_tier": "HIGH_NET_WORTH"}, "C_MASS": {"customer_tier": "MASS"}}
+    customer_index = {
+        "C_HNW": {"customer_tier": "HIGH_NET_WORTH"},
+        "C_MASS": {"customer_tier": "MASS"},
+    }
     engine = PropagationEngine(seed=42, customer_index=customer_index)
     rule = _base_rule(customer_tiers=["HIGH_NET_WORTH"])
-    assert engine.should_apply_rule(rule, _balance_row(customer_id="C_HNW"), date(2026, 5, 14), date(2026, 5, 20)) is True
-    assert engine.should_apply_rule(rule, _balance_row(customer_id="C_MASS"), date(2026, 5, 14), date(2026, 5, 20)) is False
+    assert (
+        engine.should_apply_rule(
+            rule, _balance_row(customer_id="C_HNW"), date(2026, 5, 14), date(2026, 5, 20)
+        )
+        is True
+    )
+    assert (
+        engine.should_apply_rule(
+            rule, _balance_row(customer_id="C_MASS"), date(2026, 5, 14), date(2026, 5, 20)
+        )
+        is False
+    )
 
 
 def test_customer_tier_filter_without_index_raises():
@@ -86,26 +101,62 @@ def test_customer_tier_filter_without_index_raises():
 
 
 def test_branch_level_filter_via_index():
-    branch_index = {"BR_CITY_0006": {"branch_level": "CITY"}, "BR_SUB_X": {"branch_level": "SUBBRANCH"}}
+    branch_index = {
+        "BR_CITY_0006": {"branch_level": "CITY"},
+        "BR_SUB_X": {"branch_level": "SUBBRANCH"},
+    }
     engine = PropagationEngine(seed=42, branch_index=branch_index)
     rule = _base_rule(branch_levels=["SUBBRANCH"])
-    assert engine.should_apply_rule(rule, _balance_row(branch_id="BR_SUB_X"), date(2026, 5, 14), date(2026, 5, 20)) is True
-    assert engine.should_apply_rule(rule, _balance_row(branch_id="BR_CITY_0006"), date(2026, 5, 14), date(2026, 5, 20)) is False
+    assert (
+        engine.should_apply_rule(
+            rule, _balance_row(branch_id="BR_SUB_X"), date(2026, 5, 14), date(2026, 5, 20)
+        )
+        is True
+    )
+    assert (
+        engine.should_apply_rule(
+            rule, _balance_row(branch_id="BR_CITY_0006"), date(2026, 5, 14), date(2026, 5, 20)
+        )
+        is False
+    )
 
 
 def test_product_id_filter():
     engine = PropagationEngine(seed=42)
     rule = _base_rule(product_ids=["P_TARGET"])
-    assert engine.should_apply_rule(rule, _balance_row(product_id="P_TARGET"), date(2026, 5, 14), date(2026, 5, 20)) is True
-    assert engine.should_apply_rule(rule, _balance_row(product_id="P_OTHER"), date(2026, 5, 14), date(2026, 5, 20)) is False
+    assert (
+        engine.should_apply_rule(
+            rule, _balance_row(product_id="P_TARGET"), date(2026, 5, 14), date(2026, 5, 20)
+        )
+        is True
+    )
+    assert (
+        engine.should_apply_rule(
+            rule, _balance_row(product_id="P_OTHER"), date(2026, 5, 14), date(2026, 5, 20)
+        )
+        is False
+    )
 
 
 def test_product_subcategory_filter_via_index():
-    product_index = {"P_DEMAND": {"product_subcategory": "活期存款"}, "P_TIME": {"product_subcategory": "定期存款"}}
+    product_index = {
+        "P_DEMAND": {"product_subcategory": "活期存款"},
+        "P_TIME": {"product_subcategory": "定期存款"},
+    }
     engine = PropagationEngine(seed=42, product_index=product_index)
     rule = _base_rule(product_subcategories=["活期存款"])
-    assert engine.should_apply_rule(rule, _balance_row(product_id="P_DEMAND"), date(2026, 5, 14), date(2026, 5, 20)) is True
-    assert engine.should_apply_rule(rule, _balance_row(product_id="P_TIME"), date(2026, 5, 14), date(2026, 5, 20)) is False
+    assert (
+        engine.should_apply_rule(
+            rule, _balance_row(product_id="P_DEMAND"), date(2026, 5, 14), date(2026, 5, 20)
+        )
+        is True
+    )
+    assert (
+        engine.should_apply_rule(
+            rule, _balance_row(product_id="P_TIME"), date(2026, 5, 14), date(2026, 5, 20)
+        )
+        is False
+    )
 
 
 def test_combined_filters_AND():
@@ -117,9 +168,15 @@ def test_combined_filters_AND():
         customer_tiers=["HIGH_NET_WORTH"],
         product_subcategories=["活期存款"],
     )
-    matching_row = _balance_row(branch_id="BR_CITY_0006", customer_id="C_HNW_001", product_id="P_DEMAND")
-    assert engine.should_apply_rule(rule, matching_row, date(2026, 5, 14), date(2026, 5, 20)) is True
+    matching_row = _balance_row(
+        branch_id="BR_CITY_0006", customer_id="C_HNW_001", product_id="P_DEMAND"
+    )
+    assert (
+        engine.should_apply_rule(rule, matching_row, date(2026, 5, 14), date(2026, 5, 20)) is True
+    )
 
     # Same row but wrong branch → should skip
     wrong_branch = {**matching_row, "branch_id": "BR_CITY_0001"}
-    assert engine.should_apply_rule(rule, wrong_branch, date(2026, 5, 14), date(2026, 5, 20)) is False
+    assert (
+        engine.should_apply_rule(rule, wrong_branch, date(2026, 5, 14), date(2026, 5, 20)) is False
+    )

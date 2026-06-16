@@ -13,9 +13,11 @@ from chat_bi_agent.agents.p1.sql_generator import (
 
 def _mock_chat(content: str):
     """构造一个返回固定 content 的 ChatResult 替身。"""
+
     class _R:
         def __init__(self, c):
             self.content = c
+
     return _R(content)
 
 
@@ -57,7 +59,8 @@ def test_generate_passes_repair_hint_into_user_prompt():
         return _mock_chat(SAMPLE_OK_RESPONSE)
 
     with patch(
-        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat,
+        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat",
+        side_effect=fake_chat,
     ):
         gen.generate(
             question="所有分行有哪些？",
@@ -77,7 +80,8 @@ def test_generate_without_hint_omits_repair_section():
         return _mock_chat(SAMPLE_OK_RESPONSE)
 
     with patch(
-        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat,
+        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat",
+        side_effect=fake_chat,
     ):
         gen.generate(
             question="所有分行有哪些？",

@@ -26,10 +26,10 @@ tables:
     # 手工注入 embedding，让 cosine 排序结果可预测：
     # query embedding 与 ta 完全同向 = 1.0；tb 0.9 ；tc 0.5 ；td -0.1 ；te 0.0
     loader.docs[0].embedding = [1.0, 0.0]
-    loader.docs[1].embedding = [0.9, 0.436]   # cos with [1,0] ≈ 0.9
-    loader.docs[2].embedding = [0.5, 0.866]   # cos ≈ 0.5
+    loader.docs[1].embedding = [0.9, 0.436]  # cos with [1,0] ≈ 0.9
+    loader.docs[2].embedding = [0.5, 0.866]  # cos ≈ 0.5
     loader.docs[3].embedding = [-0.1, 0.995]  # cos ≈ -0.1
-    loader.docs[4].embedding = [0.0, 1.0]     # cos = 0.0
+    loader.docs[4].embedding = [0.0, 1.0]  # cos = 0.0
     return loader
 
 

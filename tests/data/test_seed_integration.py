@@ -24,30 +24,51 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 def test_reseed_and_verify_anxin():
     # Reset schema
-    _run([
-        "docker", "exec", "-i", "chatbi-pg",
-        "psql", "-U", "chatbi", "-d", "chatbi",
-        "-c", "DROP SCHEMA public CASCADE; CREATE SCHEMA public;",
-    ])
+    _run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            "chatbi-pg",
+            "psql",
+            "-U",
+            "chatbi",
+            "-d",
+            "chatbi",
+            "-c",
+            "DROP SCHEMA public CASCADE; CREATE SCHEMA public;",
+        ]
+    )
     for sql_file in ["01_schema.sql", "02_indexes.sql"]:
         with open(REPO_ROOT / "docker" / "postgres" / "init" / sql_file) as f:
             subprocess.run(
                 ["docker", "exec", "-i", "chatbi-pg", "psql", "-U", "chatbi", "-d", "chatbi"],
-                stdin=f, check=True, capture_output=True,
+                stdin=f,
+                check=True,
+                capture_output=True,
             )
 
     # Reseed with events
-    _run([
-        "python", "-m", "chat_bi_agent.data.seed",
-        "--port", "5433",
-        "--rows", "20000",
-        "--with-events", "--truncate",
-    ])
+    _run(
+        [
+            "python",
+            "-m",
+            "chat_bi_agent.data.seed",
+            "--port",
+            "5433",
+            "--rows",
+            "20000",
+            "--with-events",
+            "--truncate",
+        ]
+    )
 
     # Verify anxin
     result = subprocess.run(
         ["python", "scripts/verify_events.py", "--event-id", "anxin_90_expire"],
-        cwd=REPO_ROOT, capture_output=True, text=True,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
     )
     print(result.stdout)
     print(result.stderr)
@@ -57,7 +78,16 @@ def test_reseed_and_verify_anxin():
 def test_anchor_customer_count():
     """After reseed, verify is_event_anchor count meets each event's min_customers."""
     cmd = [
-        "docker", "exec", "chatbi-pg", "psql", "-U", "chatbi", "-d", "chatbi", "-t", "-c",
+        "docker",
+        "exec",
+        "chatbi-pg",
+        "psql",
+        "-U",
+        "chatbi",
+        "-d",
+        "chatbi",
+        "-t",
+        "-c",
         "SELECT COUNT(*) FROM dim_customer WHERE is_event_anchor = TRUE;",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)

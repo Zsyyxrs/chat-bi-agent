@@ -51,13 +51,17 @@ def _mock_chat(content: str):
     class _R:
         def __init__(self, c):
             self.content = c
+
     return _R(content)
 
 
-def _mk_p1_result(ok: bool, sql: str | None = None,
-                  rows: list[dict] | None = None,
-                  error_class: SQLErrorClass | None = None,
-                  error_msg: str | None = None):
+def _mk_p1_result(
+    ok: bool,
+    sql: str | None = None,
+    rows: list[dict] | None = None,
+    error_class: SQLErrorClass | None = None,
+    error_msg: str | None = None,
+):
     """Build a P1AgentResult lookalike (duck-typed)."""
     return MagicMock(
         sql=sql,
@@ -114,9 +118,12 @@ def test_failed_step_triggers_replan_then_succeeds():
     agent, mock_p1 = _make_agent_with_mocks()
     mock_p1.run.side_effect = [
         _mk_p1_result(ok=True, sql="SQL1", rows=[{"v": 100}]),
-        _mk_p1_result(ok=False, sql="SQL2",
-                      error_class=SQLErrorClass.UNKNOWN_TABLE,
-                      error_msg="relation x does not exist"),
+        _mk_p1_result(
+            ok=False,
+            sql="SQL2",
+            error_class=SQLErrorClass.UNKNOWN_TABLE,
+            error_msg="relation x does not exist",
+        ),
         _mk_p1_result(ok=True, sql="SQL2b", rows=[{"v": 125}]),
     ]
     # Planner → Replanner → FactExtractor → InsightSynthesizer → ReportWriter
@@ -140,10 +147,8 @@ def test_replan_then_step_still_fails_marks_skipped():
     agent, mock_p1 = _make_agent_with_mocks()
     mock_p1.run.side_effect = [
         _mk_p1_result(ok=True, sql="SQL1", rows=[{"v": 100}]),
-        _mk_p1_result(ok=False, error_class=SQLErrorClass.UNKNOWN_TABLE,
-                      error_msg="x"),
-        _mk_p1_result(ok=False, error_class=SQLErrorClass.UNKNOWN_TABLE,
-                      error_msg="x"),
+        _mk_p1_result(ok=False, error_class=SQLErrorClass.UNKNOWN_TABLE, error_msg="x"),
+        _mk_p1_result(ok=False, error_class=SQLErrorClass.UNKNOWN_TABLE, error_msg="x"),
     ]
     # Planner → Replanner → FactExtractor → InsightSynthesizer → ReportWriter
     llm_responses = [

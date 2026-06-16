@@ -110,7 +110,7 @@ class DimensionGenerator:
         # SUBBRANCH level — counter 独立从 0
         sub_counter = 0
         subbranch_names = ["营业部", "营销中心", "小微部", "财富部"]
-        for city, city_id in list(city_ids.items())[:min(10, len(city_ids))]:
+        for city, city_id in list(city_ids.items())[: min(10, len(city_ids))]:
             for sb_name in subbranch_names:
                 sb_id = f"BR_SUB_{sub_counter:04d}"
                 yield {
@@ -193,7 +193,7 @@ class DimensionGenerator:
 
                     yield {
                         "product_id": product_id,
-                        "product_name": f"{subcat}产品{i+1}",
+                        "product_name": f"{subcat}产品{i + 1}",
                         "product_category": category,
                         "product_subcategory": subcat,
                         "risk_level": random.choice(risk_levels),
@@ -229,9 +229,7 @@ class DimensionGenerator:
             product_id = random.choice(product_ids) if acct_type != "CURRENT" else None
             open_year = random.randint(2015, 2026)
 
-            status = random.choices(
-                statuses, weights=[70, 10, 15, 5]
-            )[0]
+            status = random.choices(statuses, weights=[70, 10, 15, 5])[0]
 
             yield {
                 "account_id": account_id,

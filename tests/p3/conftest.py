@@ -1,4 +1,5 @@
 """Shared fixtures for P3 tests."""
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -46,6 +47,7 @@ def fake_events_dir(tmp_path: Path) -> Path:
 @dataclass
 class FakeP1Result:
     """Stand-in for P1AgentResult — keeps field names identical."""
+
     question_id: str
     sql: Optional[str] = None
     rows: Optional[list[dict]] = None

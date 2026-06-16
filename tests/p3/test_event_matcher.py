@@ -1,4 +1,5 @@
 """Tests for event_matcher (deterministic, no LLM)."""
+
 from pathlib import Path
 
 from chat_bi_agent.agents.p3.event_matcher import (
@@ -71,7 +72,7 @@ def test_match_events_overlap_with_slack(fake_events_dir: Path):
     matched = match_events(anchor, fake_events_dir, slack_days=7)
     matched_ids = [m.event_id for m in matched]
     assert "anxin_90_expire" in matched_ids  # 2026-05-14 inside window
-    assert "lpr_cut_q2" not in matched_ids   # 2026-06-20 outside even with slack
+    assert "lpr_cut_q2" not in matched_ids  # 2026-06-20 outside even with slack
     assert "spring_festival_withdrawal" not in matched_ids
 
 

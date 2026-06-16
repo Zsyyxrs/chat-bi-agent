@@ -57,24 +57,20 @@ class FactExtractor:
         try:
             data = json.loads(candidate)
         except json.JSONDecodeError as e:
-            raise FactParseError(
-                f"无法解析 JSON: {e}; raw 前 200 字符: {raw[:200]}"
-            ) from e
+            raise FactParseError(f"无法解析 JSON: {e}; raw 前 200 字符: {raw[:200]}") from e
         if "facts" not in data or not isinstance(data["facts"], list):
-            raise FactParseError(
-                f"缺少 facts 列表; 实际: {list(data.keys())}"
-            )
+            raise FactParseError(f"缺少 facts 列表; 实际: {list(data.keys())}")
         result = []
         for i, f in enumerate(data["facts"]):
             for required in ("metric", "dimension", "value", "source_step"):
                 if required not in f:
-                    raise FactParseError(
-                        f"fact[{i}] 缺少字段 {required!r}"
-                    )
-            result.append(Fact(
-                metric=f["metric"],
-                dimension=f["dimension"],
-                value=f["value"],
-                source_step=f["source_step"],
-            ))
+                    raise FactParseError(f"fact[{i}] 缺少字段 {required!r}")
+            result.append(
+                Fact(
+                    metric=f["metric"],
+                    dimension=f["dimension"],
+                    value=f["value"],
+                    source_step=f["source_step"],
+                )
+            )
         return result

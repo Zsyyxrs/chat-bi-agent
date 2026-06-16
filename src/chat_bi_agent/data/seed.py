@@ -83,9 +83,7 @@ def build_dim_indexes(cursor) -> tuple[dict, dict, dict]:
     }
     cursor.execute("SELECT branch_id, branch_level FROM dim_branch")
     branch_index = {row[0]: {"branch_level": row[1]} for row in cursor.fetchall()}
-    cursor.execute(
-        "SELECT product_id, product_category, product_subcategory FROM dim_product"
-    )
+    cursor.execute("SELECT product_id, product_category, product_subcategory FROM dim_product")
     product_index = {
         row[0]: {"product_category": row[1], "product_subcategory": row[2]}
         for row in cursor.fetchall()
@@ -138,9 +136,7 @@ def seed_dimensions(
         # dim_date
         print("⏳ Seeding dim_date...", file=sys.stderr)
         dates = list(
-            generator.generate_dates(
-                start_date=date(2025, 1, 1), end_date=date(2026, 12, 31)
-            )
+            generator.generate_dates(start_date=date(2025, 1, 1), end_date=date(2026, 12, 31))
         )
         counts["dim_date"] = insert_rows(cursor, "dim_date", dates)
 

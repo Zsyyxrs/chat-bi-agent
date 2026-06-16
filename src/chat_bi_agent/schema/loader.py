@@ -20,6 +20,7 @@ DEFAULT_YAML_PATH = Path(__file__).parent / "schema_docs.yaml"
 @dataclass
 class TableDoc:
     """单张表的元数据 + 向量。"""
+
     name: str
     type: str  # dimension / fact
     domain: str

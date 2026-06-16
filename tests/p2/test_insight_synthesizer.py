@@ -15,6 +15,7 @@ def _mock_chat(content: str):
     class _R:
         def __init__(self, c):
             self.content = c
+
     return _R(content)
 
 
@@ -33,10 +34,15 @@ SAMPLE = """```json
 def test_synthesize_returns_insights():
     syn = InsightSynthesizer()
     facts = [
-        Fact(metric="withdraw_amount", dimension={"period": "before"},
-             value=1000, source_step="step1"),
-        Fact(metric="withdraw_amount", dimension={"period": "after"},
-             value=1250, source_step="step2"),
+        Fact(
+            metric="withdraw_amount",
+            dimension={"period": "before"},
+            value=1000,
+            source_step="step1",
+        ),
+        Fact(
+            metric="withdraw_amount", dimension={"period": "after"}, value=1250, source_step="step2"
+        ),
     ]
     with patch(
         "chat_bi_agent.agents.p2.insight_synthesizer.qwen_client.chat",

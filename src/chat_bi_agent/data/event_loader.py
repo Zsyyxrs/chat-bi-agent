@@ -33,9 +33,7 @@ class RequiredPopulation:
 
         must_hold = data.get("must_hold")
         if not isinstance(must_hold, list) or not must_hold:
-            raise EventLoaderError(
-                "required_population.must_hold must be a non-empty list"
-            )
+            raise EventLoaderError("required_population.must_hold must be a non-empty list")
 
         return cls(
             min_customers=min_customers,
@@ -71,9 +69,7 @@ class Event:
             event_date = data["date"]
 
         rp_data = data.get("required_population")
-        required_population = (
-            RequiredPopulation.from_dict(rp_data) if rp_data else None
-        )
+        required_population = RequiredPopulation.from_dict(rp_data) if rp_data else None
 
         return cls(
             id=data["id"],
@@ -126,9 +122,7 @@ class EventLoader:
 
         return events
 
-    def get_events_by_date_range(
-        self, start_date: date, end_date: date
-    ) -> list[Event]:
+    def get_events_by_date_range(self, start_date: date, end_date: date) -> list[Event]:
         """获取在指定日期范围内的事件。"""
         all_events = self.load_all_events()
         return [e for e in all_events if start_date <= e.date <= end_date]

@@ -26,20 +26,36 @@ def test_to_eval_input_maps_all_evaluator_fields():
         ],
     )
     step_results = [
-        StepResult(step=plan.steps[0], sql="SELECT 1", rows=[{"x": 1}],
-                   error_class=None, error_msg=None, skipped=False),
-        StepResult(step=plan.steps[1], sql=None, rows=None,
-                   error_class=None, error_msg="failed", skipped=True),
+        StepResult(
+            step=plan.steps[0],
+            sql="SELECT 1",
+            rows=[{"x": 1}],
+            error_class=None,
+            error_msg=None,
+            skipped=False,
+        ),
+        StepResult(
+            step=plan.steps[1],
+            sql=None,
+            rows=None,
+            error_class=None,
+            error_msg="failed",
+            skipped=True,
+        ),
     ]
     facts = [
-        Fact(metric="withdraw_total_amount", dimension={"period": "before"},
-             value=1000.0, source_step="step1"),
-        Fact(metric="withdraw_count", dimension={"period": "before"},
-             value=10, source_step="step1"),
+        Fact(
+            metric="withdraw_total_amount",
+            dimension={"period": "before"},
+            value=1000.0,
+            source_step="step1",
+        ),
+        Fact(
+            metric="withdraw_count", dimension={"period": "before"}, value=10, source_step="step1"
+        ),
     ]
     insights = [
-        Insight(statement="春节期间现金支取增长25%",
-                supporting_facts=[0, 1], confidence="high"),
+        Insight(statement="春节期间现金支取增长25%", supporting_facts=[0, 1], confidence="high"),
     ]
     report = AnalysisReport(
         question="春节对比",

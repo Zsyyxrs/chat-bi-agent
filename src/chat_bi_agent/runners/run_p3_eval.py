@@ -28,9 +28,7 @@ from chat_bi_agent.eval.rca_evaluator import RCAEvaluator  # noqa: E402
 from chat_bi_agent.llm import qwen_client  # noqa: E402
 from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
 
-DATA_YAML = (
-    Path(__file__).resolve().parents[1] / "data" / "attribution_evaluation.yaml"
-)
+DATA_YAML = Path(__file__).resolve().parents[1] / "data" / "attribution_evaluation.yaml"
 EVENTS_DIR = Path(__file__).resolve().parents[1] / "data" / "events"
 RESULTS_DIR = Path(__file__).resolve().parents[3] / "results"
 
@@ -77,10 +75,12 @@ def main(limit: int | None = None) -> int:
             report = agent.run(question_id=qid, question=question_text)
         except Exception as e:
             print(f"  AGENT EXCEPTION: {type(e).__name__}: {e}")
-            per_question.append({
-                "question_id": qid,
-                "agent_exception": f"{type(e).__name__}: {e}",
-            })
+            per_question.append(
+                {
+                    "question_id": qid,
+                    "agent_exception": f"{type(e).__name__}: {e}",
+                }
+            )
             continue
 
         eval_input = report.to_eval_input()
@@ -88,11 +88,13 @@ def main(limit: int | None = None) -> int:
             score = evaluator.evaluate_response(**eval_input)
         except Exception as e:
             print(f"  EVAL EXCEPTION: {type(e).__name__}: {e}")
-            per_question.append({
-                "question_id": qid,
-                "eval_exception": f"{type(e).__name__}: {e}",
-                "narrative": report.narrative,
-            })
+            per_question.append(
+                {
+                    "question_id": qid,
+                    "eval_exception": f"{type(e).__name__}: {e}",
+                    "narrative": report.narrative,
+                }
+            )
             continue
 
         combined = score.combined_score
@@ -116,22 +118,24 @@ def main(limit: int | None = None) -> int:
             f"hallu={score.hallucination_detected})"
         )
 
-        per_question.append({
-            "question_id": qid,
-            "drill_dimensions": [dr.dimension for dr in report.drill_results],
-            "skipped_drills": sum(1 for d in report.drill_results if d.skipped),
-            "matched_event_ids": [ev.event_id for ev in report.matched_events],
-            "latency_ms": report.latency_ms,
-            "score": round(combined, 4),
-            "sub_scores": {
-                "event_hit": bool(score.event_hit),
-                "dimension_recall": round(score.dimension_recall, 4),
-                "conclusion_similarity": round(score.conclusion_similarity, 4),
-                "hallucination_detected": bool(score.hallucination_detected),
-            },
-            "narrative_preview": report.narrative[:200],
-            "error": report.error,
-        })
+        per_question.append(
+            {
+                "question_id": qid,
+                "drill_dimensions": [dr.dimension for dr in report.drill_results],
+                "skipped_drills": sum(1 for d in report.drill_results if d.skipped),
+                "matched_event_ids": [ev.event_id for ev in report.matched_events],
+                "latency_ms": report.latency_ms,
+                "score": round(combined, 4),
+                "sub_scores": {
+                    "event_hit": bool(score.event_hit),
+                    "dimension_recall": round(score.dimension_recall, 4),
+                    "conclusion_similarity": round(score.conclusion_similarity, 4),
+                    "hallucination_detected": bool(score.hallucination_detected),
+                },
+                "narrative_preview": report.narrative[:200],
+                "error": report.error,
+            }
+        )
 
     total = len(questions)
     avg_score = score_sum / total if total else 0.0

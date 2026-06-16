@@ -21,8 +21,8 @@ class SQLErrorClass(str, Enum):
     UNKNOWN_COLUMN = "UNKNOWN_COLUMN"
     TIMEOUT = "TIMEOUT"
     OTHER = "OTHER"
-    INVALID_JSON = "INVALID_JSON"          # agent 层从 SQLGenerator 抛出的错误映射
-    VALIDATOR_FAIL = "VALIDATOR_FAIL"      # agent 层从 SQLValidator 失败映射
+    INVALID_JSON = "INVALID_JSON"  # agent 层从 SQLGenerator 抛出的错误映射
+    VALIDATOR_FAIL = "VALIDATOR_FAIL"  # agent 层从 SQLValidator 失败映射
 
 
 # SET / EXECUTE / CALL are not listed: each execute() call uses a fresh connection,
