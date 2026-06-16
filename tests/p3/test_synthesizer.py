@@ -1,8 +1,13 @@
 """Tests for synthesizer (LLM with mocked client)."""
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from chat_bi_agent.agents.p3.synthesizer import _build_user_prompt, synthesize_narrative
+from chat_bi_agent.agents.p3.synthesizer import (
+    _build_user_prompt,
+    _parse_dual_output,
+    synthesize,
+)
 from chat_bi_agent.agents.p3.types import (
     DrillResult,
     FactAnchor,
@@ -67,35 +72,71 @@ def test_build_user_prompt_no_events_omits_event_block():
     assert "anxin_90_expire" not in prompt
 
 
-def test_synthesize_narrative_calls_llm_and_returns_text():
-    fake_client = MagicMock()
-    fake_client.chat.return_value = SimpleNamespace(content="narrative text BR_CITY_0006 安鑫")
+def test_parse_dual_output_splits_on_tags():
+    content = (
+        "【叙述】\n上海分行 BR_CITY_0006 出现下滑，主要受安鑫到期影响。\n"
+        "【结论】\n根因为安鑫 90 天理财到期。"
+    )
+    narrative, conclusion = _parse_dual_output(content)
+    assert "BR_CITY_0006" in narrative
+    assert "结论" not in narrative
+    assert conclusion == "根因为安鑫 90 天理财到期。"
 
-    out = synthesize_narrative(
+
+def test_parse_dual_output_missing_conclusion_returns_empty():
+    narrative, conclusion = _parse_dual_output("just some unstructured text")
+    assert narrative == "just some unstructured text"
+    assert conclusion == ""
+
+
+def test_synthesize_returns_narrative_and_conclusion():
+    fake_client = MagicMock()
+    fake_client.chat.return_value = SimpleNamespace(
+        content=("【叙述】\nnarrative text BR_CITY_0006 安鑫\n【结论】\n根因是安鑫 90 天到期。")
+    )
+
+    narrative, conclusion = synthesize(
         question="why?",
         fact_anchor=_fact_anchor(),
         drill_results=[_drill()],
         matched_events=[_event()],
         llm_client=fake_client,
     )
-    assert out == "narrative text BR_CITY_0006 安鑫"
+    assert "BR_CITY_0006" in narrative
+    assert "结论" not in narrative
+    assert "安鑫" in conclusion
     assert fake_client.chat.call_count == 1
-    # System prompt must be passed via system_prompt kwarg
     call_kwargs = fake_client.chat.call_args.kwargs
     sysprompt = call_kwargs.get("system_prompt", "")
     assert "禁止" in sysprompt or "不要编造" in sysprompt or "严禁" in sysprompt
 
 
-def test_synthesize_narrative_llm_failure_returns_fallback():
+def test_synthesize_untagged_output_falls_back_for_conclusion():
+    fake_client = MagicMock()
+    fake_client.chat.return_value = SimpleNamespace(content="一段没有标签的叙述")
+
+    narrative, conclusion = synthesize(
+        question="why?",
+        fact_anchor=_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake_client,
+    )
+    assert narrative == "一段没有标签的叙述"
+    # Conclusion is derived from facts when LLM omits the tag.
+    assert "安鑫" in conclusion or "retail_deposit_balance" in conclusion
+
+
+def test_synthesize_llm_failure_returns_fallback_pair():
     fake_client = MagicMock()
     fake_client.chat.side_effect = RuntimeError("LLM down")
 
-    out = synthesize_narrative(
+    narrative, conclusion = synthesize(
         question="why did X drop?",
         fact_anchor=_fact_anchor(),
         drill_results=[_drill()],
         matched_events=[_event()],
         llm_client=fake_client,
     )
-    assert "retail_deposit_balance" in out
-    assert "BR_CITY_0006" in out
+    assert "retail_deposit_balance" in narrative
+    assert conclusion  # non-empty fallback conclusion

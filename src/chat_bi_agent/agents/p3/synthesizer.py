@@ -1,5 +1,6 @@
-"""P3 synthesizer: LLM-based narrative composition from facts + drill + events."""
+"""P3 synthesizer: LLM-based narrative + conclusion composition."""
 
+import re
 from typing import Any
 
 from chat_bi_agent.agents.p3.prompts.synthesizer_system import SYNTHESIZER_SYSTEM_PROMPT
@@ -19,9 +20,7 @@ def _build_user_prompt(
     lines.append(f"指标：{fact_anchor.metric_name}")
     lines.append(f"时间窗口：{fact_anchor.time_window}")
     pct = "n/a" if fact_anchor.change_pct is None else f"{fact_anchor.change_pct:.2f}%"
-    lines.append(
-        f"当前值：{fact_anchor.current_value} | 环比：{pct} ({fact_anchor.direction})\n"
-    )
+    lines.append(f"当前值：{fact_anchor.current_value} | 环比：{pct} ({fact_anchor.direction})\n")
 
     lines.append("【维度下钻 TopN 贡献度】")
     if not drill_results:
@@ -45,15 +44,29 @@ def _build_user_prompt(
     else:
         for ev in matched_events:
             lines.append(f"- {ev.event_id} ({ev.effective_date}): {ev.event_name}")
-    lines.append("")
-
-    lines.append("【输出要求】")
-    lines.append("- 引用具体数字（不要编造），数字必须来自上面提供的事实")
-    lines.append("- 引用维度 ID（如 BR_CITY_0006、HIGH_NET_WORTH）和事件名")
-    lines.append("- 解释因果链条（事件 → 数据变化 → 业务影响）")
-    lines.append("- 控制在 5-8 句话连贯叙述")
 
     return "\n".join(lines)
+
+
+_NARRATIVE_TAG = re.compile(r"【\s*叙述\s*】")
+_CONCLUSION_TAG = re.compile(r"【\s*结论\s*】")
+
+
+def _parse_dual_output(content: str) -> tuple[str, str]:
+    """Split LLM output into (narrative, conclusion) by tags.
+
+    On parse failure returns (content, "") so the caller can apply its own
+    conclusion fallback.
+    """
+    nar_match = _NARRATIVE_TAG.search(content)
+    concl_match = _CONCLUSION_TAG.search(content)
+    if not concl_match:
+        return content.strip(), ""
+
+    narrative_start = nar_match.end() if nar_match else 0
+    narrative = content[narrative_start : concl_match.start()].strip()
+    conclusion = content[concl_match.end() :].strip()
+    return narrative, conclusion
 
 
 def _fallback_narrative(
@@ -61,7 +74,6 @@ def _fallback_narrative(
     drill_results: list[DrillResult],
     matched_events: list[MatchedEvent],
 ) -> str:
-    """Template fallback when LLM call fails."""
     top_keys = []
     for dr in drill_results:
         if dr.skipped or not dr.pareto_top_k:
@@ -80,18 +92,43 @@ def _fallback_narrative(
     return "".join(parts)
 
 
-def synthesize_narrative(
+def _fallback_conclusion(
+    fact_anchor: FactAnchor,
+    drill_results: list[DrillResult],
+    matched_events: list[MatchedEvent],
+) -> str:
+    top_dim = next(
+        (
+            f"{dr.dimension}={dr.pareto_top_k[0].get('key')}"
+            for dr in drill_results
+            if not dr.skipped and dr.pareto_top_k
+        ),
+        None,
+    )
+    event_name = matched_events[0].event_name if matched_events else None
+    if event_name and top_dim:
+        return f"{fact_anchor.metric_name} 的变化主要由「{event_name}」驱动，集中于 {top_dim}。"
+    if event_name:
+        return f"{fact_anchor.metric_name} 的变化主要与「{event_name}」相关。"
+    if top_dim:
+        return f"{fact_anchor.metric_name} 的变化主要集中于 {top_dim}。"
+    return (
+        f"{fact_anchor.metric_name} 在 {fact_anchor.time_window} 期间出现 "
+        f"{fact_anchor.direction} 方向变化，未识别到明确根因。"
+    )
+
+
+def synthesize(
     question: str,
     fact_anchor: FactAnchor,
     drill_results: list[DrillResult],
     matched_events: list[MatchedEvent],
     llm_client: Any,
-) -> str:
-    """Compose business-language narrative via LLM. Falls back to a template on error.
+) -> tuple[str, str]:
+    """Compose (narrative, conclusion) via a single LLM call. Falls back on error.
 
     `llm_client` must expose `.chat(system_prompt: str, user_prompt: str) -> ChatResult-like`
-    (i.e. an object with a `.content: str` attribute). Pass the `qwen_client` module
-    at the call site.
+    (i.e. an object with a `.content: str` attribute).
     """
     user_prompt = _build_user_prompt(question, fact_anchor, drill_results, matched_events)
     try:
@@ -99,6 +136,12 @@ def synthesize_narrative(
             system_prompt=SYNTHESIZER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
         )
-        return result.content
+        narrative, conclusion = _parse_dual_output(result.content)
+        if not conclusion:
+            conclusion = _fallback_conclusion(fact_anchor, drill_results, matched_events)
+        return narrative, conclusion
     except Exception:
-        return _fallback_narrative(fact_anchor, drill_results, matched_events)
+        return (
+            _fallback_narrative(fact_anchor, drill_results, matched_events),
+            _fallback_conclusion(fact_anchor, drill_results, matched_events),
+        )

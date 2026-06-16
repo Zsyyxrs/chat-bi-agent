@@ -51,6 +51,7 @@ class RCAReport:
     drill_results: list[DrillResult] = field(default_factory=list)
     matched_events: list[MatchedEvent] = field(default_factory=list)
     narrative: str = ""
+    conclusion: str = ""
     trace_id: str | None = None
     latency_ms: int = 0
     error: str | None = None
@@ -79,5 +80,5 @@ class RCAReport:
             "agent_response": self.narrative,
             "agent_extracted_dimensions": dims,
             "agent_identified_event": identified_event,
-            "agent_conclusion": self.narrative,
+            "agent_conclusion": self.conclusion,
         }

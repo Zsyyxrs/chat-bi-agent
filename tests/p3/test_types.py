@@ -1,4 +1,5 @@
 """Tests for p3.types dataclasses and RCAReport.to_eval_input mapping."""
+
 from chat_bi_agent.agents.p3.types import (
     DrillRequest,
     DrillResult,
@@ -71,12 +72,14 @@ def test_rca_report_to_eval_input_basic():
         drill_results=[drill],
         matched_events=[event],
         narrative="上海分行 BR_CITY_0006 的高净值客户...安鑫 90 天理财到期...",
+        conclusion="根因是安鑫 90 天理财到期。",
         trace_id="trace-abc",
         latency_ms=5000,
     )
     eval_input = report.to_eval_input()
     assert eval_input["question_id"] == "attribution_q001"
     assert "BR_CITY_0006" in eval_input["agent_response"]
+    assert eval_input["agent_conclusion"] == "根因是安鑫 90 天理财到期。"
     assert eval_input["agent_identified_event"] == "anxin_90_expire"
     assert "branch_id" in eval_input["agent_extracted_dimensions"]
     assert "BR_CITY_0006" in eval_input["agent_extracted_dimensions"]["branch_id"]
@@ -97,3 +100,4 @@ def test_rca_report_to_eval_input_no_events():
     eval_input = report.to_eval_input()
     assert eval_input["agent_identified_event"] is None
     assert eval_input["agent_extracted_dimensions"] == {}
+    assert eval_input["agent_conclusion"] == ""
