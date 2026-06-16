@@ -58,7 +58,7 @@ WITH baseline AS (
   JOIN dim_product  p ON b.product_id  = p.product_id
   WHERE b.branch_id IN ('BR_CITY_0000','BR_CITY_0002')
     AND c.customer_tier IN ('MASS','AFFLUENT')
-    AND p.product_subcategory IN ('定期存款','大额存单')
+    AND p.product_id IN ('PROD_DEP_0005','PROD_DEP_0008')
     AND b.dt BETWEEN DATE '2026-07-27' AND DATE '2026-08-09'
 ),
 ev AS (
@@ -68,7 +68,7 @@ ev AS (
   JOIN dim_product  p ON b.product_id  = p.product_id
   WHERE b.branch_id IN ('BR_CITY_0000','BR_CITY_0002')
     AND c.customer_tier IN ('MASS','AFFLUENT')
-    AND p.product_subcategory IN ('定期存款','大额存单')
+    AND p.product_id IN ('PROD_DEP_0005','PROD_DEP_0008')
     AND b.dt BETWEEN DATE '2026-08-18' AND DATE '2026-08-24'
 )
 SELECT (ev.v - baseline.v) / NULLIF(baseline.v, 0) * 100.0, ev.n

@@ -65,7 +65,6 @@ events:
     affected_dimensions:
       branch_id: [BR_CITY_0000, BR_CITY_0002]  # 杭州、南京分行
       customer_tier: [MASS, AFFLUENT]
-      gender: [M, F]  # 情侣客户
 
     propagation:
       - target_table: fct_balance_daily
@@ -75,16 +74,15 @@ events:
         delay_days: 2
         ramp_days: 5
         affected_account_sample: 1.0  # 锚定队列全部触达，verify_events 才能落入容差
-        related_products: [PROD_DEP_0005, PROD_DEP_0008]  # 营销主推产品（叙事元数据）
+        product_ids: [PROD_DEP_0005, PROD_DEP_0008]  # 精确过滤：营销只拉动主推两款，不波及其他定期存款
+        related_products: [PROD_DEP_0005, PROD_DEP_0008]  # rca_evaluator alias 种子（narrator 提"七夕营销"也算命中这两个 ID）
         effect_type: sustained
-        product_subcategories: [定期存款, 大额存单]
 
     required_population:
       min_customers: 50  # 降低 verify AVG 噪声底
       branches: [BR_CITY_0000, BR_CITY_0002]
       tiers: [MASS, AFFLUENT]
       must_hold:
-        - product_subcategory: 定期存款
         - product_ids: [PROD_DEP_0005, PROD_DEP_0008]
 
     expected_rca_conclusion: |
@@ -129,6 +127,7 @@ events:
 
     required_population:
       min_customers: 80  # 强制锚定 LOAN 队列，降低 verify_events 噪声底
+      tiers: [BASIC, MASS, AFFLUENT, HIGH_NET_WORTH]  # 显式全 4 层；事件是"全行"覆盖
       must_hold:
         - product_category: LOAN
       must_have_transactions:
