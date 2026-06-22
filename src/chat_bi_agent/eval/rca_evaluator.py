@@ -238,6 +238,8 @@ class RCAScore:
     conclusion_similarity: float = 0.0  # 0-1: 结论与期望的语义相似度
     hallucination_detected: bool = False  # 是否存在事实幻觉
     response_time_seconds: float = 0.0
+    # G-Eval rubric 子分（仅当 use_llm_judge=True 时填充；否则 None）
+    conclusion_rubric: Optional[dict] = None  # {event, quantification, mechanism, scope, method}
 
     @property
     def combined_score(self) -> float:
@@ -315,6 +317,8 @@ class RCAEvaluator:
         self,
         events_dir: Optional[Path] = None,
         valid_product_ids: Optional[set[str]] = None,
+        use_llm_judge: bool = True,
+        llm_client=None,
     ):
         """
         Args:
@@ -322,12 +326,25 @@ class RCAEvaluator:
             valid_product_ids: 真实可用的 product_id 集合（如来自 dim_product 表全集）。
                 提供后，narrative 里凡是匹配 PROD_XXX_NNNN 但不在该集合的 ID 都会被标记为
                 幻觉。不提供（None）时跳过该检测，仅保留 >200% 数字的旧检测。
+            use_llm_judge: True 时 conclusion_similarity 走 G-Eval 4 维 rubric LLM 判分，
+                失败回退到 Jaccard。False 时只用 Jaccard（单元测试 / 离线快速跑）。
+            llm_client: 自定义 LLM 客户端（须暴露 chat(system_prompt, user_prompt, temperature)）。
+                默认 None → 用 chat_bi_agent.llm.qwen_client。
         """
         self.eval_dir = Path(__file__).parent.parent / "data"
         self.questions = self._load_evaluation_questions()
         events_dir = events_dir if events_dir is not None else self.eval_dir / "events"
         self._dim_aliases = self._build_dim_alias_map(events_dir)
         self._valid_product_ids = set(valid_product_ids) if valid_product_ids is not None else None
+        self._use_llm_judge = use_llm_judge
+        if llm_client is not None:
+            self._llm_client = llm_client
+        elif use_llm_judge:
+            from chat_bi_agent.llm import qwen_client as _qwen
+
+            self._llm_client = _qwen
+        else:
+            self._llm_client = None
 
     @staticmethod
     def _build_dim_alias_map(events_dir: Path) -> dict[str, set[str]]:
@@ -403,6 +420,128 @@ class RCAEvaluator:
                 return q
         return None
 
+    _JUDGE_SYSTEM_PROMPT = (
+        "你是 BI 归因评估专家。给定参考根因（expected）与 Agent 生成的结论（agent），"
+        "按下列 4 维 rubric 各打 0-1 分（0.0 / 0.25 / 0.5 / 0.75 / 1.0）：\n"
+        "  1. event_identification: agent 是否准确识别并提及参考里的根因事件（事件名/动作）\n"
+        "  2. quantification: agent 是否给出与参考一致或语义等价的量化数字（百分比/比率/金额）\n"
+        "  3. mechanism: agent 是否说清因果链（事件→中间环节→指标变化）\n"
+        "  4. scope: agent 是否准确界定影响范围（分行/客户层级/产品维度等）\n\n"
+        "如果输入包含【本题人工 rubric】，把每条 criterion 映射到上面 4 维 backbone 里相关的"
+        "那一维并在打分时作为重点检查项；这些 criterion 不另设维度，只用来精化判分。\n"
+        "如果输入包含【期望关键指标】，把它作为 quantification 维的结构化 ground truth："
+        "agent 量化是否方向一致、幅度落在 ±50% 范围内。\n\n"
+        "严格只输出 JSON，包在 ```json fence 内，键名固定为上述 4 个：\n"
+        '```json\n{"event_identification": 1.0, "quantification": 0.5, '
+        '"mechanism": 0.75, "scope": 1.0}\n```\n'
+        "评分校准：\n"
+        "- 完全命中（事件名、量化数字、机制链、范围都对）→ 1.0\n"
+        "- 方向对但细节缺/数字差异大 → 0.5\n"
+        "- 完全没提或方向错 → 0.0\n"
+        "- 内部代码（如 BR_CITY_0006、PROD_WEA_0030）若 agent 能映射到业务名（上海分行/安鑫）"
+        "视为表达等价，按命中算。"
+    )
+
+    _JUDGE_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+    _JUDGE_DIMS = ("event_identification", "quantification", "mechanism", "scope")
+
+    @staticmethod
+    def _format_evaluation_criteria(criteria: Optional[list]) -> str:
+        """把 attribution_evaluation.yaml 的 evaluation_criteria 列表渲染成 prompt 段。
+
+        YAML 形式：列表里每项是单键 dict，键是 criterion 名，值是中文描述。
+        如：[{product_identification: "Agent 是否精准定位..."}, ...]
+        """
+        if not criteria:
+            return ""
+        lines: list[str] = []
+        for item in criteria:
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    lines.append(f"  - {k}: {v}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_expected_key_metrics(metrics: Optional[list]) -> str:
+        """渲染 expected_key_metrics 为人话：metric=X 方向=down 幅度=~8.5%。"""
+        if not metrics:
+            return ""
+        lines: list[str] = []
+        for m in metrics:
+            if not isinstance(m, dict):
+                continue
+            parts = []
+            if m.get("metric"):
+                parts.append(f"metric={m['metric']}")
+            if m.get("change_direction"):
+                parts.append(f"direction={m['change_direction']}")
+            if m.get("magnitude"):
+                parts.append(f"magnitude={m['magnitude']}")
+            if parts:
+                lines.append("  - " + " ".join(parts))
+        return "\n".join(lines)
+
+    def _llm_judge_conclusion(
+        self,
+        expected: str,
+        agent: str,
+        question: Optional[dict] = None,
+    ) -> tuple[float, Optional[dict]]:
+        """G-Eval 4 维 rubric LLM judge。返回 (avg_score, rubric_dict_or_None)。
+
+        - 通用 4 维 backbone：event_identification / quantification / mechanism / scope
+        - 若 `question` 提供，把每题自定义的 evaluation_criteria 注入 prompt 作为
+          per-question 重点检查项（提升判分针对性），expected_key_metrics 注入
+          作为 quantification 维的结构化 ground truth。
+        - 失败回退到 Jaccard，调用方据 rubric=None 判定走了 fallback。
+        """
+        import json as _json
+
+        # 防御：客户端缺失（use_llm_judge=False 但意外走到这里）
+        if self._llm_client is None:
+            return self._jaccard_similarity(expected, agent), None
+
+        user_prompt_parts = [f"【expected】\n{expected.strip()}", f"【agent】\n{agent.strip()}"]
+        if question is not None:
+            criteria_block = self._format_evaluation_criteria(question.get("evaluation_criteria"))
+            if criteria_block:
+                user_prompt_parts.append(
+                    "【本题人工 rubric（请映射到 4 维 backbone 上重点检查）】\n" + criteria_block
+                )
+            metrics_block = self._format_expected_key_metrics(question.get("expected_key_metrics"))
+            if metrics_block:
+                user_prompt_parts.append(
+                    "【期望关键指标（quantification 维以此为 ground truth）】\n" + metrics_block
+                )
+        user_prompt = "\n\n".join(user_prompt_parts) + "\n"
+        try:
+            result = self._llm_client.chat(
+                system_prompt=self._JUDGE_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                temperature=0.0,
+            )
+            raw = (result.content or "").strip()
+            m = self._JUDGE_FENCE_RE.search(raw)
+            payload_text = m.group(1) if m else raw
+            payload = _json.loads(payload_text)
+            scores = [float(payload.get(dim, 0.0)) for dim in self._JUDGE_DIMS]
+            # clip 到 [0,1]，平均
+            scores = [max(0.0, min(1.0, s)) for s in scores]
+            avg = sum(scores) / len(scores)
+            rubric = dict(zip(self._JUDGE_DIMS, scores))
+            rubric["method"] = "llm_judge"
+            return avg, rubric
+        except Exception as exc:  # parse error / API error / 任何意外
+            logging.warning("LLM judge 失败回退到 Jaccard: %s", exc)
+            return self._jaccard_similarity(expected, agent), None
+
+    @staticmethod
+    def _jaccard_similarity(expected: str, agent: str) -> float:
+        expected_tokens = _tokenize_for_similarity(expected)
+        agent_tokens = _tokenize_for_similarity(agent)
+        union = expected_tokens | agent_tokens
+        return (len(expected_tokens & agent_tokens) / len(union)) if union else 0.0
+
     def evaluate_response(
         self,
         question_id: str,
@@ -467,16 +606,20 @@ class RCAEvaluator:
             )
 
         # 3. 结论相似度 (conclusion_similarity)
-        # jieba.cut_for_search 提高颗粒度 + 过滤中文停用词，
-        # 让差异化业务词在 Jaccard 分子里占更大比重。
+        # 默认走 G-Eval 4 维 rubric LLM judge（事件/量化/机制/范围）；
+        # 失败回退到 Jaccard（jieba.cut_for_search + 中文停用词过滤）。
         expected_conclusion = question.get("expected_root_cause", "")
         if expected_conclusion and agent_conclusion:
-            expected_tokens = _tokenize_for_similarity(expected_conclusion)
-            agent_tokens = _tokenize_for_similarity(agent_conclusion)
-            intersection = expected_tokens & agent_tokens
-            union = expected_tokens | agent_tokens
-            if union:
-                score.conclusion_similarity = len(intersection) / len(union)
+            if self._use_llm_judge:
+                sim, rubric = self._llm_judge_conclusion(
+                    expected_conclusion, agent_conclusion, question=question
+                )
+                score.conclusion_similarity = sim
+                score.conclusion_rubric = rubric  # None 表示走了 Jaccard fallback
+            else:
+                score.conclusion_similarity = self._jaccard_similarity(
+                    expected_conclusion, agent_conclusion
+                )
 
         # 4. 幻觉检测 (hallucination_detected)
         # 简化版：检查是否提到了不存在的产品 ID 或日期

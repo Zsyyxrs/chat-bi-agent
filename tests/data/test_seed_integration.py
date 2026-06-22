@@ -75,6 +75,80 @@ def test_reseed_and_verify_anxin():
     assert result.returncode == 0, f"verify_events failed: {result.stdout}\n{result.stderr}"
 
 
+def test_product_expiry_lifecycle_clears_post_expiry_rows():
+    """After reseed, no fct_balance_daily rows for anxin's expired wealth products
+    should exist on dt > 2026-05-14, and pre-expiry rows must remain."""
+    psql = [
+        "docker",
+        "exec",
+        "chatbi-pg",
+        "psql",
+        "-U",
+        "chatbi",
+        "-d",
+        "chatbi",
+        "-t",
+        "-c",
+    ]
+    pre = subprocess.run(
+        psql
+        + [
+            "SELECT COUNT(*) FROM fct_balance_daily "
+            "WHERE product_id IN ('PROD_WEA_0030','PROD_WEA_0031') AND dt <= DATE '2026-05-14';"
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    post = subprocess.run(
+        psql
+        + [
+            "SELECT COUNT(*) FROM fct_balance_daily "
+            "WHERE product_id IN ('PROD_WEA_0030','PROD_WEA_0031') AND dt > DATE '2026-05-14';"
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    pre_count = int(pre.stdout.strip())
+    post_count = int(post.stdout.strip())
+    assert pre_count > 0, "expected pre-expiry balance rows for PROD_WEA_0030/0031"
+    assert post_count == 0, f"expected 0 post-expiry rows, got {post_count}"
+
+
+def test_product_expiry_lifecycle_closes_accounts():
+    """All accounts holding PROD_WEA_0030/0031 must have close_date <= anxin event date.
+
+    Note: some accounts are seeded with status=CLOSED + earlier close_date by
+    dimension_generator (15% closure rate). The lifecycle must not push those
+    forward but must close every still-open account on the event date.
+    """
+    result = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "chatbi-pg",
+            "psql",
+            "-U",
+            "chatbi",
+            "-d",
+            "chatbi",
+            "-t",
+            "-c",
+            "SELECT COUNT(*) FROM dim_account "
+            "WHERE product_id IN ('PROD_WEA_0030','PROD_WEA_0031') "
+            "AND (close_date IS NULL OR close_date > DATE '2026-05-14');",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    leftover = int(result.stdout.strip())
+    assert leftover == 0, (
+        f"expected all expired accounts closed by 2026-05-14, {leftover} still not"
+    )
+
+
 def test_anchor_customer_count():
     """After reseed, verify is_event_anchor count meets each event's min_customers."""
     cmd = [

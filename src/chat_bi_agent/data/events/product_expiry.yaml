@@ -37,6 +37,23 @@ events:
         product_subcategories: [短期理财]  # 与 related_products 一致；防止溢出到活期存款验证
         effect_type: sustained
 
+      # 持仓快照效应：续作目标产品在到期后的月末快照上 market_value 上抬
+      # （体现资金从 PROD_WEA_0030/0031 转入 PROD_WEA_0032/0033）
+      # 注意：rule 级显式 branch_ids/customer_tiers=[] 覆盖事件级的
+      # BR_CITY_0006 + HNW/AFFLUENT，让续作信号跨全行/全 tier 可见——
+      # 真实业务里资金转入不局限于上海私行；事件级 scope 留给 fct_balance_daily 主体效应。
+      - target_table: fct_holding
+        target_column: market_value
+        metric_name: renewal_market_value
+        delta: 15.0  # +15% 续作目标产品市值
+        delay_days: 0
+        ramp_days: 0
+        affected_account_sample: 1.0
+        product_ids: [PROD_WEA_0032, PROD_WEA_0033]
+        branch_ids: []      # 显式无过滤
+        customer_tiers: []  # 显式无过滤
+        effect_type: sustained
+
     required_population:
       min_customers: 50  # 降低 verify AVG 噪声底（√50→±14% vs √20→±22%）
       branches: [BR_CITY_0006]
@@ -78,6 +95,17 @@ events:
         related_products: [PROD_DEP_0005, PROD_DEP_0008]  # rca_evaluator alias 种子（narrator 提"七夕营销"也算命中这两个 ID）
         effect_type: sustained
 
+      # 营销响应效应：活动窗内被触达的目标客户 conversion_amount 显著上抬
+      - target_table: fct_campaign_response
+        target_column: conversion_amount
+        metric_name: qixi_conversion_amount
+        delta: 60.0  # +60% 转化金额（活动期 MASS/AFFLUENT 在主推两款上的应募）
+        delay_days: 0
+        ramp_days: 9  # 覆盖 8 月 10-19 日活动窗
+        affected_account_sample: 1.0
+        product_ids: [PROD_DEP_0005, PROD_DEP_0008]
+        effect_type: transient
+
     required_population:
       min_customers: 50  # 降低 verify AVG 噪声底
       branches: [BR_CITY_0000, BR_CITY_0002]
@@ -108,12 +136,15 @@ events:
     propagation:
       - target_table: fct_transaction
         target_column: amount
-        metric_name: loan_application_count
-        delta: 12.0  # +12% 贷款申请量
+        # 注意：propagation 只对已存在行做 amount × 1.12，并不会"增加 LOAN 行数"。
+        # 因此真实可观测的信号是 SUM(amount) 上升 12%，不是 COUNT(*) 上升 12%。
+        # metric_name 改为 amount，避免下游解读成"申请笔数"。
+        metric_name: loan_application_amount
+        delta: 12.0  # +12% 贷款申请金额（amount）
         delay_days: 7  # 政策反应滞后 7 天
         ramp_days: 14
         transaction_type: LOAN
-        affected_account_sample: 0.08
+        affected_account_sample: 0.25  # 25% LOAN 客户响应 LPR 政策（提调高于 0.08）
 
       - target_table: fct_balance_daily
         target_column: balance
@@ -135,10 +166,10 @@ events:
         min_txn_per_customer: 2
 
     expected_rca_conclusion: |
-      2026 年二季度，全行贷款申请量在 6 月中旬开始上升，较月初增长 12%，
+      2026 年二季度，全行贷款申请金额在 6 月中旬开始上升，较月初增长 12%，
       贷款余额也随之上升 5.5%。根本原因是 LPR 于 2026-06-20 下调 10bp，
       虽然政策信号立即发出，但客户行为变化存在 1-2 周的滞后。特别是
-      个人消费贷款和房屋贷款申请量增长最快，企业贷款响应较慢。
+      个人消费贷款和房屋贷款申请金额增长最快，企业贷款响应较慢。
 
   - id: spring_festival_withdrawal
     name: 春节大额现金支取

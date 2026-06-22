@@ -11,9 +11,7 @@ from chat_bi_agent.agents.p3.types import DrillRequest, FactAnchor
 
 DEFAULT_DIMS: list[str] = [
     "branch_id",
-    "sub_branch_id",
     "customer_tier",
-    "customer_segment",
     "product_id",
     "product_name",
     "transaction_type",

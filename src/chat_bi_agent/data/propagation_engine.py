@@ -10,7 +10,8 @@ from typing import Any, Optional
 class PropagationRule:
     """单条传导规则：事件如何影响某一指标。"""
 
-    target_table: str  # fct_transaction, fct_balance_daily, dim_customer
+    # fct_transaction | fct_balance_daily | fct_holding | fct_campaign_response | dim_customer
+    target_table: str
     target_column: str  # balance, amount, aum
     metric_name: str  # 业务指标名称
     delta: float  # 变化幅度（百分比），-8.5 表示下降 8.5%
@@ -65,7 +66,13 @@ class PropagationEngine:
         current_date: date,
     ) -> bool:
         """检查规则是否应该应用到这一行数据。"""
-        if rule.target_table not in ["fct_transaction", "fct_balance_daily", "dim_customer"]:
+        if rule.target_table not in [
+            "fct_transaction",
+            "fct_balance_daily",
+            "fct_holding",
+            "fct_campaign_response",
+            "dim_customer",
+        ]:
             return False
 
         # === transient vs sustained ===

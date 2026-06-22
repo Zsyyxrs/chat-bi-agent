@@ -85,13 +85,49 @@ def _build_anchor_customer(n_idx: int, event_id: str, branch_id: str, tier: str)
     }
 
 
-def _build_anchor_account(customer: dict, product_id: str, account_idx: int) -> dict:
+_PRODUCT_PREFIX_TO_ACCOUNT_TYPE = {
+    "LOA": "LOAN",
+    "WEA": "INVESTMENT",
+    "FUN": "INVESTMENT",
+    "INS": "INVESTMENT",
+    "CAR": "CARD",
+}
+
+# DEPOSIT 子类别需要细分：活期存款 → CURRENT，定期存款 / 大额存单 → SAVING；
+# 与 dimension_generator._ACCOUNT_TYPE_TO_PRODUCT_CATEGORIES 保持一致。
+_DEPOSIT_SUBCAT_TO_ACCOUNT_TYPE = {
+    "活期存款": "CURRENT",
+    "定期存款": "SAVING",
+    "大额存单": "SAVING",
+}
+
+
+def _account_type_for_product(product_id: str, product_index: dict | None = None) -> str:
+    # product_id format: "PROD_<3-char-category>_<NNNN>"
+    # (see dimension_generator.generate_products).
+    parts = product_id.split("_")
+    prefix = parts[1] if len(parts) >= 2 else ""
+    if prefix == "DEP" and product_index is not None:
+        subcat = product_index.get(product_id, {}).get("product_subcategory", "")
+        return _DEPOSIT_SUBCAT_TO_ACCOUNT_TYPE.get(subcat, "SAVING")
+    if prefix == "DEP":
+        # 缺 product_index 时退回 SAVING（旧行为），但应避免到这里。
+        return "SAVING"
+    return _PRODUCT_PREFIX_TO_ACCOUNT_TYPE.get(prefix, "CURRENT")
+
+
+def _build_anchor_account(
+    customer: dict,
+    product_id: str,
+    account_idx: int,
+    product_index: dict | None = None,
+) -> dict:
     # account_id must fit VARCHAR(32). customer_id is already short (CA_XXXX_NNN).
     cid_short = customer["customer_id"]
     return {
         "account_id": f"ACC_AN_{cid_short}_{account_idx:02d}",
         "customer_id": customer["customer_id"],
-        "account_type": "CURRENT",
+        "account_type": _account_type_for_product(product_id, product_index),
         "account_subtype": "ANCHOR",
         "currency": "CNY",
         "product_id": product_id,
@@ -208,7 +244,7 @@ def anchor_event_populations(
                 acct_idx += 1
                 if "product_ids" in hold_spec:
                     for pid in hold_spec["product_ids"]:
-                        acct = _build_anchor_account(cust, pid, acct_idx)
+                        acct = _build_anchor_account(cust, pid, acct_idx, product_index)
                         new_accounts.append(acct)
                         new_holdings.append(
                             _build_anchor_holding(cust, pid, account_id=acct["account_id"])
@@ -220,14 +256,14 @@ def anchor_event_populations(
                         hold_spec["product_subcategory"],
                         hash_key=cust["customer_id"],
                     )
-                    new_accounts.append(_build_anchor_account(cust, pid, acct_idx))
+                    new_accounts.append(_build_anchor_account(cust, pid, acct_idx, product_index))
                 elif "product_category" in hold_spec:
                     pid = pick_product_by_category(
                         product_index,
                         hold_spec["product_category"],
                         hash_key=cust["customer_id"],
                     )
-                    new_accounts.append(_build_anchor_account(cust, pid, acct_idx))
+                    new_accounts.append(_build_anchor_account(cust, pid, acct_idx, product_index))
 
         _insert_dim_accounts(cursor, new_accounts)
         if new_holdings:

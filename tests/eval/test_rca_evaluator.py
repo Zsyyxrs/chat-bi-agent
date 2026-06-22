@@ -50,7 +50,7 @@ def evaluator_with_questions(events_dir: Path, monkeypatch: pytest.MonkeyPatch) 
 
     Avoids dependence on the real attribution_evaluation.yaml.
     """
-    ev = RCAEvaluator(events_dir=events_dir)
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=False)
     ev.questions = [
         {
             "id": "Q_PRODUCT_ID",
@@ -120,20 +120,20 @@ def test_tokenize_zh_empty_input_returns_empty_set():
 
 
 def test_alias_map_includes_event_name_for_affected_product(events_dir: Path):
-    ev = RCAEvaluator(events_dir=events_dir)
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=False)
     assert "安鑫 90 天到期" in ev._dim_aliases["PROD_WEA_0030"]
     # Also the no-space variant
     assert "安鑫90天到期" in ev._dim_aliases["PROD_WEA_0030"]
 
 
 def test_alias_map_covers_related_products_from_propagation(events_dir: Path):
-    ev = RCAEvaluator(events_dir=events_dir)
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=False)
     assert "PROD_WEA_0032" in ev._dim_aliases
     assert "安鑫 90 天到期" in ev._dim_aliases["PROD_WEA_0032"]
 
 
 def test_alias_map_missing_events_dir_returns_empty(tmp_path: Path):
-    ev = RCAEvaluator(events_dir=tmp_path / "nope")
+    ev = RCAEvaluator(events_dir=tmp_path / "nope", use_llm_judge=False)
     assert ev._dim_aliases == {}
 
 
@@ -530,7 +530,7 @@ def test_concl_sim_unrelated_still_low(evaluator_with_questions: RCAEvaluator):
 
 def test_hallucination_no_valid_set_skips_product_check(events_dir: Path):
     """未传 valid_product_ids 时，仅保留 >200% 的旧检测；编造产品 ID 不算幻觉。"""
-    ev = RCAEvaluator(events_dir=events_dir)  # 不传 valid_product_ids
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=False)  # 不传 valid_product_ids
     ev.questions = [
         {
             "id": "Q_HALLU_OFF",
@@ -552,6 +552,7 @@ def test_hallucination_phantom_product_id_flagged(events_dir: Path):
     ev = RCAEvaluator(
         events_dir=events_dir,
         valid_product_ids={"PROD_WEA_0030", "PROD_WEA_0031", "PROD_DEP_0005"},
+        use_llm_judge=False,
     )
     ev.questions = [
         {
@@ -574,6 +575,7 @@ def test_hallucination_only_valid_ids_no_flag(events_dir: Path):
     ev = RCAEvaluator(
         events_dir=events_dir,
         valid_product_ids={"PROD_WEA_0030", "PROD_WEA_0031"},
+        use_llm_judge=False,
     )
     ev.questions = [
         {
@@ -593,7 +595,7 @@ def test_hallucination_only_valid_ids_no_flag(events_dir: Path):
 
 def test_hallucination_number_check_still_works(events_dir: Path):
     """旧的 >200% 数字检测仍然生效，独立于 product_id 检测。"""
-    ev = RCAEvaluator(events_dir=events_dir)
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=False)
     ev.questions = [
         {
             "id": "Q_HALLU_NUM",
@@ -608,3 +610,164 @@ def test_hallucination_number_check_still_works(events_dir: Path):
         agent_conclusion="",
     )
     assert score.hallucination_detected is True
+
+
+# --- G-Eval LLM judge tests --------------------------------------------------
+
+
+class _FakeChatResult:
+    def __init__(self, content: str):
+        self.content = content
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+
+class _FakeLLM:
+    def __init__(self, content: str):
+        self._content = content
+        self.calls = 0
+        self.last_user_prompt = ""
+
+    def chat(self, system_prompt: str, user_prompt: str, temperature: float = 0.0):
+        self.calls += 1
+        self.last_user_prompt = user_prompt
+        return _FakeChatResult(self._content)
+
+
+def test_conclusion_similarity_uses_llm_judge_when_enabled(events_dir: Path):
+    """LLM judge 返回有效 JSON → conclusion_similarity = 4 维平均，rubric 落到 score."""
+    fake = _FakeLLM(
+        "```json\n"
+        '{"event_identification": 1.0, "quantification": 0.5, '
+        '"mechanism": 0.75, "scope": 1.0}\n```'
+    )
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=True, llm_client=fake)
+    ev.questions = [
+        {
+            "id": "Q_JUDGE",
+            "related_event": "anxin_90_expire",
+            "expected_affected_dimensions": [],
+            "expected_root_cause": "安鑫 90 天理财到期导致高净值客户赎回，续作率 42%",
+        }
+    ]
+    score = ev.evaluate_response(
+        question_id="Q_JUDGE",
+        agent_response="narrative ...",
+        agent_conclusion="上海分行高净值客户活期存款下降 8.5%",
+    )
+    assert fake.calls == 1
+    # avg = (1.0 + 0.5 + 0.75 + 1.0) / 4 = 0.8125
+    assert abs(score.conclusion_similarity - 0.8125) < 1e-6
+    assert score.conclusion_rubric is not None
+    assert score.conclusion_rubric["event_identification"] == 1.0
+    assert score.conclusion_rubric["method"] == "llm_judge"
+
+
+def test_conclusion_similarity_falls_back_to_jaccard_on_judge_failure(events_dir: Path):
+    """LLM judge 抛异常或返回无法解析 JSON → 回退 Jaccard，rubric=None."""
+
+    class _BrokenLLM:
+        def chat(self, system_prompt: str, user_prompt: str, temperature: float = 0.0):
+            raise RuntimeError("simulated API failure")
+
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=True, llm_client=_BrokenLLM())
+    ev.questions = [
+        {
+            "id": "Q_FALLBACK",
+            "related_event": "anxin_90_expire",
+            "expected_affected_dimensions": [],
+            "expected_root_cause": "安鑫 90 天理财到期",
+        }
+    ]
+    score = ev.evaluate_response(
+        question_id="Q_FALLBACK",
+        agent_response="...",
+        agent_conclusion="安鑫 90 天理财到期触发赎回",
+    )
+    # 完全 fallback 到 Jaccard，rubric=None 表示走了 fallback 路径
+    assert score.conclusion_rubric is None
+    assert score.conclusion_similarity > 0.0  # Jaccard 命中 "安鑫"/"90"/"理财"/"到期"
+
+
+def test_conclusion_similarity_use_llm_judge_false_uses_jaccard(events_dir: Path):
+    """use_llm_judge=False 时不调 LLM，rubric=None."""
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=False)
+    ev.questions = [
+        {
+            "id": "Q_NOJUDGE",
+            "related_event": "anxin_90_expire",
+            "expected_affected_dimensions": [],
+            "expected_root_cause": "安鑫 90 天到期",
+        }
+    ]
+    score = ev.evaluate_response(
+        question_id="Q_NOJUDGE",
+        agent_response="...",
+        agent_conclusion="安鑫到期",
+    )
+    assert score.conclusion_rubric is None
+
+
+def test_llm_judge_injects_evaluation_criteria_and_key_metrics(events_dir: Path):
+    """B 方案：question.evaluation_criteria + expected_key_metrics 注入 judge prompt。"""
+    fake = _FakeLLM(
+        '```json\n{"event_identification": 1.0, "quantification": 1.0, '
+        '"mechanism": 1.0, "scope": 1.0}\n```'
+    )
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=True, llm_client=fake)
+    ev.questions = [
+        {
+            "id": "Q_RICH",
+            "related_event": "anxin_90_expire",
+            "expected_affected_dimensions": [],
+            "expected_root_cause": "安鑫 90 天到期",
+            "evaluation_criteria": [
+                {"product_identification": "Agent 是否精准定位到源产品和目标产品"},
+                {"behavior_pattern": "Agent 是否解释了赎回→续作的行为链条"},
+            ],
+            "expected_key_metrics": [
+                {
+                    "metric": "retail_deposit_balance",
+                    "change_direction": "down",
+                    "magnitude": "~8.5%",
+                }
+            ],
+        }
+    ]
+    ev.evaluate_response(
+        question_id="Q_RICH",
+        agent_response="...",
+        agent_conclusion="安鑫 90 天理财到期触发赎回",
+    )
+    # criterion 键名 + 描述都在 prompt 里
+    assert "product_identification" in fake.last_user_prompt
+    assert "Agent 是否精准定位到源产品和目标产品" in fake.last_user_prompt
+    # key_metrics 三元组在 prompt 里
+    assert "retail_deposit_balance" in fake.last_user_prompt
+    assert "down" in fake.last_user_prompt
+    assert "~8.5%" in fake.last_user_prompt
+
+
+def test_llm_judge_handles_question_without_optional_blocks(events_dir: Path):
+    """没有 evaluation_criteria / expected_key_metrics 时 prompt 仍正常构造。"""
+    fake = _FakeLLM(
+        '```json\n{"event_identification": 1.0, "quantification": 0.5, '
+        '"mechanism": 0.5, "scope": 0.5}\n```'
+    )
+    ev = RCAEvaluator(events_dir=events_dir, use_llm_judge=True, llm_client=fake)
+    ev.questions = [
+        {
+            "id": "Q_MIN",
+            "related_event": "anxin_90_expire",
+            "expected_affected_dimensions": [],
+            "expected_root_cause": "安鑫到期",
+        }
+    ]
+    score = ev.evaluate_response(
+        question_id="Q_MIN",
+        agent_response="...",
+        agent_conclusion="安鑫到期",
+    )
+    assert score.conclusion_rubric is not None
+    assert "本题人工 rubric" not in fake.last_user_prompt
+    assert "期望关键指标" not in fake.last_user_prompt

@@ -1,13 +1,15 @@
 """Seed script: orchestrate all dimension and fact table generation."""
 
+import calendar
 import sys
+from dataclasses import dataclass, field
 from datetime import date
 
 import click
 
 from chat_bi_agent.data.db import DatabaseConfig, get_cursor
 from chat_bi_agent.data.dimension_generator import DimensionGenerator
-from chat_bi_agent.data.event_loader import EventLoader
+from chat_bi_agent.data.event_loader import Event, EventLoader
 from chat_bi_agent.data.propagation_engine import PropagationEngine, PropagationRule
 from chat_bi_agent.data.scenario_anchor import anchor_event_populations
 from chat_bi_agent.data.transaction_generator import TransactionGenerator
@@ -38,16 +40,100 @@ def insert_rows(cursor, table: str, rows: list[dict], batch_size: int = 1000) ->
     return inserted
 
 
+def _month_end_snapshots(start: date, end: date) -> list[date]:
+    """Return month-end dates falling within [start, end] inclusive."""
+    snapshots: list[date] = []
+    year, month = start.year, start.month
+    while True:
+        last_day = calendar.monthrange(year, month)[1]
+        d = date(year, month, last_day)
+        if d > end:
+            break
+        if d >= start:
+            snapshots.append(d)
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return snapshots
+
+
+@dataclass
+class ExpiryLifecycle:
+    """Outputs of apply_product_expiry_lifecycle, consumed by fact generators."""
+
+    account_close_dates: dict[str, date] = field(default_factory=dict)
+    product_expiry_dates: dict[str, date] = field(default_factory=dict)
+
+
+def apply_product_expiry_lifecycle(cursor, events: list[Event]) -> ExpiryLifecycle:
+    """Close accounts holding products that expire on a PRODUCT_EXPIRY event date.
+
+    For each event with type=PRODUCT_EXPIRY and a non-empty affected_dimensions.product_id,
+    sets dim_account.close_date = event.date (and status = 'CLOSED') for every account
+    holding one of the expired products — but only when the existing close_date is NULL
+    or strictly later than the event date (we never push a pre-existing closure forward).
+
+    Returns an ExpiryLifecycle with two dicts:
+      - account_close_dates: account_id -> close_date for every matching account,
+        using the account's *current* close_date after the UPDATE. The balance
+        generator uses this to stop emitting daily rows past the closure date.
+      - product_expiry_dates: product_id -> earliest expiry date across events.
+        The balance generator uses this to keep its random product_id picker from
+        producing post-expiry references on non-anchor rows.
+    """
+    result = ExpiryLifecycle()
+    for event in events:
+        if event.type != "PRODUCT_EXPIRY":
+            continue
+        prod_ids = event.affected_dimensions.get("product_id") or []
+        if not prod_ids:
+            continue
+        cursor.execute(
+            "UPDATE dim_account SET close_date = %s, status = 'CLOSED' "
+            "WHERE product_id = ANY(%s) AND (close_date IS NULL OR close_date > %s)",
+            (event.date, prod_ids, event.date),
+        )
+        cursor.execute(
+            "SELECT account_id, close_date FROM dim_account "
+            "WHERE product_id = ANY(%s) AND close_date IS NOT NULL",
+            (prod_ids,),
+        )
+        for acct_id, close_dt in cursor.fetchall():
+            # If an account is affected by multiple expiry events, keep the earliest closure.
+            if (
+                acct_id not in result.account_close_dates
+                or close_dt < result.account_close_dates[acct_id]
+            ):
+                result.account_close_dates[acct_id] = close_dt
+        for pid in prod_ids:
+            prev = result.product_expiry_dates.get(pid)
+            if prev is None or event.date < prev:
+                result.product_expiry_dates[pid] = event.date
+    return result
+
+
 def apply_event_propagations(
     row: dict, events: list, engine: PropagationEngine, current_date: date
 ) -> None:
     """对单行应用事件传导规则。"""
     for event in events:
-        # 跳过时间不符的事件
-        if (current_date - event.date).days < -20 or (current_date - event.date).days > 40:
+        # 跳过时间不符的事件。上界放宽到 400 天以容纳 fct_holding 月末快照场景下
+        # sustained 效应（如 anxin_90_expire 之后所有未来月末持仓都需要带效应）。
+        # 引擎内部的 should_apply_rule 仍会按 effect_type/transient 自行裁剪。
+        if (current_date - event.date).days < -20 or (current_date - event.date).days > 400:
             continue
 
         for prop_dict in event.propagation:
+            # 维度过滤：rule 级显式提供则覆盖 event 级（含显式 [] 表示"无过滤"）。
+            # 缺省（key 不在 dict 里）才回退到 event.affected_dimensions。
+            # 用例：fct_holding 的续作效应需要跨全行/全 tier 看到，不能被 event 级
+            # 的 BR_CITY_0006 + HNW 锁死。
+            def _resolve_scope(key: str, event_default):
+                if key in prop_dict:
+                    return prop_dict[key] or None  # 显式 [] → None (no filter)
+                return event_default or None
+
             rule = PropagationRule(
                 target_table=prop_dict.get("target_table", ""),
                 target_column=prop_dict.get("target_column", ""),
@@ -62,12 +148,13 @@ def apply_event_propagations(
                 related_products=prop_dict.get("related_products"),
                 transaction_type=prop_dict.get("transaction_type"),
                 transaction_channel=prop_dict.get("transaction_channel"),
-                # 维度过滤：事件级 affected_dimensions 提供 branch/tier 过滤。
-                # product_id / product_subcategories 来自 rule 自身——事件级
-                # affected_dimensions.product_id 是 RCA 叙事用，不能用作 row 过滤。
-                branch_ids=event.affected_dimensions.get("branch_id") or None,
-                customer_tiers=event.affected_dimensions.get("customer_tier") or None,
-                branch_levels=event.affected_dimensions.get("branch_level") or None,
+                branch_ids=_resolve_scope("branch_ids", event.affected_dimensions.get("branch_id")),
+                customer_tiers=_resolve_scope(
+                    "customer_tiers", event.affected_dimensions.get("customer_tier")
+                ),
+                branch_levels=_resolve_scope(
+                    "branch_levels", event.affected_dimensions.get("branch_level")
+                ),
                 product_ids=prop_dict.get("product_ids") or None,
                 product_subcategories=prop_dict.get("product_subcategories"),
                 effect_type=prop_dict.get("effect_type", "transient"),
@@ -123,9 +210,8 @@ def seed_dimensions(
         print("⏳ Seeding dim_account...", file=sys.stderr)
         accounts = list(
             generator.generate_accounts(
-                customer_ids=customer_ids,
-                product_ids=product_ids,
-                branch_ids=branch_ids,
+                customers=customers,
+                products=products,
                 count=10000,
             )
         )
@@ -140,16 +226,25 @@ def seed_dimensions(
         )
         counts["dim_date"] = insert_rows(cursor, "dim_date", dates)
 
-    return counts, branch_ids, customer_ids, product_ids, account_ids
+    return (
+        counts,
+        branch_ids,
+        customer_ids,
+        product_ids,
+        account_ids,
+        customers,
+        products,
+        accounts,
+    )
 
 
 def seed_facts(
     config: DatabaseConfig,
     generator: TransactionGenerator,
-    branch_ids: list[str],
-    customer_ids: list[str],
-    product_ids: list[str],
-    account_ids: list[str],
+    branches: list[dict] | None = None,
+    customers: list[dict] | None = None,
+    products: list[dict] | None = None,
+    accounts: list[dict] | None = None,
     transaction_rows: int = 100000,
     events: list = None,
     forced_specs: list | None = None,
@@ -178,7 +273,8 @@ def seed_facts(
         anchor_metadata: dict[str, dict] = {}
         if engine is not None:
             cursor.execute(
-                "SELECT account_id, customer_id, product_id, branch_id "
+                "SELECT account_id, customer_id, product_id, branch_id, "
+                "open_date, close_date "
                 "FROM dim_account WHERE is_event_anchor = TRUE"
             )
             for r in cursor.fetchall():
@@ -187,21 +283,27 @@ def seed_facts(
                     "customer_id": r[1],
                     "product_id": r[2],
                     "branch_id": r[3],
+                    "open_date": r[4],
+                    "close_date": r[5],
                 }
+
+        # Apply PRODUCT_EXPIRY lifecycle: close accounts holding expired products so
+        # balance/holding generators stop emitting rows past the expiry date.
+        lifecycle = apply_product_expiry_lifecycle(cursor, events) if events else ExpiryLifecycle()
+        # 月末快照覆盖整个 fact 数据区间，保证 P-o-P 对照点（上月末 vs 当月末）可得。
+        holding_snapshot_dates = _month_end_snapshots(date(2025, 1, 1), date(2026, 9, 30))
 
         # fct_transaction
         print(f"⏳ Seeding fct_transaction (~{transaction_rows} rows)...", file=sys.stderr)
         txn_batch = []
         txn_count = 0
         for row in generator.generate_transactions(
-            account_ids=account_ids,
-            customer_ids=customer_ids,
-            product_ids=product_ids,
-            branch_ids=branch_ids,
+            accounts=accounts,
             start_date=date(2025, 1, 1),
             end_date=date(2026, 9, 30),
-            transactions_per_account_per_month=transaction_rows / len(account_ids) / 17,
+            transactions_per_account_per_month=transaction_rows / max(1, len(accounts)) / 17,
             force_specs=forced_specs,
+            anchor_metadata=anchor_metadata or None,
         ):
             # 应用事件传导规则
             if engine and events:
@@ -222,14 +324,13 @@ def seed_facts(
         bal_batch = []
         bal_count = 0
         for row in generator.generate_balance_daily(
-            account_ids=account_ids,
-            customer_ids=customer_ids,
-            product_ids=product_ids,
-            branch_ids=branch_ids,
+            accounts=accounts,
             start_date=date(2025, 1, 1),
             end_date=date(2026, 9, 30),
             force_account_ids=anchor_account_ids or None,
             anchor_metadata=anchor_metadata or None,
+            account_close_dates=lifecycle.account_close_dates or None,
+            product_expiry_dates=lifecycle.product_expiry_dates or None,
         ):
             if engine and events:
                 apply_event_propagations(row, events, engine, row.get("dt"))
@@ -244,26 +345,37 @@ def seed_facts(
 
         counts["fct_balance_daily"] = bal_count
 
-        # fct_holding
-        print("⏳ Seeding fct_holding...", file=sys.stderr)
-        holdings = list(
-            generator.generate_holdings(
-                customer_ids=customer_ids,
-                product_ids=product_ids,
-                branch_ids=branch_ids,
-                count=3000,
-            )
+        # fct_holding（月末快照，每个 snapshot_dt 都单独算 excluded_products）
+        print(
+            f"⏳ Seeding fct_holding ({len(holding_snapshot_dates)} month-end snapshots)...",
+            file=sys.stderr,
         )
-        counts["fct_holding"] = insert_rows(cursor, "fct_holding", holdings)
+        holding_count = 0
+        for snap_date in holding_snapshot_dates:
+            excluded = {
+                pid for pid, expiry in lifecycle.product_expiry_dates.items() if expiry <= snap_date
+            }
+            holdings = list(
+                generator.generate_holdings(
+                    accounts=accounts,
+                    snapshot_date=snap_date,
+                    count=3000,
+                    excluded_product_ids=excluded or None,
+                )
+            )
+            if engine and events:
+                for row in holdings:
+                    apply_event_propagations(row, events, engine, snap_date)
+            holding_count += insert_rows(cursor, "fct_holding", holdings)
+        counts["fct_holding"] = holding_count
 
         # fct_risk_event
         print("⏳ Seeding fct_risk_event...", file=sys.stderr)
         risk_batch = []
         risk_count = 0
         for row in generator.generate_risk_events(
-            customer_ids=customer_ids,
-            account_ids=account_ids,
-            branch_ids=branch_ids,
+            customers=customers,
+            accounts=accounts,
             start_date=date(2025, 1, 1),
             end_date=date(2026, 9, 30),
         ):
@@ -282,12 +394,13 @@ def seed_facts(
         camp_batch = []
         camp_count = 0
         for row in generator.generate_campaign_responses(
-            customer_ids=customer_ids,
-            product_ids=product_ids,
-            branch_ids=branch_ids,
+            customers=customers,
+            product_ids=[p["product_id"] for p in products],
             start_date=date(2025, 1, 1),
             end_date=date(2026, 9, 30),
         ):
+            if engine and events:
+                apply_event_propagations(row, events, engine, row.get("dt"))
             camp_batch.append(row)
             if len(camp_batch) >= 1000:
                 camp_count += insert_rows(cursor, "fct_campaign_response", camp_batch)
@@ -299,6 +412,40 @@ def seed_facts(
         counts["fct_campaign_response"] = camp_count
 
     return counts
+
+
+def ensure_readonly_grants(config: DatabaseConfig) -> None:
+    """Idempotently re-apply chatbi_readonly grants — keeps reseed self-healing.
+
+    Mirrors docker/postgres/init/03_readonly_role.sql; the init script only runs
+    when the PG data volume is empty, so without this call a fresh container
+    that misses the init (or a manual REVOKE) silently breaks NL2SQL execution
+    with a confusing "relation does not exist" error (PG masks denied-permission
+    as missing-relation). Safe to run on every reseed.
+    """
+    print("⏳ Ensuring chatbi_readonly grants...", file=sys.stderr)
+    with get_cursor(config) as cursor:
+        cursor.execute(
+            """
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='chatbi_readonly') THEN
+                    CREATE ROLE chatbi_readonly WITH LOGIN PASSWORD 'readonly_dev';
+                END IF;
+            END $$;
+            """
+        )
+        cursor.execute(f"GRANT CONNECT ON DATABASE {config.database} TO chatbi_readonly")
+        cursor.execute("GRANT USAGE ON SCHEMA public TO chatbi_readonly")
+        cursor.execute("GRANT SELECT ON ALL TABLES IN SCHEMA public TO chatbi_readonly")
+        cursor.execute(
+            f"ALTER DEFAULT PRIVILEGES FOR ROLE {config.user} IN SCHEMA public "
+            "GRANT SELECT ON TABLES TO chatbi_readonly"
+        )
+        cursor.execute(
+            "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public "
+            "FROM chatbi_readonly"
+        )
+    print("✅ chatbi_readonly grants applied", file=sys.stderr)
 
 
 @click.command()
@@ -401,9 +548,12 @@ def main(
     (
         dim_counts,
         branch_ids,
-        customer_ids,
-        product_ids,
-        account_ids,
+        _,  # customer_ids (unused — full dicts below)
+        _,  # product_ids
+        _,  # account_ids
+        customers,
+        products,
+        accounts,
     ) = seed_dimensions(config, dim_gen, branch_count=50)
 
     # Anchor event populations into dim tables (if needed)
@@ -437,15 +587,18 @@ def main(
     fact_counts = seed_facts(
         config,
         txn_gen,
-        branch_ids=branch_ids,
-        customer_ids=customer_ids,
-        product_ids=product_ids,
-        account_ids=account_ids,
+        customers=customers,
+        products=products,
+        accounts=accounts,
         transaction_rows=rows,
         events=events,
         forced_specs=forced_specs if with_events else None,
         dim_indexes=dim_indexes,
     )
+
+    # Apply readonly grants every reseed so the NL2SQL agent can read fresh data
+    # even if the original init script never took effect on the PG volume.
+    ensure_readonly_grants(config)
 
     all_counts = {**dim_counts, **fact_counts}
 

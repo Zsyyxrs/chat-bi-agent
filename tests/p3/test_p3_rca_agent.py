@@ -100,9 +100,9 @@ def test_drilldown_selector_failure_uses_fallback(fake_events_dir: Path):
     p1 = FakeP1Agent(
         responses={
             "q001": _good_fact_anchor_p1("q001"),
-            # Fallback uses DEFAULT_DIMS[:2] = ["branch_id", "sub_branch_id"]
+            # Fallback uses DEFAULT_DIMS[:2] = ["branch_id", "customer_tier"]
             "q001__drill_0": _good_drill_p1("q001__drill_0", "branch_id", "BR_CITY_0006"),
-            "q001__drill_1": _good_drill_p1("q001__drill_1", "sub_branch_id", "SUB_001"),
+            "q001__drill_1": _good_drill_p1("q001__drill_1", "customer_tier", "HIGH_NET_WORTH"),
         }
     )
     llm = MagicMock()

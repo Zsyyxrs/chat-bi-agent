@@ -42,10 +42,14 @@ def load_questions() -> list[dict]:
 
 
 @observe(name="p3_eval_batch")
-def main(limit: int | None = None) -> int:
+def main(limit: int | None = None, only_qid: str | None = None) -> int:
     get_client()
     questions = load_questions()
-    if limit is not None:
+    if only_qid:
+        questions = [q for q in questions if q.get("id") == only_qid]
+        if not questions:
+            raise SystemExit(f"未找到 question_id={only_qid}")
+    elif limit is not None:
         questions = questions[:limit]
 
     p1 = P1NL2SQLAgent(top_k=4)
@@ -108,6 +112,15 @@ def main(limit: int | None = None) -> int:
             f"  Drills: {len(report.drill_results)} "
             f"(skipped={sum(1 for d in report.drill_results if d.skipped)})"
         )
+        # 每个 drill 落详细诊断：NL、SQL 头、行数、error_class
+        for i, dr in enumerate(report.drill_results):
+            sql_preview = (dr.sql or "").replace("\n", " ").strip()[:160]
+            print(
+                f"    drill[{i}] dim={dr.dimension} skipped={dr.skipped} "
+                f"rows={len(dr.rows)} err_class={dr.error_class} "
+                f"top_k={len(dr.pareto_top_k)} sql={sql_preview!r}"
+            )
+            print(f"      nl: {dr.nl_question[:200]}")
         print(f"  Events matched: {[ev.event_id for ev in report.matched_events]}")
         print(f"  Latency: {report.latency_ms}ms")
         print(
@@ -123,6 +136,19 @@ def main(limit: int | None = None) -> int:
                 "question_id": qid,
                 "drill_dimensions": [dr.dimension for dr in report.drill_results],
                 "skipped_drills": sum(1 for d in report.drill_results if d.skipped),
+                "drill_details": [
+                    {
+                        "dimension": dr.dimension,
+                        "nl_question": dr.nl_question,
+                        "sql": dr.sql,
+                        "row_count": len(dr.rows),
+                        "first_row": dr.rows[0] if dr.rows else None,
+                        "pareto_top_k_count": len(dr.pareto_top_k),
+                        "error_class": dr.error_class,
+                        "skipped": dr.skipped,
+                    }
+                    for dr in report.drill_results
+                ],
                 "matched_event_ids": [ev.event_id for ev in report.matched_events],
                 "latency_ms": report.latency_ms,
                 "score": round(combined, 4),
@@ -130,6 +156,7 @@ def main(limit: int | None = None) -> int:
                     "event_hit": bool(score.event_hit),
                     "dimension_recall": round(score.dimension_recall, 4),
                     "conclusion_similarity": round(score.conclusion_similarity, 4),
+                    "conclusion_rubric": score.conclusion_rubric,
                     "hallucination_detected": bool(score.hallucination_detected),
                 },
                 "narrative_preview": report.narrative[:200],
@@ -156,7 +183,7 @@ def main(limit: int | None = None) -> int:
         "avg_score": round(avg_score, 4),
         "per_question": per_question,
     }
-    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     print(f"\nWrote baseline JSON → {out_path}")
     return 0
 
@@ -164,9 +191,12 @@ def main(limit: int | None = None) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=None, help="Run first N questions only")
+    parser.add_argument(
+        "--qid", type=str, default=None, help="Run only this question_id (overrides --limit)"
+    )
     args = parser.parse_args()
     try:
-        exit_code = main(limit=args.limit)
+        exit_code = main(limit=args.limit, only_qid=args.qid)
     finally:
         flush()
     sys.exit(exit_code)

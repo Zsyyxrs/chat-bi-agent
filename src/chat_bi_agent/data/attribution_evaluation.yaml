@@ -100,11 +100,11 @@ evaluation_questions:
 
   - id: attribution_q005
     question: |
-      6 月 20 日前后，我们的贷款申请量开始上升，持续增长约 2 周。这背后
+      6 月 20 日前后，我们的贷款申请金额开始上升，持续增长约 2 周。这背后
       的驱动因素是什么？是营销活动还是政策变化？
     related_event: lpr_cut_q2
     expected_root_cause: |
-      二季度 LPR 下调 10bp（6 月 20 日发布），刺激借款人需求。贷款申请量
+      二季度 LPR 下调 10bp（6 月 20 日发布），刺激借款人需求。贷款申请金额
       在政策发布后 7-14 天开始明显增长（+12%），反映了政策反应的滞后性。
       个人消费贷款和房屋贷款响应最快，企业贷款响应较慢。这是典型的
       宏观政策向微观行为传导的案例。
@@ -112,7 +112,7 @@ evaluation_questions:
       - transaction_type: LOAN
       - policy_date: "2026-06-20"
     expected_key_metrics:
-      - metric: loan_application_count
+      - metric: loan_application_amount
         change_direction: up
         magnitude: ~12%
         delay_days: 7

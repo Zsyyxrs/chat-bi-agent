@@ -167,6 +167,29 @@ class DimensionGenerator:
     # dim_product
     # ============================================================
 
+    # 产品风险等级按 (category, subcategory) 的业务合理范围。
+    # DEPOSIT/LOAN/CARD = R1（存贷卡无投资风险）；
+    # WEALTH/FUND/INSURANCE 按子类别波动。
+    _PRODUCT_RISK_LEVEL_RULES: dict[tuple[str, str], list[str]] = {
+        ("DEPOSIT", "活期存款"): ["R1"],
+        ("DEPOSIT", "定期存款"): ["R1"],
+        ("DEPOSIT", "大额存单"): ["R1"],
+        ("LOAN", "个人贷款"): ["R1"],
+        ("LOAN", "房屋贷款"): ["R1"],
+        ("LOAN", "小微贷款"): ["R1"],
+        ("WEALTH", "短期理财"): ["R2", "R3"],
+        ("WEALTH", "长期理财"): ["R3", "R4"],
+        ("WEALTH", "保证收益"): ["R2"],
+        ("FUND", "股票基金"): ["R4", "R5"],
+        ("FUND", "债券基金"): ["R2", "R3"],
+        ("FUND", "混合基金"): ["R3", "R4"],
+        ("INSURANCE", "人寿保险"): ["R2", "R3"],
+        ("INSURANCE", "财产保险"): ["R1"],
+        ("INSURANCE", "健康保险"): ["R1", "R2"],
+        ("CARD", "借记卡"): ["R1"],
+        ("CARD", "信用卡"): ["R1"],
+    }
+
     def generate_products(self, count: int = 100) -> Generator[dict, None, None]:
         """Generate product dimension data."""
         categories = {
@@ -178,11 +201,11 @@ class DimensionGenerator:
             "CARD": ["借记卡", "信用卡"],
         }
 
-        risk_levels = ["R1", "R2", "R3", "R4", "R5"]
         prod_id = 0
 
         for category, subcats in categories.items():
             for subcat in subcats:
+                risk_pool = self._PRODUCT_RISK_LEVEL_RULES.get((category, subcat), ["R1"])
                 for i in range(max(1, count // len(categories) // len(subcats))):
                     product_id = f"PROD_{category[0:3]}_{prod_id:04d}"
                     term_days = None
@@ -196,7 +219,7 @@ class DimensionGenerator:
                         "product_name": f"{subcat}产品{i + 1}",
                         "product_category": category,
                         "product_subcategory": subcat,
-                        "risk_level": random.choice(risk_levels),
+                        "risk_level": random.choice(risk_pool),
                         "term_days": term_days,
                         "expected_return_rate": round(random.uniform(0.01, 0.06), 4),
                         "min_amount": random.choice([100, 1000, 5000, 10000]),
@@ -211,35 +234,107 @@ class DimensionGenerator:
     # dim_account
     # ============================================================
 
+    # account_type → list of (product_category, allowed_subcategories) rules.
+    # `allowed_subcategories=None` means any subcategory in that category is OK.
+    # DEPOSIT 拆开：活期存款挂 CURRENT，定期/大额存单挂 SAVING。
+    _ACCOUNT_TYPE_TO_PRODUCT_CATEGORIES: dict[str, list[tuple[str, set[str] | None]]] = {
+        "CURRENT": [("DEPOSIT", {"活期存款"})],
+        "SAVING": [("DEPOSIT", {"定期存款", "大额存单"})],
+        "LOAN": [("LOAN", None)],
+        "CARD": [("CARD", None)],
+        "INVESTMENT": [("WEALTH", None), ("FUND", None), ("INSURANCE", None)],
+    }
+
+    # account_subtype 业务真实枚举（替代原 f"{type}_subtype_N" 占位）。
+    _ACCOUNT_SUBTYPES: dict[str, list[str]] = {
+        "CURRENT": ["个人活期", "对公活期", "代发工资", "二类户"],
+        "SAVING": ["三个月定期", "半年定期", "一年定期", "三年定期", "大额存单"],
+        "LOAN": ["消费贷", "房贷", "车贷", "经营贷", "信用贷"],
+        "CARD": ["普卡", "金卡", "白金卡"],
+        "INVESTMENT": ["公募基金", "私募基金", "银行理财", "保险产品"],
+    }
+
     def generate_accounts(
         self,
-        customer_ids: list[str],
-        product_ids: list[str],
-        branch_ids: list[str],
+        customers: list[dict],
+        products: list[dict],
         count: int = 20000,
     ) -> Generator[dict, None, None]:
-        """Generate account dimension data."""
+        """Generate account dimension data.
+
+        约束：
+        - account.product_id 的 (类别,子类别) 必须符合 account_type 的白名单
+          （CURRENT↔活期存款 / SAVING↔定期·大额存单 / LOAN↔LOAN 等）
+        - account.branch_id 沿用所属客户的开户分行
+        - account.open_date 不早于客户 open_date
+        """
         account_types = ["CURRENT", "SAVING", "LOAN", "CARD", "INVESTMENT"]
         statuses = ["ACTIVE", "FROZEN", "CLOSED", "DORMANT"]
+
+        # 按 (category, subcategory) 分桶，按 account_type 预算候选池。
+        products_by_cat_subcat: dict[tuple[str, str], list[str]] = {}
+        for p in products:
+            key = (p["product_category"], p["product_subcategory"])
+            products_by_cat_subcat.setdefault(key, []).append(p["product_id"])
+
+        products_for_type: dict[str, list[str]] = {}
+        for atype, rules in self._ACCOUNT_TYPE_TO_PRODUCT_CATEGORIES.items():
+            pool: list[str] = []
+            for cat, allowed_subcats in rules:
+                for (c, s), pids in products_by_cat_subcat.items():
+                    if c == cat and (allowed_subcats is None or s in allowed_subcats):
+                        pool.extend(pids)
+            products_for_type[atype] = pool
+
+        # 风险等级合规：客户 Cn 只能买 Rm，要求 m <= n。
+        # 预算 (account_type, risk_appetite) → 合规候选池。
+        product_risk_index = {p["product_id"]: p["risk_level"] for p in products}
+        risk_filtered_pools: dict[tuple[str, str], list[str]] = {}
+        for atype, pool in products_for_type.items():
+            for appetite in ("C1", "C2", "C3", "C4", "C5"):
+                max_r = int(appetite[1])
+                risk_filtered_pools[(atype, appetite)] = [
+                    pid for pid in pool if int(product_risk_index[pid][1]) <= max_r
+                ]
 
         for i in range(count):
             account_id = f"622202{i:010d}"
             acct_type = random.choice(account_types)
-            customer_id = random.choice(customer_ids)
-            product_id = random.choice(product_ids) if acct_type != "CURRENT" else None
-            open_year = random.randint(2015, 2026)
+            customer = random.choice(customers)
+            appetite = customer["risk_appetite"]
+
+            # 优先用风险合规池；为空时（如 C1 客户开 INVESTMENT 账户但无 R1 产品）
+            # 回落到不带风险约束的 acct_type 完整池，保证账户类型一致性优先。
+            compliant_pool = risk_filtered_pools.get((acct_type, appetite)) or []
+            pool = compliant_pool or products_for_type.get(acct_type) or []
+            product_id = random.choice(pool) if pool else None
+
+            cust_open = customer["open_date"]
+            open_year = random.randint(cust_open.year, 2026)
+            if open_year == cust_open.year:
+                open_month = random.randint(cust_open.month, 12)
+                if open_month == cust_open.month:
+                    open_day = random.randint(cust_open.day, 28)
+                else:
+                    open_day = random.randint(1, 28)
+            else:
+                open_month = random.randint(1, 12)
+                open_day = random.randint(1, 28)
+            open_date_val = date(open_year, open_month, open_day)
 
             status = random.choices(statuses, weights=[70, 10, 15, 5])[0]
 
             yield {
                 "account_id": account_id,
-                "customer_id": customer_id,
+                "customer_id": customer["customer_id"],
                 "account_type": acct_type,
-                "account_subtype": f"{acct_type}_subtype_{random.randint(1, 5)}",
+                "account_subtype": random.choice(
+                    self._ACCOUNT_SUBTYPES.get(acct_type) or ["GENERAL"]
+                ),
                 "currency": "CNY",
                 "product_id": product_id,
-                "branch_id": random.choice(branch_ids),
-                "open_date": date(open_year, random.randint(1, 12), random.randint(1, 28)),
+                "branch_id": customer["branch_id"],
+                "open_date": open_date_val,
                 "close_date": None if status != "CLOSED" else date(open_year + 1, 1, 1),
                 "status": status,
             }

@@ -109,8 +109,8 @@ _DRILL_AUGMENT = (
     "   - <metric>_change_pct：(current - prior) / NULLIF(prior, 0)（相对变化，小数形式）\n"
     "   下游按列名后缀提取 *_change 做归因排序；缺一不可。\n"
     "3. 时间窗口选择：\n"
-    '   - nl_question 给出具体窗口 → 该窗口作分析期，对照期取**紧接其前的等长窗口**。\n'
-    '   - current 必须对应分析期（事件期间/题面询问的窗口），prior 必须对应对照期。\n'
+    "   - nl_question 给出具体窗口 → 该窗口作分析期，对照期取**紧接其前的等长窗口**。\n"
+    "   - current 必须对应分析期（事件期间/题面询问的窗口），prior 必须对应对照期。\n"
     "4. 维度筛选条件（WHERE 里的 branch_id / customer_tier / account_type 等）必须\n"
     "   完整继承 nl_question 给出的代码值（如 BR_CITY_0006、HIGH_NET_WORTH），\n"
     "   不要简化、翻译成中文、或自己造编码。\n"

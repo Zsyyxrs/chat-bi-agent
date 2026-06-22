@@ -1,5 +1,7 @@
 """Tests for fact_anchor module: _compute_change pure logic."""
 
+from decimal import Decimal
+
 import pytest
 
 from chat_bi_agent.agents.p3.fact_anchor import _compute_change, run_fact_anchor
@@ -82,6 +84,67 @@ def test_run_fact_anchor_p1_failure_returns_none():
         p1_agent=p1,
     )
     assert anchor is None
+
+
+def test_run_fact_anchor_augments_pop_question_with_dual_window_constraint():
+    # fact_anchor 对 PoP 题（含"为什么/上升/下降/变化"等关键词）必须拼双窗口指令，
+    # 否则 P1 可能写单窗口 SQL，导致 _extract_current_prior 拿到 prior=None。
+    p1 = FakeP1Agent(
+        responses={
+            "q_aug": FakeP1Result(
+                question_id="q_aug",
+                sql="SELECT current_balance, prior_balance FROM t",
+                rows=[{"current_balance": 92.0, "prior_balance": 100.0}],
+            )
+        }
+    )
+    run_fact_anchor(question_id="q_aug", question="8月余额为什么涨了12%", p1_agent=p1)
+    assert len(p1.calls) == 1
+    sent_qid, sent_question = p1.calls[0]
+    assert sent_qid == "q_aug"
+    assert "8月余额为什么涨了12%" in sent_question
+    assert "current_<metric>" in sent_question  # 双窗口指令在
+    assert "prior_<metric>" in sent_question
+
+
+def test_run_fact_anchor_skips_augment_for_meta_question():
+    # q008 类元问题（"如何设计预警模型"）不能 augment，否则 LLM 会强造无意义的 PoP SQL。
+    p1 = FakeP1Agent(
+        responses={
+            "q_meta": FakeP1Result(
+                question_id="q_meta",
+                sql="SELECT product_id, renewal_rate FROM t",
+                rows=[{"product_id": "PROD_X", "renewal_rate": 0.42}],
+            )
+        }
+    )
+    question = "如果我想设计一个客户续作率的早期预警模型，可以基于哪些指标？"
+    run_fact_anchor(question_id="q_meta", question=question, p1_agent=p1)
+    _, sent_question = p1.calls[0]
+    assert sent_question == question  # 原题不变，没拼 augment
+    assert "current_<metric>" not in sent_question
+
+
+def test_run_fact_anchor_accepts_decimal_rows():
+    # psycopg2 RealDictCursor returns NUMERIC/DECIMAL columns as Decimal —
+    # fact_anchor must treat them as numeric, not skip them.
+    p1 = FakeP1Agent(
+        responses={
+            "q_dec": FakeP1Result(
+                question_id="q_dec",
+                sql=(
+                    "SELECT current_balance, prior_balance FROM t "
+                    "WHERE dt BETWEEN '2026-05-01' AND '2026-05-20'"
+                ),
+                rows=[{"current_balance": Decimal("92.0"), "prior_balance": Decimal("100.0")}],
+            )
+        }
+    )
+    anchor = run_fact_anchor(question_id="q_dec", question="why?", p1_agent=p1)
+    assert anchor is not None
+    assert anchor.current_value == 92.0
+    assert anchor.prior_value == 100.0
+    assert anchor.direction == "down"
 
 
 def test_run_fact_anchor_no_prior_column():

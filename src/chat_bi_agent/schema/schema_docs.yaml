@@ -38,7 +38,7 @@ tables:
       - {name: gender, type: VARCHAR(8), description: "性别：M 男 / F 女 / U 未知"}
       - {name: birth_date, type: DATE, description: "出生日期"}
       - {name: age, type: INT, description: "年龄"}
-      - {name: customer_tier, type: VARCHAR(16), description: "客户层级：HIGH_NET_WORTH 私行 / AFFLUENT 财富 / MASS 大众 / BASIC 基础"}
+      - {name: customer_tier, type: VARCHAR(16), description: "客户层级（数据库存英文枚举，WHERE 比较只能用英文）：HIGH_NET_WORTH（私行/高净值）| AFFLUENT（财富）| MASS（大众）| BASIC（基础）"}
       - {name: risk_appetite, type: VARCHAR(8), description: "风险偏好：C1 保守 / C2 稳健 / C3 平衡 / C4 进取 / C5 激进"}
       - {name: open_date, type: DATE, description: "客户开户日期"}
       - {name: branch_id, type: VARCHAR(16), description: "归属机构编号（FK → dim_branch）"}
@@ -48,7 +48,7 @@ tables:
     embed_text: |
       表名 dim_customer：客户维度表，零售客户基础信息
       业务域：客户
-      关键列：customer_id（客户号）、customer_name（姓名）、customer_tier（层级 HIGH_NET_WORTH/AFFLUENT/MASS/BASIC）、branch_id（所属分行）、risk_appetite（风险偏好 C1-C5）、aum（资产规模）、age、gender
+      关键列：customer_id（客户号）、customer_name（姓名）、customer_tier（层级，DB 存英文枚举，WHERE 用英文：HIGH_NET_WORTH/AFFLUENT/MASS/BASIC；题面写"高净值/私行"应映射为 HIGH_NET_WORTH，不要直接把中文当字段值）、branch_id（所属分行）、risk_appetite（风险偏好 C1-C5）、aum（资产规模）、age、gender
       典型用途：按分行/层级/风险偏好筛选客户；高净值/私行/财富客户画像分析
 
   - name: dim_product
@@ -87,7 +87,7 @@ tables:
     columns:
       - {name: account_id, type: VARCHAR(32), description: "账号（如 6222021234567890001）"}
       - {name: customer_id, type: VARCHAR(16), description: "所属客户号（FK → dim_customer）"}
-      - {name: account_type, type: VARCHAR(16), description: "账户类型：CURRENT 活期 / SAVING 定期 / LOAN 贷款 / CARD 银行卡 / INVESTMENT 投资。注：业务方也可能用中文 活期存款/定期存款 等"}
+      - {name: account_type, type: VARCHAR(16), description: "账户类型（数据库存英文枚举，WHERE 比较只能用英文）：CURRENT（活期）| SAVING（定期）| LOAN（贷款）| CARD（银行卡）| INVESTMENT（投资）。题面写中文应翻译成英文，禁止 IN ('CURRENT', '活期存款') 这种把中文当值的写法"}
       - {name: account_subtype, type: VARCHAR(32), description: "账户子类型"}
       - {name: currency, type: VARCHAR(8), description: "账户币种"}
       - {name: product_id, type: VARCHAR(16), description: "对应产品（活期账户可为 NULL）"}
@@ -98,7 +98,7 @@ tables:
     embed_text: |
       表名 dim_account：账户维度表，一个客户名下的多个账户
       业务域：账户
-      关键列：account_id（账号）、customer_id（客户）、account_type（类型 CURRENT 活期 / SAVING 定期 / LOAN 贷款 / CARD / INVESTMENT，也可能用 活期存款/定期存款 等中文）、product_id（关联产品）、branch_id（开户机构）、status（ACTIVE/FROZEN/CLOSED/DORMANT）
+      关键列：account_id（账号）、customer_id（客户）、account_type（类型，DB 存英文枚举，WHERE 用英文：CURRENT/SAVING/LOAN/CARD/INVESTMENT；题面中文如"活期存款/定期存款"应映射为 CURRENT/SAVING）、product_id（关联产品）、branch_id（开户机构）、status（ACTIVE/FROZEN/CLOSED/DORMANT）
       典型用途：按账户类型/产品/分行查询账户；账户级聚合（如某分行的定期存款账户余额）
 
   - name: dim_date
@@ -187,7 +187,7 @@ tables:
   - name: fct_holding
     type: fact
     domain: 持仓
-    description: 理财/基金/保险/贵金属持仓快照（仅月末/季初等关键日有数据，非日级；日级余额请用 fct_balance_daily.balance）
+    description: 理财/基金/保险/贵金属持仓快照（仅月末有数据，非日级；月中/任意日的持仓请用上月末作对照，日级余额请用 fct_balance_daily.balance）
     primary_key: "(snapshot_dt, account_id, product_id)"
     foreign_keys:
       - customer_id → dim_customer.customer_id
@@ -209,13 +209,14 @@ tables:
     embed_text: |
       表名 fct_holding：客户持仓事实表
       业务域：持仓（理财/基金/保险/贵金属）
+      快照频率：仅月末（每月末一行），无日级数据。查询任意日期请改用最近的月末快照；日级余额走 fct_balance_daily.balance。
       关键列：snapshot_dt、customer_id、product_id、branch_id、holding_amount（本金）、market_value（市值）、cost_basis（成本）、pnl（浮动盈亏）
       典型用途：理财/基金持仓查询；客户/产品维度持仓聚合；盈亏分析
 
   - name: fct_risk_event
     type: fact
     domain: 风险
-    description: 风险事件事实表，逾期/欺诈/反洗钱告警/信用降级等
+    description: 风险事件事实表，逾期/欺诈/反洗钱告警/信用降级等（⚠️ 仅模拟数据，与业务事件库无关联，不要用于归因/根因分析）
     primary_key: event_id
     foreign_keys:
       - customer_id → dim_customer.customer_id
@@ -235,13 +236,14 @@ tables:
     embed_text: |
       表名 fct_risk_event：风险事件事实表
       业务域：风险
+      ⚠️ 数据警告：仅模拟数据，未与任何业务事件（如 anxin_90 到期、LPR 下调、春节等）建立关联，所有 event_type/severity 分布纯随机。不要用于根因归因或事件影响分析。
       关键列：event_time、dt、customer_id、event_type（OVERDUE 逾期/FRAUD 欺诈/AML_ALERT 反洗钱/CREDIT_DOWNGRADE 信用降级/DISPUTE 争议）、severity（LOW/MEDIUM/HIGH/CRITICAL）、status（OPEN/INVESTIGATING/CLOSED/CONFIRMED）、amount
-      典型用途：风险事件统计；逾期/欺诈监控；按严重程度/客户/机构聚合风险
+      典型用途：风险事件统计；逾期/欺诈监控；按严重程度/客户/机构聚合风险（仅描述性统计，不做归因）
 
   - name: fct_campaign_response
     type: fact
     domain: 营销
-    description: 营销活动响应事实表，触达→点击→转化的全链路
+    description: 营销活动响应事实表，触达→点击→转化的全链路（⚠️ 事件覆盖：仅 MARKETING_EVENT 类事件——目前只有"七夕营销 2026-08-10~19"——会在此表留下真实事件信号；春节支取/LPR 下调/产品到期等非营销事件期间此表只是常态营销噪声，不能用作那些事件的归因证据）
     primary_key: response_id
     foreign_keys:
       - customer_id → dim_customer.customer_id
@@ -263,5 +265,6 @@ tables:
     embed_text: |
       表名 fct_campaign_response：营销活动响应事实表
       业务域：营销
+      ⚠️ 事件信号覆盖：仅 MARKETING_EVENT 类事件（当前只有"七夕营销 2026-08-10~19"）会在此表的 conversion_amount 上留下真实事件信号；春节支取（SEASONAL_EVENT）、LPR 下调（MACRO_EVENT）、产品到期（PRODUCT_EXPIRY）等期间此表只是常态营销噪声。归因这些事件时不要把该表的数值波动当作证据；如题面问"是营销还是 X"，应在此表查到"无对应活动/无信号"以反证 X。
       关键列：campaign_id、campaign_name（如 七夕定期存款活动）、customer_id、touch_time、dt、channel（SMS/APP_PUSH/CALL/EMAIL/IN_PERSON）、response_type（NO_RESPONSE/CLICKED/INTERESTED/CONVERTED/REJECTED）、conversion_amount、product_id
       典型用途：营销 ROI 分析；活动转化率统计；按渠道/分行/产品聚合营销效果
