@@ -15,7 +15,7 @@ evaluation_questions:
 
   - id: attribution_q001
     question: |
-      上海分行（BR_CITY_0006）的高净值客户活期存款余额为什么在五月中旬突然下降 8%？
+      上海分行（BR_CITY_0006）的高净值客户活期存款余额在五月中旬出现明显下降。
       请分析主要原因和影响客户群体。
     related_event: anxin_90_expire
     expected_root_cause: |
@@ -29,7 +29,8 @@ evaluation_questions:
     expected_key_metrics:
       - metric: retail_deposit_balance
         change_direction: down
-        magnitude: ~8.5%
+        magnitude: ~3%   # observable PoP（10 天分析窗口，事件 ramp+sustained 仅落 6 天，avg multiplier ≈ 0.4）
+        nominal_delta: -8.5%  # 事件名义满额 delta，仅作参考
     evaluation_criteria:
       - dimension_recall: "Agent 是否识别出 branch_id, customer_tier, product_id"
       - event_hit: "Agent 是否提到理财产品到期"
@@ -42,9 +43,10 @@ evaluation_questions:
       转入了其他理财产品。这说明了什么？能否定位具体的产品和原因？
     related_event: anxin_90_expire
     expected_root_cause: |
-      这是安鑫 90 天理财产品到期后的续作现象。虽然总体赎回率 58%，但 42% 的
-      续作客户将资金转入其他理财产品（如 PROD_WEA_0032, PROD_WEA_0033），
-      所以可以观察到"赎回 → 续作"的双向流动。
+      这是安鑫 90 天理财产品到期后的续作现象。源产品 PROD_WEA_0030/0031
+      到期赎回导致活期存款回落；部分客户将资金转入同属 WEALTH 类目的
+      PROD_WEA_0032/0033，体现为这两款产品市值同期上行（+15%）。
+      因此呈现"赎回 → 同类续作"的双向流动。
     expected_affected_dimensions:
       - product_id: PROD_WEA_0030
       - related_products: [PROD_WEA_0032, PROD_WEA_0033]
@@ -58,7 +60,7 @@ evaluation_questions:
 
   - id: attribution_q003
     question: |
-      2 月 15-23 日期间，我们观察到全行 ATM 和柜面的现金支取交易量突增 25%。
+      2 月 15-23 日期间，我们观察到全行 ATM 和柜面的现金支取明显增加。
       这是异常波动吗？如果是，根因是什么？主要涉及哪些客户群体？
     related_event: spring_festival_withdrawal
     expected_root_cause: |
@@ -80,7 +82,7 @@ evaluation_questions:
 
   - id: attribution_q004
     question: |
-      从 2 月中旬到 2 月末，我们的日均余额有波动。这与特定的商业事件有关吗？
+      2 月 15 日到月底，我们的日均余额有波动。这与特定的商业事件有关吗？
       能否基于数据模式推断客户行为？
     related_event: spring_festival_withdrawal
     expected_root_cause: |
@@ -100,7 +102,7 @@ evaluation_questions:
 
   - id: attribution_q005
     question: |
-      6 月 20 日前后，我们的贷款申请金额开始上升，持续增长约 2 周。这背后
+      6 月底到 7 月中旬，我们的贷款申请金额开始上升。这背后
       的驱动因素是什么？是营销活动还是政策变化？
     related_event: lpr_cut_q2
     expected_root_cause: |
@@ -114,11 +116,13 @@ evaluation_questions:
     expected_key_metrics:
       - metric: loan_application_amount
         change_direction: up
-        magnitude: ~12%
+        magnitude: ~3%   # observable PoP（25 天窗口 6/26-7/20，事件 ramp 期 6/27-7/11，sample 0.25，avg multiplier × sample ≈ 0.07-0.10）
+        nominal_delta: +12%
         delay_days: 7
       - metric: loan_balance
         change_direction: up
-        magnitude: ~5.5%
+        magnitude: ~2%   # observable PoP（25 天窗口；balance 规则 delay=14 ramp=21 sustained，仅 17 天有信号且 multiplier 未饱和，avg ≈ 0.26）
+        nominal_delta: +5.5%
     evaluation_criteria:
       - policy_recognition: "Agent 是否识别出 LPR 下调政策"
       - causal_inference: "Agent 是否建立政策与贷款增长的因果关系"
@@ -130,7 +134,7 @@ evaluation_questions:
 
   - id: attribution_q006
     question: |
-      8 月中旬，杭州和南京分行的定期存款余额增长了 12%。这是市场
+      8 月中旬，杭州和南京分行的定期存款余额出现明显增长。这是市场
       竞争导致的定期存款流入吗？还是我们的营销活动产生了效果？
     related_event: qixi_deposit_campaign
     expected_root_cause: |
