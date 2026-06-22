@@ -114,7 +114,10 @@ _DRILL_AUGMENT = (
     "4. 维度筛选条件（WHERE 里的 branch_id / customer_tier / account_type 等）必须\n"
     "   完整继承 nl_question 给出的代码值（如 BR_CITY_0006、HIGH_NET_WORTH），\n"
     "   不要简化、翻译成中文、或自己造编码。\n"
-    "5. 快照表（fct_holding 等只在月末有数据的表）必须用月末作为窗口端点。"
+    "5. 快照表（fct_holding 等只在月末有数据的表）必须用**单日等值**条件\n"
+    "   （WHERE snapshot_dt = DATE 'YYYY-MM-DD'），禁止 BETWEEN 区间——\n"
+    "   区间会同时聚合多个月末快照（如 4/30 + 5/31 都计入 current），导致双倍计数。\n"
+    "   若 nl_question 仍写成 'YYYY-MM-DD 至 YYYY-MM-DD'，取区间右端点对应的月末作为单日。"
 )
 
 
