@@ -119,8 +119,14 @@ class TransactionGenerator:
         forced_inserts: dict[date, list[dict]] = {}
         if force_specs:
             for spec in force_specs:
-                window_start = max(start_date, spec.event_date - timedelta(days=5))
-                window_end = min(end_date, spec.event_date + timedelta(days=10))
+                window_start = max(
+                    start_date,
+                    spec.event_date + timedelta(days=spec.injection_start_offset_days),
+                )
+                window_end = min(
+                    end_date,
+                    spec.event_date + timedelta(days=spec.injection_end_offset_days),
+                )
                 window_days = max(1, (window_end - window_start).days + 1)
                 for acct_id in spec.account_ids:
                     for k in range(spec.min_txn_per_customer):

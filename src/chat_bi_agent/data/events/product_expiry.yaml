@@ -210,7 +210,12 @@ events:
       must_have_transactions:
         type: WITHDRAW
         channels: [ATM, COUNTER]
-        min_txn_per_customer: 3
+        min_txn_per_customer: 5
+        # 显式注入窗口：verify_events 春节用 14 天 baseline (2/01-2/14) + 9 天 event (2/15-2/23)
+        # 窗口跨 prior 14 天 + event 9 天 → 5 次注入按 k*7%24 偏移 = 3 在 prior + 2 在 event
+        # 数学：event_daily/prior_daily = 1.25 × 2/9 / (3/14) ≈ 1.30 → PoP +30% (在 ±30% 容差内)
+        injection_offset_start_days: -14
+        injection_offset_end_days: 9
 
     expected_rca_conclusion: |
       春节假期期间（2026-02-15 至 2026-02-23），现金支取量明显增加 25%，

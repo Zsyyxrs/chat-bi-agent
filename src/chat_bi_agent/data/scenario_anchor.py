@@ -40,7 +40,12 @@ def pick_product_by_category(product_index: dict[str, dict], category: str, hash
 
 @dataclass
 class ForcedTxnSpec:
-    """交易生成时强制注入的规格：来自 must_have_transactions。"""
+    """交易生成时强制注入的规格：来自 must_have_transactions。
+
+    injection_*_offset_days 定义注入窗口相对 event_date 的偏移；默认 -5/+10
+    兼容旧行为。脉冲事件（如春节）应自动收紧到匹配 propagation 规则的
+    [delay_days, delay_days + ramp_days]，避免注入溢出到对照期淹没信号。
+    """
 
     event_id: str
     account_ids: list[str]
@@ -48,6 +53,8 @@ class ForcedTxnSpec:
     channels: list[str] | None
     min_txn_per_customer: int
     event_date: date
+    injection_start_offset_days: int = -5
+    injection_end_offset_days: int = 10
 
 
 @dataclass
@@ -271,6 +278,38 @@ def anchor_event_populations(
 
         if rp.must_have_transactions:
             mht = rp.must_have_transactions
+            # Derive injection window from the propagation rule that matches
+            # this must_have_transactions (target=fct_transaction.amount with
+            # the same transaction_type). Falls back to -5/+10 when no rule
+            # matches—preserves legacy behavior for events without a tx rule.
+            inj_start, inj_end = -5, 10
+            mht_type = mht.get("type")
+            mht_channels = set(mht.get("channels") or [])
+            explicit_override = (
+                "injection_offset_start_days" in mht or "injection_offset_end_days" in mht
+            )
+            rules_to_scan = [] if explicit_override else (getattr(event, "propagation", []) or [])
+            for rule in rules_to_scan:
+                # rule may be either a PropagationRule instance or a raw dict
+                # (depends on call site); read via .get / getattr uniformly.
+                def _f(name):
+                    if isinstance(rule, dict):
+                        return rule.get(name)
+                    return getattr(rule, name, None)
+                if _f("target_table") != "fct_transaction" or _f("target_column") != "amount":
+                    continue
+                r_type = _f("transaction_type")
+                if r_type and r_type != mht_type:
+                    continue
+                r_channels = _f("transaction_channel")
+                if r_channels and mht_channels and not (set(r_channels) & mht_channels):
+                    continue
+                inj_start = _f("delay_days") or 0
+                inj_end = (_f("delay_days") or 0) + (_f("ramp_days") or 0)
+                break
+            if explicit_override:
+                inj_start = mht.get("injection_offset_start_days", inj_start)
+                inj_end = mht.get("injection_offset_end_days", inj_end)
             report.forced_specs.append(
                 ForcedTxnSpec(
                     event_id=event.id,
@@ -279,6 +318,8 @@ def anchor_event_populations(
                     channels=mht.get("channels"),
                     min_txn_per_customer=mht.get("min_txn_per_customer", 1),
                     event_date=event.date,
+                    injection_start_offset_days=inj_start,
+                    injection_end_offset_days=inj_end,
                 )
             )
 
