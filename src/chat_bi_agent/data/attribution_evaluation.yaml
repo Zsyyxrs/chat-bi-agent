@@ -88,7 +88,7 @@ evaluation_questions:
       这反映了零售客户在春节假期期间的大额现金提取行为。期末（2 月 24 日后）
       余额逐步恢复常态，说明现金需求是短期的、可预测的。
     expected_affected_dimensions:
-      - branch_level: [SUBBRANCH, CITY]
+      - customer_tier: [BASIC, MASS]
       - transaction_period: "2026-02-15 to 2026-02-23"
     evaluation_criteria:
       - temporal_analysis: "Agent 是否能关联特定时间窗口与业务事件"
