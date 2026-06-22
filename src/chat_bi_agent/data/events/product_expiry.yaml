@@ -156,16 +156,19 @@ events:
         delta: 25.0  # +25% 现金支取金额
         delay_days: 0  # 从腊月廿八（2月15日）开始
         ramp_days: 9   # 覆盖9天（2月15-23日）
+        ramp_type: flat  # 春节"集中性脉冲"——整 9 天满额 +25%，不做 0→1 渐变
         transaction_type: WITHDRAW
         transaction_channel: [ATM, COUNTER]
-        affected_account_sample: 0.45
+        affected_account_sample: 0.65  # 65% BASIC/MASS 客户春节集中取现（提调高于 0.45）
 
       - target_table: fct_balance_daily
         target_column: balance
         metric_name: daily_balance
         delta: -18.0  # -18% 期末余额下降
         delay_days: 0
-        affected_account_sample: 0.45
+        ramp_days: 9   # 与现金取现规则同步 9 天
+        ramp_type: flat
+        affected_account_sample: 0.65  # 与现金取现规则一致
 
     required_population:
       min_customers: 50

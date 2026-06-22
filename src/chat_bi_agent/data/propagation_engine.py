@@ -128,13 +128,10 @@ class PropagationEngine:
         """
         根据渐变规则计算乘数。
 
-        示例：
-        - rule.delta = -8.5 (下降 8.5%)
-        - rule.ramp_days = 3
-        - day 0: multiplier = 0 (还未开始)
-        - day 1: multiplier = 0.33 (线性渐变第 1/3)
-        - day 2: multiplier = 0.66
-        - day 3: multiplier = 1.0 (完全应用)
+        - linear: 0 → 1 线性爬升，到 ramp_days 后保持 1.0
+        - exponential: 指数缓入
+        - flat: 进入效应窗就直接 1.0，无渐变（用于"季节性脉冲"类事件——
+          覆盖整段 ramp_days 都按满额 delta，而不是平均只拿到 50% 名义值）
         """
         if days_since_start < 0:
             return 0.0
@@ -147,6 +144,8 @@ class PropagationEngine:
             # 指数缓入缓出
             progress = days_since_start / rule.ramp_days if rule.ramp_days > 0 else 1.0
             return progress**2
+        elif rule.ramp_type == "flat":
+            return 1.0
         else:
             return 1.0
 
