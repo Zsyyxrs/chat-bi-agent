@@ -8,7 +8,7 @@ events:
     date: 2026-05-14
     description: 短期理财产品普遍到期，触发大额赎回和余额下降
     affected_dimensions:
-      branch_id: [BR_CITY_0006]  # 上海分行城分行
+      branch_id: [BR_CITY_0006]  # 上海浦东分行
       customer_tier: [HIGH_NET_WORTH, AFFLUENT]
       product_id: [PROD_WEA_0030, PROD_WEA_0031]
 

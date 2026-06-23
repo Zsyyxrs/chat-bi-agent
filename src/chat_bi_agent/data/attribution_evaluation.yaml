@@ -15,7 +15,7 @@ evaluation_questions:
 
   - id: attribution_q001
     question: |
-      上海分行（BR_CITY_0006）的高净值客户活期存款余额在五月中旬出现明显下降。
+      上海浦东分行（BR_CITY_0006）的高净值客户活期存款余额在五月中旬出现明显下降。
       请分析主要原因和影响客户群体。
     related_event: anxin_90_expire
     expected_root_cause: |

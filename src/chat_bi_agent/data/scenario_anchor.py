@@ -301,6 +301,7 @@ def anchor_event_populations(
                     if isinstance(rule, dict):
                         return rule.get(name)
                     return getattr(rule, name, None)
+
                 if _f("target_table") != "fct_transaction" or _f("target_column") != "amount":
                     continue
                 r_type = _f("transaction_type")
