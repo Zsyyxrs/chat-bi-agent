@@ -103,10 +103,17 @@ _FACT_ANCHOR_AUGMENT = (
     "不能用月中区间：分析期=问题月份的月末，对照期=上月末。"
     '示例：题面问"5 月中旬持仓下降" → current=snapshot_dt=5/31，prior=snapshot_dt=4/30。\n'
     "5. 单行输出汇总值即可，不需要按 GROUP BY 维度展开（维度拆解由后续 drill 完成）。\n"
-    "6. 度量选择默认按\"金额\"语义解读，除非题面显式写\"笔数/次数\"：\n"
-    "   - \"交易量/支取量/存取量/转账量/消费额/收入\" → SUM(amount)\n"
-    "   - \"交易笔数/支取次数/transactions count\" → COUNT(*)\n"
-    "   银行域里\"量\"类量词缺省都是金额，不是计数；选错会让信号完全消失。"
+    '6. 度量选择默认按"金额"语义解读，除非题面显式写"笔数/次数"：\n'
+    '   - "交易量/支取量/存取量/转账量/消费额/收入" → SUM(amount)\n'
+    '   - "交易笔数/支取次数/transactions count" → COUNT(*)\n'
+    '   银行域里"量"类量词缺省都是金额，不是计数；选错会让信号完全消失。\n'
+    "7. 题面若出现具体城市/分行名（如\"杭州/南京/上海/北京/深圳和XX分行\"），\n"
+    "   **必须**在 WHERE 加分支过滤（JOIN dim_branch + WHERE b.city IN (...)"
+    " 或 b.branch_name LIKE），**严禁**当作\"全行\"bank-wide 查询。\n"
+    "   反例（fact anchor 漏 pin 会让信号被全行数据稀释甚至反向）：\n"
+    "     题面 \"杭州和南京分行的定期存款余额增长\" → \n"
+    "     错：SELECT SUM(balance)... WHERE product_subcategory='定期存款'（全行）\n"
+    "     对：SELECT SUM(balance)... WHERE product_subcategory='定期存款' AND b.city IN ('杭州','南京')"
 )
 
 # 关键词判断是否需要给 P1 加 PoP augment。
