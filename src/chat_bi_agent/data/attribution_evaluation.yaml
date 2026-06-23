@@ -29,8 +29,9 @@ evaluation_questions:
     expected_key_metrics:
       - metric: retail_deposit_balance
         change_direction: down
-        magnitude: ~3%   # observable PoP（10 天分析窗口，事件 ramp+sustained 仅落 6 天，avg multiplier ≈ 0.4）
-        nominal_delta: -8.5%  # 事件名义满额 delta，仅作参考
+        # magnitude 故意不写：observable PoP 随 Agent 选择的窗口和 seed 随机流漂移
+        # （-3% 估算 vs -5.95% 实测），用固定数字喂 LLM judge 会误判 quantification。
+        # 方向 down 是结构稳定的，足以评估 Agent 是否抓对趋势。
     evaluation_criteria:
       - dimension_recall: "Agent 是否识别出 branch_id, customer_tier, product_id"
       - event_hit: "Agent 是否提到理财产品到期"
@@ -74,7 +75,8 @@ evaluation_questions:
     expected_key_metrics:
       - metric: cash_withdrawal_amount
         change_direction: up
-        magnitude: ~25%
+        # magnitude 不写：spring_festival 自然池密度 ~5 txn/天，PoP 在 -43% ~ +294% 区间
+        # 随 seed 漂移（参见 events/product_expiry.yaml 同事件配置块的搁置说明）。
     evaluation_criteria:
       - seasonal_recognition: "Agent 是否识别出春节季节性而非异常"
       - customer_segmentation: "Agent 是否指出 BASIC/MASS 层影响更大"
@@ -116,13 +118,12 @@ evaluation_questions:
     expected_key_metrics:
       - metric: loan_application_amount
         change_direction: up
-        magnitude: ~3%   # observable PoP（25 天窗口 6/26-7/20，事件 ramp 期 6/27-7/11，sample 0.25，avg multiplier × sample ≈ 0.07-0.10）
-        nominal_delta: +12%
         delay_days: 7
+        # magnitude 故意不写：observable PoP 受 sample=0.25 + ramp 长度 + Agent 窗口影响极大，
+        # 自然 LOAN 池密度也偏低（生成器权重 2/102），固定数字反而误导评估。
       - metric: loan_balance
         change_direction: up
-        magnitude: ~2%   # observable PoP（25 天窗口；balance 规则 delay=14 ramp=21 sustained，仅 17 天有信号且 multiplier 未饱和，avg ≈ 0.26）
-        nominal_delta: +5.5%
+        # magnitude 同上：balance 规则 delay=14 ramp=21 sustained，观测幅度依赖窗口落点。
     evaluation_criteria:
       - policy_recognition: "Agent 是否识别出 LPR 下调政策"
       - causal_inference: "Agent 是否建立政策与贷款增长的因果关系"
@@ -148,7 +149,8 @@ evaluation_questions:
     expected_key_metrics:
       - metric: saving_deposit_balance
         change_direction: up
-        magnitude: ~12%
+        # magnitude 不写：nominal +12% 对应 sustained 全幅期，Agent 若选 8/10-8/19 窗口
+        # 因 delay=2 ramp=5 只能观测到 ~+6% (avg multiplier 0.5)，固定 12% 会误判。
     evaluation_criteria:
       - campaign_attribution: "Agent 是否将增长归因于七夕营销活动"
       - channel_identification: "Agent 是否提到抖音/微信等渠道"

@@ -171,8 +171,11 @@ class TransactionGenerator:
                     random.choice(regular_account_ids) if random.random() > 0.2 else None
                 )
 
-                txn_types = ["DEPOSIT", "WITHDRAW", "TRANSFER", "PAYMENT", "INTEREST", "FEE"]
-                txn_type_dist = random.choices(txn_types, weights=[15, 20, 30, 25, 5, 5])[0]
+                # LOAN weight=2 (~2% of natural txns) — without this, fct_transaction
+                # has zero natural LOAN rows and q005 (loan_application_amount) prior
+                # window is empty, leaving Agent no baseline to compute PoP against.
+                txn_types = ["DEPOSIT", "WITHDRAW", "TRANSFER", "PAYMENT", "INTEREST", "FEE", "LOAN"]
+                txn_type_dist = random.choices(txn_types, weights=[15, 20, 30, 25, 5, 5, 2])[0]
                 channels = ["MOBILE", "INTERNET", "COUNTER", "ATM", "AGENT", "API"]
                 channel_dist = random.choices(channels, weights=[40, 30, 10, 10, 5, 5])[0]
 
