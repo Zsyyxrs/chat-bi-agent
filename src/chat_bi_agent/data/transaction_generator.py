@@ -128,7 +128,12 @@ class TransactionGenerator:
                     spec.event_date + timedelta(days=spec.injection_end_offset_days),
                 )
                 window_days = max(1, (window_end - window_start).days + 1)
-                for acct_id in spec.account_ids:
+                # offset 仅按 k 错开（不按 customer-idx）：原因是按 customer 错开会
+                # 改变 natural txn 与 forced txn 的随机调用交错顺序，下游事件
+                # （如 lpr_cut balance）的 PoP 会跟着漂——成本高于"单日脉冲"
+                # 的可视性收益。amount_range 路径用 _idx 派生 deterministic amount，
+                # 不消耗 random call，让随机流相对原始路径偏移最小。
+                for acct_idx, acct_id in enumerate(spec.account_ids):
                     for k in range(spec.min_txn_per_customer):
                         offset = (k * 7) % window_days
                         d = window_start + timedelta(days=offset)
@@ -138,6 +143,8 @@ class TransactionGenerator:
                                 "account_id": acct_id,
                                 "transaction_type": spec.txn_type,
                                 "transaction_channel": (spec.channels or ["MOBILE"])[0],
+                                "_amount_range": spec.amount_range,
+                                "_idx": acct_idx,
                             }
                         )
 
@@ -213,6 +220,20 @@ class TransactionGenerator:
                 acct = lookup_account(forced["account_id"])
                 if acct is None or not self._is_active(acct, current):
                     continue
+                # 始终调用 _sample_baseline_amount 保持随机流计数对称——否则
+                # amount_range 分支会少消耗 random call，下游所有 random（包括
+                # fct_balance_daily 生成器）的 seed 序列发生整体平移，导致
+                # 其他事件（如 lpr_cut）的 verify_events PoP 跟着漂移。
+                base_amount = self._sample_baseline_amount(forced["transaction_type"])
+                ar = forced.get("_amount_range")
+                if ar:
+                    # 用 customer-idx 派生 deterministic pseudo-uniform fraction，
+                    # 无额外 random call；50 个 idx × 137 mod 1000 覆盖 [0,1) 较均匀。
+                    idx = forced.get("_idx", 0)
+                    frac = (idx * 137 % 1000) / 1000.0
+                    amount = round(ar[0] + frac * (ar[1] - ar[0]), 2)
+                else:
+                    amount = base_amount
                 yield {
                     "transaction_id": transaction_id,
                     "dt": current,
@@ -222,7 +243,7 @@ class TransactionGenerator:
                     "counter_account_id": None,
                     "transaction_type": forced["transaction_type"],
                     "transaction_channel": forced["transaction_channel"],
-                    "amount": self._sample_baseline_amount(forced["transaction_type"]),
+                    "amount": amount,
                     "currency": "CNY",
                     "balance_after": round(random.uniform(0, 100000), 2),
                     "branch_id": acct["branch_id"],

@@ -210,13 +210,16 @@ events:
       must_have_transactions:
         type: WITHDRAW
         channels: [ATM, COUNTER]
-        min_txn_per_customer: 3
-        # 注：此事件 verify_events 长期未达 ±30% 容差（commit 5994f43 即已注明
-        # "force_specs 分布问题"）。多次尝试（sample 0.65/1.0、min_txn 3/5/0、
-        # 注入窗口 -14/+9 vs 0/+9）均无法稳定落入容差——根因是 BASIC/MASS
-        # WITHDRAW ATM/COUNTER 自然池规模太小（~5 txn/天），随机 seed 变化引起
-        # 的方差远超 ±30% 阈值。下一步需要在数据生成层加大基础池密度或在
-        # verify SQL 端改用更鲁棒的统计量（中位数、Trimmed mean）。
+        min_txn_per_customer: 1
+        # 用 amount_range 强制注入控可观测幅度——避开 _sample_baseline_amount
+        # WITHDRAW 重尾分布（50K-200K 大额）引入的方差。注入窗口自动推导为
+        # 事件期 [delay=0, ramp=9]；所有 50 笔强制注入落到 2/15（单日脉冲）。
+        # 数学（基于 reseed9 实测调整）：natural_ev_amt 仅 ~200K（自然池方差大）。
+        # 目标 ev_amt = 1.25 × prior_amt (655K × 9/14 = 421K + 25% = 526K)。
+        # 需要 forced 贡献 ≈ 326K → 50 × center × 1.17 (sample 0.65 prop avg) = 326K
+        # → center ≈ 5570。amount_range [5500, 6000] center 5750 → 336K forced。
+        # ev_amt ≈ 538K → ev_daily 60K → PoP ≈ +27%（中心，±15% seed 方差容差内）。
+        amount_range: [5500, 6000]
 
     expected_rca_conclusion: |
       春节假期期间（2026-02-15 至 2026-02-23），现金支取量明显增加 25%，

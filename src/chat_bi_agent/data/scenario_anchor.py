@@ -45,6 +45,10 @@ class ForcedTxnSpec:
     injection_*_offset_days 定义注入窗口相对 event_date 的偏移；默认 -5/+10
     兼容旧行为。脉冲事件（如春节）应自动收紧到匹配 propagation 规则的
     [delay_days, delay_days + ramp_days]，避免注入溢出到对照期淹没信号。
+
+    amount_range 可选 (low, high)：强制注入金额从 uniform(low, high) 采样；
+    缺省走 _sample_baseline_amount(txn_type) 走原生重尾分布。窄区间用于
+    需要稳定 PoP 信号的场景（spring_festival 的 +25% 在重尾分布下方差过大）。
     """
 
     event_id: str
@@ -55,6 +59,7 @@ class ForcedTxnSpec:
     event_date: date
     injection_start_offset_days: int = -5
     injection_end_offset_days: int = 10
+    amount_range: tuple[float, float] | None = None
 
 
 @dataclass
@@ -310,6 +315,10 @@ def anchor_event_populations(
             if explicit_override:
                 inj_start = mht.get("injection_offset_start_days", inj_start)
                 inj_end = mht.get("injection_offset_end_days", inj_end)
+            amount_range = None
+            ar_raw = mht.get("amount_range")
+            if ar_raw and len(ar_raw) == 2:
+                amount_range = (float(ar_raw[0]), float(ar_raw[1]))
             report.forced_specs.append(
                 ForcedTxnSpec(
                     event_id=event.id,
@@ -320,6 +329,7 @@ def anchor_event_populations(
                     event_date=event.date,
                     injection_start_offset_days=inj_start,
                     injection_end_offset_days=inj_end,
+                    amount_range=amount_range,
                 )
             )
 
