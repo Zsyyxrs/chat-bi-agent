@@ -94,9 +94,17 @@ _FACT_ANCHOR_AUGMENT = (
     "2. 输出列必须有 current_<metric> 和 prior_<metric> 两个聚合列"
     "（如 current_balance / prior_balance），下游会按列名前缀提取双值算 change_pct。\n"
     "3. 时间窗口选择规则：\n"
-    '   - 题面明确给出"X 月某日前后/期间"等具体窗口 → 该窗口作为分析期，'
-    "对照期取**紧接其前的等长窗口**（如分析期 6/20-7/4，对照期 6/6-6/19）。\n"
-    '   - 题面只说"X 月中旬/月末"等模糊窗口 → 按 SQL 提示规则 9 解读。\n'
+    '   - 题面明确给出"X 月某日前后/期间"等具体窗口 → 该窗口作为分析期。\n'
+    "   - 对照期取**紧接其前的等长窗口**——严格 adjacent，**禁止留 gap**：\n"
+    "     * 对照期最后一天 = 分析期开始日 − 1（**逐日相连**，中间无空隙）\n"
+    "     * 对照期天数 = 分析期天数\n"
+    "     * 反例：分析期 2/15-2/23（9 天），prior 写 1/27-2/04 是**错的**——\n"
+    "       跨过 2/05-2/14 留 10 天 gap，prior 池子选了远期数据会引入异常\n"
+    "       outlier 把 PoP 推向反向。\n"
+    "     * 正例：分析期 2/15-2/23（9 天）→ prior 2/06-2/14（9 天紧贴）。\n"
+    "     * 正例：分析期 6/20-7/4（15 天）→ prior 6/5-6/19（15 天紧贴）。\n"
+    '   - 题面只说"X 月中旬/月末"等模糊窗口 → 按 SQL 提示规则 9 解读后，'
+    "对照期依然按上述 adjacent 规则取。\n"
     '   - current 必须对应"分析期"（事件期间/题目询问的窗口），'
     'prior 必须对应"对照期"（事件前的基线），不能颠倒。\n'
     "4. 快照表（fct_holding 等只在月末有数据的表）必须用最近的月末作为窗口，"
@@ -107,13 +115,14 @@ _FACT_ANCHOR_AUGMENT = (
     '   - "交易量/支取量/存取量/转账量/消费额/收入" → SUM(amount)\n'
     '   - "交易笔数/支取次数/transactions count" → COUNT(*)\n'
     '   银行域里"量"类量词缺省都是金额，不是计数；选错会让信号完全消失。\n'
-    "7. 题面若出现具体城市/分行名（如\"杭州/南京/上海/北京/深圳和XX分行\"），\n"
+    '7. 题面若出现具体城市/分行名（如"杭州/南京/上海/北京/深圳和XX分行"），\n'
     "   **必须**在 WHERE 加分支过滤（JOIN dim_branch + WHERE b.city IN (...)"
-    " 或 b.branch_name LIKE），**严禁**当作\"全行\"bank-wide 查询。\n"
+    ' 或 b.branch_name LIKE），**严禁**当作"全行"bank-wide 查询。\n'
     "   反例（fact anchor 漏 pin 会让信号被全行数据稀释甚至反向）：\n"
-    "     题面 \"杭州和南京分行的定期存款余额增长\" → \n"
+    '     题面 "杭州和南京分行的定期存款余额增长" → \n'
     "     错：SELECT SUM(balance)... WHERE product_subcategory='定期存款'（全行）\n"
-    "     对：SELECT SUM(balance)... WHERE product_subcategory='定期存款' AND b.city IN ('杭州','南京')"
+    "     对：SELECT SUM(balance)... "
+    "WHERE product_subcategory='定期存款' AND b.city IN ('杭州','南京')"
 )
 
 # 关键词判断是否需要给 P1 加 PoP augment。
