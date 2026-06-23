@@ -7,9 +7,20 @@
 import os
 from dataclasses import dataclass
 
-import dashscope
-from dashscope import MultiModalConversation, TextEmbedding
-from langfuse import get_client, observe
+# 让 dashscope 绕过本地 HTTP(S)_PROXY（如 Clash/V2Ray 的 127.0.0.1:7897），
+# 否则 dashscope.aliyuncs.com 的请求会被代理拦截抛 "InvalidParameter url error"。
+# 必须在 `import dashscope` 之前设，dashscope SDK 启动时读这两个变量。
+_DASHSCOPE_NO_PROXY = "dashscope.aliyuncs.com,aliyuncs.com"
+for _key in ("NO_PROXY", "no_proxy"):
+    _existing = os.environ.get(_key, "")
+    if _DASHSCOPE_NO_PROXY not in _existing:
+        os.environ[_key] = (
+            f"{_existing},{_DASHSCOPE_NO_PROXY}" if _existing else _DASHSCOPE_NO_PROXY
+        )
+
+import dashscope  # noqa: E402
+from dashscope import MultiModalConversation, TextEmbedding  # noqa: E402
+from langfuse import get_client, observe  # noqa: E402
 
 from chat_bi_agent.config import (
     CHAT_MODEL,
