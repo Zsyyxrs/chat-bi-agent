@@ -1,5 +1,6 @@
 """P3 drill-down executor: per-dimension P1 call + Pareto TopN contribution."""
 
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from numbers import Real
 from typing import Any
@@ -121,6 +122,52 @@ _DRILL_AUGMENT = (
 )
 
 
+def _execute_single_drill(
+    question_id: str,
+    i: int,
+    req: DrillRequest,
+    p1_agent: Any,
+) -> DrillResult:
+    """Execute one drill in isolation; safe for parallel use (no shared state)."""
+    sub_qid = f"{question_id}__drill_{i}"
+    p1_result = p1_agent.run(sub_qid, req.nl_question + _DRILL_AUGMENT)
+
+    if p1_result.rows is None or p1_result.sql is None or not p1_result.rows:
+        return DrillResult(
+            dimension=req.dimension,
+            nl_question=req.nl_question,
+            sql=p1_result.sql or "",
+            rows=p1_result.rows or [],
+            pareto_top_k=[],
+            error_class=p1_result.error_class,
+            skipped=True,
+        )
+
+    try:
+        value_col = _infer_value_col(p1_result.rows, dim_hint=req.dimension)
+        top_k = _compute_pareto(p1_result.rows, value_col=value_col)
+    except ValueError:
+        return DrillResult(
+            dimension=req.dimension,
+            nl_question=req.nl_question,
+            sql=p1_result.sql,
+            rows=p1_result.rows,
+            pareto_top_k=[],
+            error_class=None,
+            skipped=True,
+        )
+
+    return DrillResult(
+        dimension=req.dimension,
+        nl_question=req.nl_question,
+        sql=p1_result.sql,
+        rows=p1_result.rows,
+        pareto_top_k=top_k,
+        error_class=None,
+        skipped=False,
+    )
+
+
 def run_drill_down(
     question_id: str,
     requests: list[DrillRequest],
@@ -128,56 +175,22 @@ def run_drill_down(
 ) -> list[DrillResult]:
     """Execute each DrillRequest via P1 and compute Pareto TopN.
 
+    Drills run in parallel via ThreadPoolExecutor since each P1 call is an
+    independent LLM round-trip (~30-60s wall time). Sequential 3-4 drills
+    took 120-240s; parallel runs in ~max-single-drill time (~30-60s).
+
     Each drill is independent: a failure in one does not stop the others.
     PoP augment is injected so drill SQL always emits 4-col current/prior/change
     output—没有这条约束 LLM 经常退化成单窗 SQL，下游归因 Pareto 没法按变化排序。
     """
-    results: list[DrillResult] = []
-    for i, req in enumerate(requests):
-        sub_qid = f"{question_id}__drill_{i}"
-        p1_result = p1_agent.run(sub_qid, req.nl_question + _DRILL_AUGMENT)
+    if not requests:
+        return []
 
-        # Failure cases → skip but keep a stub
-        if p1_result.rows is None or p1_result.sql is None or not p1_result.rows:
-            results.append(
-                DrillResult(
-                    dimension=req.dimension,
-                    nl_question=req.nl_question,
-                    sql=p1_result.sql or "",
-                    rows=p1_result.rows or [],
-                    pareto_top_k=[],
-                    error_class=p1_result.error_class,
-                    skipped=True,
-                )
-            )
-            continue
-
-        try:
-            value_col = _infer_value_col(p1_result.rows, dim_hint=req.dimension)
-            top_k = _compute_pareto(p1_result.rows, value_col=value_col)
-        except ValueError:
-            results.append(
-                DrillResult(
-                    dimension=req.dimension,
-                    nl_question=req.nl_question,
-                    sql=p1_result.sql,
-                    rows=p1_result.rows,
-                    pareto_top_k=[],
-                    error_class=None,
-                    skipped=True,
-                )
-            )
-            continue
-
-        results.append(
-            DrillResult(
-                dimension=req.dimension,
-                nl_question=req.nl_question,
-                sql=p1_result.sql,
-                rows=p1_result.rows,
-                pareto_top_k=top_k,
-                error_class=None,
-                skipped=False,
+    with ThreadPoolExecutor(max_workers=len(requests)) as pool:
+        results = list(
+            pool.map(
+                lambda pair: _execute_single_drill(question_id, pair[0], pair[1], p1_agent),
+                enumerate(requests),
             )
         )
     return results
