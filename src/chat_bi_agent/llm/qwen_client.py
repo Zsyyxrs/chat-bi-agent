@@ -22,7 +22,7 @@ import dashscope  # noqa: E402
 from dashscope import MultiModalConversation, TextEmbedding  # noqa: E402
 from langfuse import get_client, observe  # noqa: E402
 
-from chat_bi_agent.config import (
+from chat_bi_agent.config import (  # noqa: E402
     CHAT_MODEL,
     DEFAULT_TEMPERATURE,
     EMBED_DIM,
