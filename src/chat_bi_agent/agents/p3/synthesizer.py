@@ -132,11 +132,20 @@ def _parse_extraction_json(raw: str) -> dict:
 _REQUIRED_EXTRACTION_KEYS = ("event", "quant", "mechanism_chain", "scope")
 
 
+_REQUIRED_QUANT_KEYS = ("metric_name_zh", "current_value_display", "pop_pct")
+
+
 def _validate_extraction(ext: dict) -> None:
     """字段齐全性校验。失败抛 ValueError(field_name)。"""
     for k in _REQUIRED_EXTRACTION_KEYS:
         if k not in ext:
             raise ValueError(f"missing field: {k}")
+    quant = ext.get("quant")
+    if not isinstance(quant, dict):
+        raise ValueError("quant must be a dict")
+    for k in _REQUIRED_QUANT_KEYS:
+        if k not in quant:
+            raise ValueError(f"quant.{k} is required")
     chain = ext.get("mechanism_chain")
     if not isinstance(chain, list) or len(chain) != 3:
         raise ValueError(f"mechanism_chain must have exactly 3 items, got {chain}")
@@ -198,9 +207,10 @@ def _template_narrative_from_extraction(ext: dict) -> str:
     """Pass 2 失败时的模板 narrative：保证 4 要素全部出现。"""
     event_name = ext["event"]["name"]
     quant = ext["quant"]
-    metric = quant["metric_name"]
+    metric_zh = quant["metric_name_zh"]
+    current_display = quant["current_value_display"]
     pop = quant["pop_pct"]
-    window = quant["window"]
+    window = quant.get("window", "")
     chain = " → ".join(ext["mechanism_chain"])
     scope_parts = [
         f"{dim}={','.join(str(v) for v in vals)}"
@@ -208,8 +218,8 @@ def _template_narrative_from_extraction(ext: dict) -> str:
     ]
     scope_text = "; ".join(scope_parts) if scope_parts else "全行口径"
     return (
-        f"受「{event_name}」影响，{metric} 在 {window} 期间出现 "
-        f"{pop:+.1f}% 变化。传导路径：{chain}。"
+        f"受「{event_name}」影响，{metric_zh} 在 {window} 期间当前值 "
+        f"{current_display}，环比 {pop:+.1f}%。传导路径：{chain}。"
         f"影响范围集中于 {scope_text}。"
     )
 

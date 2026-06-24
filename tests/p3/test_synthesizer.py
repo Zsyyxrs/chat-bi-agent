@@ -267,7 +267,9 @@ from chat_bi_agent.agents.p3.synthesizer import (
 
 _GOOD_JSON_STR = """{
   "event": {"id": "anxin_90_expire", "name": "安鑫 90 天到期"},
-  "quant": {"metric_name": "AUM", "pop_pct": -20.9,
+  "quant": {"metric_name": "AUM", "metric_name_zh": "管理资产规模",
+            "current_value": 80000000.0, "current_value_display": "8000 万元",
+            "pop_pct": -20.9,
             "window": "2026-05-14 to 2026-05-20", "direction": "down"},
   "mechanism_chain": [
     "安鑫 90 天产品集中到期触发资金回流",
@@ -336,6 +338,27 @@ def test_validate_extraction_empty_scope():
         _validate_extraction(bad)
 
 
+def test_validate_extraction_missing_metric_name_zh():
+    bad = copy.deepcopy(json.loads(_GOOD_JSON_STR))
+    del bad["quant"]["metric_name_zh"]
+    with pytest.raises(ValueError, match="metric_name_zh"):
+        _validate_extraction(bad)
+
+
+def test_validate_extraction_missing_current_value_display():
+    bad = copy.deepcopy(json.loads(_GOOD_JSON_STR))
+    del bad["quant"]["current_value_display"]
+    with pytest.raises(ValueError, match="current_value_display"):
+        _validate_extraction(bad)
+
+
+def test_validate_extraction_missing_pop_pct():
+    bad = copy.deepcopy(json.loads(_GOOD_JSON_STR))
+    del bad["quant"]["pop_pct"]
+    with pytest.raises(ValueError, match="pop_pct"):
+        _validate_extraction(bad)
+
+
 # ============================================================
 # Task 4: Pass 2 narrator — prompt + template fallback
 # ============================================================
@@ -362,8 +385,9 @@ def test_template_narrative_contains_all_four_elements():
     ext = json.loads(_GOOD_JSON_STR)
     nar = _template_narrative_from_extraction(ext)
     assert "安鑫 90 天到期" in nar
-    assert "AUM" in nar
-    assert "-20.9" in nar
+    assert "管理资产规模" in nar  # metric_name_zh
+    assert "8000 万元" in nar  # current_value_display
+    assert "-20.9" in nar  # pop_pct
     assert "2026-05-14" in nar
     for seg in ext["mechanism_chain"]:
         assert seg in nar
