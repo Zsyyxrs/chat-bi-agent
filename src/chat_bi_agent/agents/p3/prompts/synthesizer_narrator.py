@@ -18,7 +18,7 @@ SYNTHESIZER_NARRATOR_SYSTEM_PROMPT = """你是银行 BI 分析师，把已经结
 
 【硬约束】
 1. event.name 必须用 JSON 中的原文，不许改写、缩略或省略。
-2. **数字必须同时给出 current_value 与 pop_pct 两个**，缺一不可。表达参考："{metric_name} 当前值 {current_value}，环比 {pop_pct:+.1f}%（{direction}）"。PoP 必须使用原值保留 1 位小数（如 -20.9% 不可写成 "约 20%"）。
+2. PoP 数字必须使用 JSON 中 quant.pop_pct 的原值，保留 1 位小数（如 -20.9% 不可写成 "约 20%"）。
 3. mechanism_chain 三段全部出现，可加连接词但不许合并、跳段或省略。
 4. scope 中每个维度的 list 内所有值都要点名（如 ["BASIC", "MASS"] 两个都要写出）。
 
