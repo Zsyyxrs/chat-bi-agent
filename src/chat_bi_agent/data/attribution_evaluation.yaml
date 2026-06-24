@@ -29,9 +29,8 @@ evaluation_questions:
     expected_key_metrics:
       - metric: retail_deposit_balance
         change_direction: down
-        # magnitude 故意不写：observable PoP 随 Agent 选择的窗口和 seed 随机流漂移
-        # （-3% 估算 vs -5.95% 实测），用固定数字喂 LLM judge 会误判 quantification。
-        # 方向 down 是结构稳定的，足以评估 Agent 是否抓对趋势。
+        magnitude: -5.95  # 实测 (2026-05-14~23 vs 5-04~13, BR_CITY_0006 × HNW × CURRENT)
+        tolerance: "±50%"
     evaluation_criteria:
       - dimension_recall: "Agent 是否识别出 branch_id, customer_tier, product_id"
       - event_hit: "Agent 是否提到理财产品到期"
@@ -51,6 +50,15 @@ evaluation_questions:
     expected_affected_dimensions:
       - product_id: PROD_WEA_0030
       - related_products: [PROD_WEA_0032, PROD_WEA_0033]
+    expected_key_metrics:
+      - metric: wealth_product_balance (PROD_WEA_0030/0031 源产品)
+        change_direction: down
+        magnitude: -8.5  # 同 anxin_90_expire 主效应
+        tolerance: "±50%"
+      - metric: wealth_product_balance (PROD_WEA_0032/0033 转入产品)
+        change_direction: up
+        magnitude: 15.0  # expected_root_cause 明示
+        tolerance: "±50%"
     evaluation_criteria:
       - product_identification: "Agent 是否精准定位到源产品和目标产品"
       - behavior_pattern: "Agent 是否解释了赎回→续作的行为链条"
@@ -75,8 +83,8 @@ evaluation_questions:
     expected_key_metrics:
       - metric: cash_withdrawal_amount
         change_direction: up
-        # magnitude 不写：spring_festival 自然池密度 ~5 txn/天，PoP 在 -43% ~ +294% 区间
-        # 随 seed 漂移（参见 events/product_expiry.yaml 同事件配置块的搁置说明）。
+        magnitude: 24.1  # 实测 (2026-02-15~23 vs 2-06~14, BASIC+MASS × ATM+COUNTER × WITHDRAW)
+        tolerance: "±50%"
     evaluation_criteria:
       - seasonal_recognition: "Agent 是否识别出春节季节性而非异常"
       - customer_segmentation: "Agent 是否指出 BASIC/MASS 层影响更大"
@@ -94,6 +102,11 @@ evaluation_questions:
     expected_affected_dimensions:
       - customer_tier: [BASIC, MASS]
       - transaction_period: "2026-02-15 to 2026-02-23"
+    expected_key_metrics:
+      - metric: average_daily_balance
+        change_direction: down
+        magnitude: -8.2  # 实测 (2026-02-15~23 vs 2-06~14, BASIC+MASS)
+        tolerance: "±50%"
     evaluation_criteria:
       - temporal_analysis: "Agent 是否能关联特定时间窗口与业务事件"
       - customer_behavior: "Agent 是否推断出现金需求的临时性和可预测性"
@@ -119,11 +132,12 @@ evaluation_questions:
       - metric: loan_application_amount
         change_direction: up
         delay_days: 7
-        # magnitude 故意不写：observable PoP 受 sample=0.25 + ramp 长度 + Agent 窗口影响极大，
-        # 自然 LOAN 池密度也偏低（生成器权重 2/102），固定数字反而误导评估。
+        magnitude: 12.0  # expected_root_cause 明示 +12%
+        tolerance: "±50%"
       - metric: loan_balance
         change_direction: up
-        # magnitude 同上：balance 规则 delay=14 ramp=21 sustained，观测幅度依赖窗口落点。
+        magnitude: 4.1  # 实测 (2026-07-04~20 vs 6-03~19, 全行 × LOAN)
+        tolerance: "±50%"
     evaluation_criteria:
       - policy_recognition: "Agent 是否识别出 LPR 下调政策"
       - causal_inference: "Agent 是否建立政策与贷款增长的因果关系"
@@ -149,8 +163,8 @@ evaluation_questions:
     expected_key_metrics:
       - metric: saving_deposit_balance
         change_direction: up
-        # magnitude 不写：nominal +12% 对应 sustained 全幅期，Agent 若选 8/10-8/19 窗口
-        # 因 delay=2 ramp=5 只能观测到 ~+6% (avg multiplier 0.5)，固定 12% 会误判。
+        magnitude: 7.5  # 实测 (2026-08-12~19 vs 8-01~09, 杭州+南京 × MASS+AFFLUENT × SAVING)
+        tolerance: "±50%"
     evaluation_criteria:
       - campaign_attribution: "Agent 是否将增长归因于七夕营销活动"
       - channel_identification: "Agent 是否提到抖音/微信等渠道"
@@ -173,6 +187,11 @@ evaluation_questions:
     expected_affected_dimensions:
       - branch_id: BR_CITY_0006
       - customer_tier: HIGH_NET_WORTH
+    expected_key_metrics:
+      - metric: AUM
+        change_direction: down
+        magnitude: -3.8  # 实测 (2026-05-14~20 vs 5-07~13, BR_CITY_0006 × HNW)
+        tolerance: "±50%"
     evaluation_criteria:
       - signal_separation: "Agent 是否能分离多个同期因素"
       - scope_delimitation: "Agent 是否精确界定事件的影响范围（而非全行）"
@@ -193,6 +212,11 @@ evaluation_questions:
     expected_affected_dimensions:
       - product_id: PROD_WEA_0030
       - product_name: "安鑫 90 天"
+    expected_key_metrics:
+      - metric: renewal_rate (安鑫 90 天续作率)
+        change_direction: below_threshold
+        magnitude: 42.0  # 实际续作率 42% (历史均值 65%)
+        tolerance: "±20%"
     evaluation_criteria:
       - predictive_insight: "Agent 是否从数据推断出可预测的早期信号"
       - threshold_setting: "Agent 是否合理设定 continuation_rate 阈值"
