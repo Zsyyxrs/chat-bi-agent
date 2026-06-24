@@ -4,6 +4,14 @@ import json
 import re
 from typing import Any
 
+from langfuse import observe
+
+from chat_bi_agent.agents.p3.prompts.synthesizer_extractor import (
+    SYNTHESIZER_EXTRACTOR_SYSTEM_PROMPT,
+)
+from chat_bi_agent.agents.p3.prompts.synthesizer_narrator import (
+    SYNTHESIZER_NARRATOR_SYSTEM_PROMPT,
+)
 from chat_bi_agent.agents.p3.prompts.synthesizer_system import SYNTHESIZER_SYSTEM_PROMPT
 from chat_bi_agent.agents.p3.types import DrillResult, FactAnchor, MatchedEvent
 
@@ -222,18 +230,14 @@ def _template_conclusion_from_extraction(ext: dict) -> str:
     return f"本期变化主要与「{event_name}」相关。"
 
 
-def synthesize(
+def _synthesize_legacy(
     question: str,
     fact_anchor: FactAnchor,
     drill_results: list[DrillResult],
     matched_events: list[MatchedEvent],
     llm_client: Any,
 ) -> tuple[str, str]:
-    """Compose (narrative, conclusion) via a single LLM call. Falls back on error.
-
-    `llm_client` must expose `.chat(system_prompt: str, user_prompt: str) -> ChatResult-like`
-    (i.e. an object with a `.content: str` attribute).
-    """
+    """原单次调用 dual-output 路径。设计题与 RCA 两段式失败回退共用。"""
     user_prompt = _build_user_prompt(question, fact_anchor, drill_results, matched_events)
     try:
         result = llm_client.chat(
@@ -249,3 +253,79 @@ def synthesize(
             _fallback_narrative(fact_anchor, drill_results, matched_events),
             _fallback_conclusion(fact_anchor, drill_results, matched_events),
         )
+
+
+@observe(name="synthesize_rca_two_pass")
+def _synthesize_rca_two_pass(
+    question: str,
+    fact_anchor: FactAnchor,
+    drill_results: list[DrillResult],
+    matched_events: list[MatchedEvent],
+    llm_client: Any,
+) -> tuple[str, str]:
+    """RCA 题两段式：Pass 1 抽 JSON → Pass 2 翻自然语言。
+
+    Pass 1 失败 → 回退 legacy。Pass 2 失败 → 用模板兜底。
+    """
+    user_prompt = _build_user_prompt(question, fact_anchor, drill_results, matched_events)
+
+    # Pass 1: 抽取 JSON
+    try:
+        pass1_result = llm_client.chat(
+            system_prompt=SYNTHESIZER_EXTRACTOR_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
+        extraction = _parse_extraction_json(pass1_result.content)
+        _validate_extraction(extraction)
+    except Exception as e:
+        print(f"[synthesizer] Pass 1 failed ({type(e).__name__}: {e}); fallback to legacy")
+        return _synthesize_legacy(
+            question, fact_anchor, drill_results, matched_events, llm_client
+        )
+
+    # Pass 2: 翻自然语言
+    pass2_user_prompt = (
+        f"【用户问题】\n{question}\n\n"
+        f"【已抽取的 RCA 要素 JSON】\n```json\n"
+        f"{json.dumps(extraction, ensure_ascii=False, indent=2)}\n```"
+    )
+    try:
+        pass2_result = llm_client.chat(
+            system_prompt=SYNTHESIZER_NARRATOR_SYSTEM_PROMPT,
+            user_prompt=pass2_user_prompt,
+        )
+        narrative, conclusion = _parse_dual_output(pass2_result.content)
+        if not narrative or not conclusion:
+            print("[synthesizer] Pass 2 tag parse failed; fallback to template")
+            return (
+                _template_narrative_from_extraction(extraction),
+                _template_conclusion_from_extraction(extraction),
+            )
+        return narrative, conclusion
+    except Exception as e:
+        print(f"[synthesizer] Pass 2 failed ({type(e).__name__}: {e}); fallback to template")
+        return (
+            _template_narrative_from_extraction(extraction),
+            _template_conclusion_from_extraction(extraction),
+        )
+
+
+def synthesize(
+    question: str,
+    fact_anchor: FactAnchor,
+    drill_results: list[DrillResult],
+    matched_events: list[MatchedEvent],
+    llm_client: Any,
+) -> tuple[str, str]:
+    """Compose (narrative, conclusion) via two-pass (RCA) or single-pass (design).
+
+    `llm_client` must expose `.chat(system_prompt: str, user_prompt: str) -> ChatResult-like`
+    (i.e. an object with a `.content: str` attribute).
+    """
+    if is_rca_question(fact_anchor):
+        return _synthesize_rca_two_pass(
+            question, fact_anchor, drill_results, matched_events, llm_client
+        )
+    return _synthesize_legacy(
+        question, fact_anchor, drill_results, matched_events, llm_client
+    )

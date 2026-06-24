@@ -17,12 +17,13 @@ from chat_bi_agent.agents.p3.types import (
 
 
 def _fact_anchor() -> FactAnchor:
+    """共享 fixture：保持 change_pct=None 让原 7 个 synthesize 测试走 legacy 路径。"""
     return FactAnchor(
         metric_name="retail_deposit_balance",
         time_window="2026-05-01 to 2026-05-20",
         current_value=92.0,
         prior_value=100.0,
-        change_pct=-8.0,
+        change_pct=None,
         direction="down",
         sql="SELECT ...",
         rows=[],
@@ -383,3 +384,178 @@ def test_template_narrative_handles_empty_event_id():
     nar = _template_narrative_from_extraction(ext)
     assert "未识别到事件库匹配" in nar
     assert "AUM" in nar
+
+
+# ============================================================
+# Task 5: orchestration — _synthesize_rca_two_pass + synthesize() dispatch
+# ============================================================
+
+from chat_bi_agent.agents.p3.synthesizer import _synthesize_rca_two_pass
+
+
+_PASS1_GOOD = SimpleNamespace(content="```json\n" + _GOOD_JSON_STR + "\n```")
+_PASS2_GOOD = SimpleNamespace(
+    content=(
+        "【叙述】\n受「安鑫 90 天到期」影响，AUM 在 2026-05-14 to 2026-05-20 "
+        "期间下降 -20.9%。资金回流到客户账户，HIGH_NET_WORTH 选择不续作，"
+        "AUM 集中下降。影响范围集中于 BR_CITY_0006 与 HIGH_NET_WORTH。\n"
+        "【结论】\n本期变化主要由「安鑫 90 天到期」驱动，集中于 BR_CITY_0006。"
+    )
+)
+
+
+def _rca_fact_anchor() -> FactAnchor:
+    return FactAnchor(
+        metric_name="AUM",
+        time_window="2026-05-14 to 2026-05-20",
+        current_value=80.0,
+        prior_value=100.0,
+        change_pct=-20.9,
+        direction="down",
+        sql="",
+        rows=[],
+    )
+
+
+def test_synthesize_rca_two_pass_happy_path():
+    fake = MagicMock()
+    fake.chat.side_effect = [_PASS1_GOOD, _PASS2_GOOD]
+    nar, concl = _synthesize_rca_two_pass(
+        question="why?",
+        fact_anchor=_rca_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake,
+    )
+    assert fake.chat.call_count == 2
+    assert "安鑫 90 天到期" in nar
+    assert "BR_CITY_0006" in nar
+    assert "安鑫 90 天到期" in concl
+
+
+def test_synthesize_rca_pass1_invalid_json_falls_back_to_legacy():
+    fake = MagicMock()
+    fake.chat.side_effect = [
+        SimpleNamespace(content="not a json"),
+        SimpleNamespace(content="【叙述】\nlegacy narrative\n【结论】\nlegacy concl"),
+    ]
+    nar, concl = _synthesize_rca_two_pass(
+        question="why?",
+        fact_anchor=_rca_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake,
+    )
+    assert fake.chat.call_count == 2  # Pass 1 + legacy 各 1 次
+    assert "legacy narrative" in nar
+
+
+def test_synthesize_rca_pass1_missing_field_falls_back_to_legacy():
+    bad_json = json.dumps({"event": {"id": None, "name": "x"}})  # 缺 quant/chain/scope
+    fake = MagicMock()
+    fake.chat.side_effect = [
+        SimpleNamespace(content=bad_json),
+        SimpleNamespace(content="【叙述】\nlegacy\n【结论】\nL"),
+    ]
+    nar, _ = _synthesize_rca_two_pass(
+        question="q",
+        fact_anchor=_rca_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake,
+    )
+    assert "legacy" in nar
+
+
+def test_synthesize_rca_pass1_llm_exception_falls_back_to_legacy():
+    fake = MagicMock()
+    fake.chat.side_effect = [
+        RuntimeError("Pass 1 LLM down"),
+        SimpleNamespace(content="【叙述】\nlegacy\n【结论】\nL"),
+    ]
+    nar, _ = _synthesize_rca_two_pass(
+        question="q",
+        fact_anchor=_rca_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake,
+    )
+    assert "legacy" in nar
+
+
+def test_synthesize_rca_pass2_exception_uses_template():
+    fake = MagicMock()
+    fake.chat.side_effect = [_PASS1_GOOD, RuntimeError("Pass 2 LLM down")]
+    nar, concl = _synthesize_rca_two_pass(
+        question="q",
+        fact_anchor=_rca_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake,
+    )
+    assert "安鑫 90 天到期" in nar
+    assert "AUM" in nar
+    assert "-20.9" in nar
+    for seg in json.loads(_GOOD_JSON_STR)["mechanism_chain"]:
+        assert seg in nar
+    assert "安鑫 90 天到期" in concl
+
+
+def test_synthesize_rca_pass2_untagged_uses_template():
+    fake = MagicMock()
+    fake.chat.side_effect = [
+        _PASS1_GOOD,
+        SimpleNamespace(content="一段没有 tag 的文本"),
+    ]
+    nar, _ = _synthesize_rca_two_pass(
+        question="q",
+        fact_anchor=_rca_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake,
+    )
+    assert "安鑫 90 天到期" in nar
+    assert "AUM" in nar
+
+
+def test_synthesize_design_question_uses_legacy_path():
+    """change_pct=None 的设计题：legacy 单次调用。"""
+    design_anchor = FactAnchor(
+        metric_name="term_days",
+        time_window="2026-05-01 to 2026-05-31",
+        current_value=360.0,
+        prior_value=360.0,
+        change_pct=None,
+        direction="flat",
+        sql="",
+        rows=[],
+    )
+    fake = MagicMock()
+    fake.chat.return_value = SimpleNamespace(
+        content="【叙述】\n设计题 narrative\n【结论】\n设计题结论"
+    )
+    nar, concl = synthesize(
+        question="如何设计预警模型",
+        fact_anchor=design_anchor,
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake,
+    )
+    assert fake.chat.call_count == 1
+    assert nar == "设计题 narrative"
+    assert "设计题结论" in concl
+
+
+def test_synthesize_rca_question_dispatches_to_two_pass():
+    """change_pct=-20.9 的 RCA 题：两段式 2 次调用。"""
+    fake = MagicMock()
+    fake.chat.side_effect = [_PASS1_GOOD, _PASS2_GOOD]
+    nar, concl = synthesize(
+        question="why dropped?",
+        fact_anchor=_rca_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[_event()],
+        llm_client=fake,
+    )
+    assert fake.chat.call_count == 2
+    assert "安鑫 90 天到期" in nar
