@@ -1,5 +1,6 @@
 """P3 synthesizer: LLM-based narrative + conclusion composition."""
 
+import json
 import re
 from typing import Any
 
@@ -103,6 +104,39 @@ def _parse_dual_output(content: str) -> tuple[str, str]:
     narrative = content[narrative_start : concl_match.start()].strip()
     conclusion = content[concl_match.end() :].strip()
     return narrative, conclusion
+
+
+_EXTRACTION_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _parse_extraction_json(raw: str) -> dict:
+    """剥 markdown fence 后 json.loads。失败抛 ValueError。"""
+    if not raw or not raw.strip():
+        raise ValueError("empty extractor output")
+    text = raw.strip()
+    m = _EXTRACTION_FENCE_RE.search(text)
+    if m:
+        text = m.group(1)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"extractor JSON parse failed: {e}") from e
+
+
+_REQUIRED_EXTRACTION_KEYS = ("event", "quant", "mechanism_chain", "scope")
+
+
+def _validate_extraction(ext: dict) -> None:
+    """字段齐全性校验。失败抛 ValueError(field_name)。"""
+    for k in _REQUIRED_EXTRACTION_KEYS:
+        if k not in ext:
+            raise ValueError(f"missing field: {k}")
+    chain = ext.get("mechanism_chain")
+    if not isinstance(chain, list) or len(chain) != 3:
+        raise ValueError(f"mechanism_chain must have exactly 3 items, got {chain}")
+    scope = ext.get("scope")
+    if not isinstance(scope, dict) or not scope:
+        raise ValueError("scope must be a non-empty dict")
 
 
 def _fallback_narrative(

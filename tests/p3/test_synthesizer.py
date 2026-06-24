@@ -1,5 +1,6 @@
 """Tests for synthesizer (LLM with mocked client)."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -244,3 +245,91 @@ def test_user_prompt_contains_star_for_peers():
     assert "BASIC (贡献 15%)" in prompt
     assert "BASIC (贡献 15%) ★" not in prompt
     assert "★ 标记的是并列贡献者" in prompt
+
+
+# ============================================================
+# Task 3: Pass 1 extractor — prompt + parse + validate
+# ============================================================
+
+import copy
+
+import pytest
+
+from chat_bi_agent.agents.p3.prompts.synthesizer_extractor import (
+    SYNTHESIZER_EXTRACTOR_SYSTEM_PROMPT,
+)
+from chat_bi_agent.agents.p3.synthesizer import (
+    _parse_extraction_json,
+    _validate_extraction,
+)
+
+
+_GOOD_JSON_STR = """{
+  "event": {"id": "anxin_90_expire", "name": "安鑫 90 天到期"},
+  "quant": {"metric_name": "AUM", "pop_pct": -20.9,
+            "window": "2026-05-14 to 2026-05-20", "direction": "down"},
+  "mechanism_chain": [
+    "安鑫 90 天产品集中到期触发资金回流",
+    "高净值客户选择不续作以观望市场",
+    "AUM 出现集中下降"
+  ],
+  "scope": {"branch_id": ["BR_CITY_0006"], "customer_tier": ["HIGH_NET_WORTH"]}
+}"""
+
+
+def test_extractor_prompt_has_required_rules():
+    p = SYNTHESIZER_EXTRACTOR_SYSTEM_PROMPT
+    assert "JSON" in p
+    assert "mechanism_chain" in p
+    assert "3 段" in p or "3段" in p or "三段" in p
+    assert "★" in p
+    assert "原样" in p or "禁止改" in p
+
+
+def test_parse_extraction_json_happy_path():
+    parsed = _parse_extraction_json(_GOOD_JSON_STR)
+    assert parsed["event"]["id"] == "anxin_90_expire"
+    assert parsed["quant"]["pop_pct"] == -20.9
+    assert len(parsed["mechanism_chain"]) == 3
+
+
+def test_parse_extraction_json_with_markdown_fence():
+    fenced = "```json\n" + _GOOD_JSON_STR + "\n```"
+    parsed = _parse_extraction_json(fenced)
+    assert parsed["event"]["name"] == "安鑫 90 天到期"
+
+
+def test_parse_extraction_json_with_plain_fence():
+    fenced = "```\n" + _GOOD_JSON_STR + "\n```"
+    parsed = _parse_extraction_json(fenced)
+    assert parsed["quant"]["direction"] == "down"
+
+
+def test_parse_extraction_json_invalid_raises_value_error():
+    with pytest.raises(ValueError):
+        _parse_extraction_json("not a json {{{")
+
+
+def test_validate_extraction_happy_path():
+    _validate_extraction(json.loads(_GOOD_JSON_STR))  # 不抛即通过
+
+
+def test_validate_extraction_missing_event():
+    bad = copy.deepcopy(json.loads(_GOOD_JSON_STR))
+    del bad["event"]
+    with pytest.raises(ValueError, match="event"):
+        _validate_extraction(bad)
+
+
+def test_validate_extraction_wrong_chain_length():
+    bad = copy.deepcopy(json.loads(_GOOD_JSON_STR))
+    bad["mechanism_chain"] = ["a", "b"]
+    with pytest.raises(ValueError, match="mechanism_chain"):
+        _validate_extraction(bad)
+
+
+def test_validate_extraction_empty_scope():
+    bad = copy.deepcopy(json.loads(_GOOD_JSON_STR))
+    bad["scope"] = {}
+    with pytest.raises(ValueError, match="scope"):
+        _validate_extraction(bad)
