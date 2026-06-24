@@ -188,6 +188,40 @@ def _fallback_conclusion(
     )
 
 
+def _template_narrative_from_extraction(ext: dict) -> str:
+    """Pass 2 失败时的模板 narrative：保证 4 要素全部出现。"""
+    event_name = ext["event"]["name"]
+    quant = ext["quant"]
+    metric = quant["metric_name"]
+    pop = quant["pop_pct"]
+    window = quant["window"]
+    chain = " → ".join(ext["mechanism_chain"])
+    scope_parts = [
+        f"{dim}={','.join(str(v) for v in vals)}"
+        for dim, vals in ext["scope"].items()
+    ]
+    scope_text = "; ".join(scope_parts) if scope_parts else "全行口径"
+    return (
+        f"受「{event_name}」影响，{metric} 在 {window} 期间出现 "
+        f"{pop:+.1f}% 变化。传导路径：{chain}。"
+        f"影响范围集中于 {scope_text}。"
+    )
+
+
+def _template_conclusion_from_extraction(ext: dict) -> str:
+    """Pass 2 失败时的模板 conclusion：点名 event 与首要 scope。"""
+    event_name = ext["event"]["name"]
+    scope = ext.get("scope") or {}
+    main_scope = next(iter(scope.items()), None)
+    if main_scope:
+        dim, vals = main_scope
+        return (
+            f"本期变化主要由「{event_name}」驱动，"
+            f"集中于 {dim}={','.join(str(v) for v in vals)}。"
+        )
+    return f"本期变化主要与「{event_name}」相关。"
+
+
 def synthesize(
     question: str,
     fact_anchor: FactAnchor,

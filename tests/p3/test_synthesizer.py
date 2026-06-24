@@ -333,3 +333,53 @@ def test_validate_extraction_empty_scope():
     bad["scope"] = {}
     with pytest.raises(ValueError, match="scope"):
         _validate_extraction(bad)
+
+
+# ============================================================
+# Task 4: Pass 2 narrator — prompt + template fallback
+# ============================================================
+
+from chat_bi_agent.agents.p3.prompts.synthesizer_narrator import (
+    SYNTHESIZER_NARRATOR_SYSTEM_PROMPT,
+)
+from chat_bi_agent.agents.p3.synthesizer import (
+    _template_conclusion_from_extraction,
+    _template_narrative_from_extraction,
+)
+
+
+def test_narrator_prompt_mentions_hard_constraints():
+    p = SYNTHESIZER_NARRATOR_SYSTEM_PROMPT
+    assert "【叙述】" in p
+    assert "【结论】" in p
+    assert "event.name" in p or "event_name" in p
+    assert "mechanism_chain" in p
+    assert "scope" in p
+
+
+def test_template_narrative_contains_all_four_elements():
+    ext = json.loads(_GOOD_JSON_STR)
+    nar = _template_narrative_from_extraction(ext)
+    assert "安鑫 90 天到期" in nar
+    assert "AUM" in nar
+    assert "-20.9" in nar
+    assert "2026-05-14" in nar
+    for seg in ext["mechanism_chain"]:
+        assert seg in nar
+    assert "BR_CITY_0006" in nar
+    assert "HIGH_NET_WORTH" in nar
+
+
+def test_template_conclusion_contains_event_and_scope():
+    ext = json.loads(_GOOD_JSON_STR)
+    concl = _template_conclusion_from_extraction(ext)
+    assert "安鑫 90 天到期" in concl
+    assert "BR_CITY_0006" in concl or "branch_id" in concl
+
+
+def test_template_narrative_handles_empty_event_id():
+    ext = json.loads(_GOOD_JSON_STR)
+    ext["event"] = {"id": None, "name": "未识别到事件库匹配"}
+    nar = _template_narrative_from_extraction(ext)
+    assert "未识别到事件库匹配" in nar
+    assert "AUM" in nar
