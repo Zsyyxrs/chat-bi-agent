@@ -16,6 +16,23 @@ def is_rca_question(fact_anchor: FactAnchor) -> bool:
     return True
 
 
+CLOSE_PEER_THRESHOLD = 0.10  # 10pp
+
+
+def _mark_close_peers(items: list[dict]) -> list[dict]:
+    """给 share 距离 top1 不超过 10pp 的 item 打 is_peer=True。
+
+    items 已按 share 降序，top1 自己也算 peer（gap=0）。
+    """
+    if not items:
+        return items
+    top_share = items[0].get("share", 0.0)
+    return [
+        {**it, "is_peer": (top_share - it.get("share", 0.0)) <= CLOSE_PEER_THRESHOLD}
+        for it in items
+    ]
+
+
 def _build_user_prompt(
     question: str,
     fact_anchor: FactAnchor,
@@ -39,12 +56,22 @@ def _build_user_prompt(
             if dr.skipped:
                 lines.append(f"按 {dr.dimension}：(查询失败，已跳过)")
                 continue
+            marked = _mark_close_peers(dr.pareto_top_k)
             parts = []
-            for item in dr.pareto_top_k:
+            any_peer = False
+            for item in marked:
                 key = item.get("key")
                 share = item.get("share", 0.0)
-                parts.append(f"{key} (贡献 {share * 100:.0f}%)")
+                star = " ★" if item.get("is_peer") else ""
+                if star:
+                    any_peer = True
+                parts.append(f"{key} (贡献 {share * 100:.0f}%){star}")
             lines.append(f"按 {dr.dimension}：" + ", ".join(parts))
+            if any_peer:
+                lines.append(
+                    "  说明：★ 标记的是并列贡献者（与 Top1 差距 ≤ 10pp），"
+                    "分析时必须全部纳入 scope。"
+                )
     lines.append("")
 
     lines.append("【可能相关事件（来自行内事件库）】")

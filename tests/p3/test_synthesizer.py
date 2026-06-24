@@ -176,3 +176,71 @@ def test_is_rca_question_below_threshold():
     assert is_rca_question(_anchor_with(0.3)) is False
     assert is_rca_question(_anchor_with(-0.49)) is False
     assert is_rca_question(_anchor_with(0.5)) is True  # 边界：≥ 0.5% 算 RCA
+
+
+# ============================================================
+# Task 2: close-peer ★ marking
+# ============================================================
+
+from chat_bi_agent.agents.p3.synthesizer import (
+    CLOSE_PEER_THRESHOLD,
+    _mark_close_peers,
+)
+
+
+def test_close_peer_threshold_is_10pp():
+    assert CLOSE_PEER_THRESHOLD == 0.10
+
+
+def test_mark_close_peers_within_threshold():
+    items = [
+        {"key": "MASS", "share": 0.40},
+        {"key": "AFFLUENT", "share": 0.32},
+        {"key": "BASIC", "share": 0.31},
+    ]
+    out = _mark_close_peers(items)
+    assert out[0]["is_peer"] is True   # top1 自己
+    assert out[1]["is_peer"] is True   # gap 8pp ≤ 10pp
+    assert out[2]["is_peer"] is True   # gap 9pp ≤ 10pp
+
+
+def test_mark_close_peers_outside_threshold():
+    items = [
+        {"key": "MASS", "share": 0.40},
+        {"key": "AFFLUENT", "share": 0.32},
+        {"key": "BASIC", "share": 0.15},
+    ]
+    out = _mark_close_peers(items)
+    assert out[0]["is_peer"] is True
+    assert out[1]["is_peer"] is True   # gap 8pp ≤ 10pp
+    assert out[2]["is_peer"] is False  # gap 25pp > 10pp
+
+
+def test_mark_close_peers_empty():
+    assert _mark_close_peers([]) == []
+
+
+def test_user_prompt_contains_star_for_peers():
+    """有 close peer 时渲染输出含 ★ 标记和说明。"""
+    drill = DrillResult(
+        dimension="customer_tier",
+        nl_question="按 customer_tier 拆解",
+        sql="",
+        rows=[],
+        pareto_top_k=[
+            {"key": "MASS", "value": 40.0, "share": 0.40, "cum_share": 0.40},
+            {"key": "AFFLUENT", "value": 32.0, "share": 0.32, "cum_share": 0.72},
+            {"key": "BASIC", "value": 15.0, "share": 0.15, "cum_share": 0.87},
+        ],
+    )
+    prompt = _build_user_prompt(
+        question="why?",
+        fact_anchor=_fact_anchor(),
+        drill_results=[drill],
+        matched_events=[_event()],
+    )
+    assert "MASS (贡献 40%) ★" in prompt
+    assert "AFFLUENT (贡献 32%) ★" in prompt
+    assert "BASIC (贡献 15%)" in prompt
+    assert "BASIC (贡献 15%) ★" not in prompt
+    assert "★ 标记的是并列贡献者" in prompt
