@@ -201,9 +201,9 @@ def test_mark_close_peers_within_threshold():
         {"key": "BASIC", "share": 0.31},
     ]
     out = _mark_close_peers(items)
-    assert out[0]["is_peer"] is True   # top1 自己
-    assert out[1]["is_peer"] is True   # gap 8pp ≤ 10pp
-    assert out[2]["is_peer"] is True   # gap 9pp ≤ 10pp
+    assert out[0]["is_peer"] is True  # top1 自己
+    assert out[1]["is_peer"] is True  # gap 8pp ≤ 10pp
+    assert out[2]["is_peer"] is True  # gap 9pp ≤ 10pp
 
 
 def test_mark_close_peers_outside_threshold():
@@ -214,7 +214,7 @@ def test_mark_close_peers_outside_threshold():
     ]
     out = _mark_close_peers(items)
     assert out[0]["is_peer"] is True
-    assert out[1]["is_peer"] is True   # gap 8pp ≤ 10pp
+    assert out[1]["is_peer"] is True  # gap 8pp ≤ 10pp
     assert out[2]["is_peer"] is False  # gap 25pp > 10pp
 
 
@@ -264,10 +264,9 @@ from chat_bi_agent.agents.p3.synthesizer import (
     _validate_extraction,
 )
 
-
 _GOOD_JSON_STR = """{
   "event": {"id": "anxin_90_expire", "name": "安鑫 90 天到期"},
-  "quant": {"metric_name": "AUM", "pop_pct": -20.9,
+  "quant": {"metric_name": "AUM", "current_value": 80.0, "pop_pct": -20.9,
             "window": "2026-05-14 to 2026-05-20", "direction": "down"},
   "mechanism_chain": [
     "安鑫 90 天产品集中到期触发资金回流",
@@ -336,6 +335,20 @@ def test_validate_extraction_empty_scope():
         _validate_extraction(bad)
 
 
+def test_validate_extraction_missing_current_value():
+    bad = copy.deepcopy(json.loads(_GOOD_JSON_STR))
+    del bad["quant"]["current_value"]
+    with pytest.raises(ValueError, match="current_value"):
+        _validate_extraction(bad)
+
+
+def test_validate_extraction_missing_pop_pct():
+    bad = copy.deepcopy(json.loads(_GOOD_JSON_STR))
+    del bad["quant"]["pop_pct"]
+    with pytest.raises(ValueError, match="pop_pct"):
+        _validate_extraction(bad)
+
+
 # ============================================================
 # Task 4: Pass 2 narrator — prompt + template fallback
 # ============================================================
@@ -363,7 +376,8 @@ def test_template_narrative_contains_all_four_elements():
     nar = _template_narrative_from_extraction(ext)
     assert "安鑫 90 天到期" in nar
     assert "AUM" in nar
-    assert "-20.9" in nar
+    assert "80.0" in nar  # current_value
+    assert "-20.9" in nar  # pop_pct
     assert "2026-05-14" in nar
     for seg in ext["mechanism_chain"]:
         assert seg in nar
@@ -391,7 +405,6 @@ def test_template_narrative_handles_empty_event_id():
 # ============================================================
 
 from chat_bi_agent.agents.p3.synthesizer import _synthesize_rca_two_pass
-
 
 _PASS1_GOOD = SimpleNamespace(content="```json\n" + _GOOD_JSON_STR + "\n```")
 _PASS2_GOOD = SimpleNamespace(

@@ -137,6 +137,9 @@ def _validate_extraction(ext: dict) -> None:
     for k in _REQUIRED_EXTRACTION_KEYS:
         if k not in ext:
             raise ValueError(f"missing field: {k}")
+    quant = ext.get("quant")
+    if not isinstance(quant, dict) or "current_value" not in quant or "pop_pct" not in quant:
+        raise ValueError("quant must include both current_value and pop_pct")
     chain = ext.get("mechanism_chain")
     if not isinstance(chain, list) or len(chain) != 3:
         raise ValueError(f"mechanism_chain must have exactly 3 items, got {chain}")
@@ -199,17 +202,15 @@ def _template_narrative_from_extraction(ext: dict) -> str:
     event_name = ext["event"]["name"]
     quant = ext["quant"]
     metric = quant["metric_name"]
+    current = quant["current_value"]
     pop = quant["pop_pct"]
     window = quant["window"]
     chain = " → ".join(ext["mechanism_chain"])
-    scope_parts = [
-        f"{dim}={','.join(str(v) for v in vals)}"
-        for dim, vals in ext["scope"].items()
-    ]
+    scope_parts = [f"{dim}={','.join(str(v) for v in vals)}" for dim, vals in ext["scope"].items()]
     scope_text = "; ".join(scope_parts) if scope_parts else "全行口径"
     return (
-        f"受「{event_name}」影响，{metric} 在 {window} 期间出现 "
-        f"{pop:+.1f}% 变化。传导路径：{chain}。"
+        f"受「{event_name}」影响，{metric} 在 {window} 期间当前值 {current}，"
+        f"环比 {pop:+.1f}%。传导路径：{chain}。"
         f"影响范围集中于 {scope_text}。"
     )
 
@@ -222,8 +223,7 @@ def _template_conclusion_from_extraction(ext: dict) -> str:
     if main_scope:
         dim, vals = main_scope
         return (
-            f"本期变化主要由「{event_name}」驱动，"
-            f"集中于 {dim}={','.join(str(v) for v in vals)}。"
+            f"本期变化主要由「{event_name}」驱动，集中于 {dim}={','.join(str(v) for v in vals)}。"
         )
     return f"本期变化主要与「{event_name}」相关。"
 
@@ -276,9 +276,7 @@ def _synthesize_rca_two_pass(
         _validate_extraction(extraction)
     except Exception as e:
         print(f"[synthesizer] Pass 1 failed ({type(e).__name__}: {e}); fallback to legacy")
-        return _synthesize_legacy(
-            question, fact_anchor, drill_results, matched_events, llm_client
-        )
+        return _synthesize_legacy(question, fact_anchor, drill_results, matched_events, llm_client)
 
     # Pass 2: 翻自然语言
     pass2_user_prompt = (
@@ -323,6 +321,4 @@ def synthesize(
         return _synthesize_rca_two_pass(
             question, fact_anchor, drill_results, matched_events, llm_client
         )
-    return _synthesize_legacy(
-        question, fact_anchor, drill_results, matched_events, llm_client
-    )
+    return _synthesize_legacy(question, fact_anchor, drill_results, matched_events, llm_client)
