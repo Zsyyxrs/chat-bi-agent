@@ -7,6 +7,15 @@ from chat_bi_agent.agents.p3.prompts.synthesizer_system import SYNTHESIZER_SYSTE
 from chat_bi_agent.agents.p3.types import DrillResult, FactAnchor, MatchedEvent
 
 
+def is_rca_question(fact_anchor: FactAnchor) -> bool:
+    """RCA 题：有显著指标数值变化；设计题/无变化题走 legacy 旁路。"""
+    if fact_anchor.change_pct is None:
+        return False
+    if abs(fact_anchor.change_pct) < 0.5:
+        return False
+    return True
+
+
 def _build_user_prompt(
     question: str,
     fact_anchor: FactAnchor,

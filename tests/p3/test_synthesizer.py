@@ -140,3 +140,39 @@ def test_synthesize_llm_failure_returns_fallback_pair():
     )
     assert "retail_deposit_balance" in narrative
     assert conclusion  # non-empty fallback conclusion
+
+
+# ============================================================
+# Task 1: is_rca_question classifier
+# ============================================================
+
+from chat_bi_agent.agents.p3.synthesizer import is_rca_question
+
+
+def _anchor_with(change_pct):
+    return FactAnchor(
+        metric_name="m",
+        time_window="w",
+        current_value=1.0,
+        prior_value=1.0,
+        change_pct=change_pct,
+        direction="flat" if change_pct in (None, 0.0) else "down",
+        sql="",
+        rows=[],
+    )
+
+
+def test_is_rca_question_with_significant_change():
+    assert is_rca_question(_anchor_with(-20.9)) is True
+    assert is_rca_question(_anchor_with(5.0)) is True
+
+
+def test_is_rca_question_no_change():
+    assert is_rca_question(_anchor_with(None)) is False
+    assert is_rca_question(_anchor_with(0.0)) is False
+
+
+def test_is_rca_question_below_threshold():
+    assert is_rca_question(_anchor_with(0.3)) is False
+    assert is_rca_question(_anchor_with(-0.49)) is False
+    assert is_rca_question(_anchor_with(0.5)) is True  # 边界：≥ 0.5% 算 RCA
