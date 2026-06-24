@@ -4,8 +4,6 @@ import json
 import re
 from typing import Any
 
-from langfuse import observe
-
 from chat_bi_agent.agents.p3.prompts.synthesizer_extractor import (
     SYNTHESIZER_EXTRACTOR_SYSTEM_PROMPT,
 )
@@ -255,7 +253,6 @@ def _synthesize_legacy(
         )
 
 
-@observe(name="synthesize_rca_two_pass")
 def _synthesize_rca_two_pass(
     question: str,
     fact_anchor: FactAnchor,
