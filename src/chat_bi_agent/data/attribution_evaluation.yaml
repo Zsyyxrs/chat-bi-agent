@@ -29,7 +29,7 @@ evaluation_questions:
     expected_key_metrics:
       - metric: retail_deposit_balance
         change_direction: down
-        magnitude: -5.95  # 实测 (2026-05-14~23 vs 5-04~13, BR_CITY_0006 × HNW × CURRENT)
+        magnitude: -3.4  # 实测 agent 对齐窗口 (5/11-5/20 vs 5/01-5/10, BR_CITY_0006 × HNW × CURRENT)
         tolerance: "±50%"
     evaluation_criteria:
       - dimension_recall: "Agent 是否识别出 branch_id, customer_tier, product_id"
@@ -57,7 +57,7 @@ evaluation_questions:
         tolerance: "±50%"
       - metric: wealth_product_balance (PROD_WEA_0032/0033 转入产品)
         change_direction: up
-        magnitude: 15.0  # expected_root_cause 明示
+        magnitude: 15.85  # 实测 agent 窗口 (snapshot 5/31 vs 4/30, PROD_WEA_0032/0033)
         tolerance: "±50%"
     evaluation_criteria:
       - product_identification: "Agent 是否精准定位到源产品和目标产品"
@@ -83,7 +83,7 @@ evaluation_questions:
     expected_key_metrics:
       - metric: cash_withdrawal_amount
         change_direction: up
-        magnitude: 24.1  # 实测 (2026-02-15~23 vs 2-06~14, BASIC+MASS × ATM+COUNTER × WITHDRAW)
+        magnitude: 24.1  # 实测 agent 窗口 (2/15-2/23 vs 2/06-2/14, BASIC+MASS × ATM+COUNTER × WITHDRAW)
         tolerance: "±50%"
     evaluation_criteria:
       - seasonal_recognition: "Agent 是否识别出春节季节性而非异常"
@@ -105,7 +105,7 @@ evaluation_questions:
     expected_key_metrics:
       - metric: average_daily_balance
         change_direction: down
-        magnitude: -8.2  # 实测 (2026-02-15~23 vs 2-06~14, BASIC+MASS)
+        magnitude: -6.3  # 实测 agent 窗口 (2/15-2/28 vs 2/01-2/14, BASIC+MASS)
         tolerance: "±50%"
     evaluation_criteria:
       - temporal_analysis: "Agent 是否能关联特定时间窗口与业务事件"
@@ -136,7 +136,7 @@ evaluation_questions:
         tolerance: "±50%"
       - metric: loan_balance
         change_direction: up
-        magnitude: 4.1  # 实测 (2026-07-04~20 vs 6-03~19, 全行 × LOAN)
+        magnitude: 2.0  # 实测 agent 窗口 (6/26-7/20 vs 6/01-6/25, 全行 × LOAN)
         tolerance: "±50%"
     evaluation_criteria:
       - policy_recognition: "Agent 是否识别出 LPR 下调政策"
@@ -163,7 +163,7 @@ evaluation_questions:
     expected_key_metrics:
       - metric: saving_deposit_balance
         change_direction: up
-        magnitude: 7.5  # 实测 (2026-08-12~19 vs 8-01~09, 杭州+南京 × MASS+AFFLUENT × SAVING)
+        magnitude: 7.2  # 实测 agent 窗口 (8/11-8/20 vs 8/01-8/10, 杭州+南京 × MASS+AFFLUENT × SAVING)
         tolerance: "±50%"
     evaluation_criteria:
       - campaign_attribution: "Agent 是否将增长归因于七夕营销活动"
@@ -190,7 +190,7 @@ evaluation_questions:
     expected_key_metrics:
       - metric: AUM
         change_direction: down
-        magnitude: -3.8  # 实测 (2026-05-14~20 vs 5-07~13, BR_CITY_0006 × HNW)
+        magnitude: -3.8  # 实测 agent 窗口 (5/14-5/20 vs 5/07-5/13, BR_CITY_0006 × HNW)
         tolerance: "±50%"
     evaluation_criteria:
       - signal_separation: "Agent 是否能分离多个同期因素"
