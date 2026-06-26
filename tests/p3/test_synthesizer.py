@@ -1,12 +1,29 @@
 """Tests for synthesizer (LLM with mocked client)."""
 
+import copy
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
+from chat_bi_agent.agents.p3.prompts.synthesizer_extractor import (
+    SYNTHESIZER_EXTRACTOR_SYSTEM_PROMPT,
+)
+from chat_bi_agent.agents.p3.prompts.synthesizer_narrator import (
+    SYNTHESIZER_NARRATOR_SYSTEM_PROMPT,
+)
 from chat_bi_agent.agents.p3.synthesizer import (
+    CLOSE_PEER_THRESHOLD,
     _build_user_prompt,
+    _mark_close_peers,
     _parse_dual_output,
+    _parse_extraction_json,
+    _synthesize_rca_two_pass,
+    _template_conclusion_from_extraction,
+    _template_narrative_from_extraction,
+    _validate_extraction,
+    is_rca_question,
     synthesize,
 )
 from chat_bi_agent.agents.p3.types import (
@@ -148,8 +165,6 @@ def test_synthesize_llm_failure_returns_fallback_pair():
 # Task 1: is_rca_question classifier
 # ============================================================
 
-from chat_bi_agent.agents.p3.synthesizer import is_rca_question
-
 
 def _anchor_with(change_pct):
     return FactAnchor(
@@ -184,11 +199,6 @@ def test_is_rca_question_below_threshold():
 # Task 2: close-peer ★ marking
 # ============================================================
 
-from chat_bi_agent.agents.p3.synthesizer import (
-    CLOSE_PEER_THRESHOLD,
-    _mark_close_peers,
-)
-
 
 def test_close_peer_threshold_is_10pp():
     assert CLOSE_PEER_THRESHOLD == 0.10
@@ -201,9 +211,9 @@ def test_mark_close_peers_within_threshold():
         {"key": "BASIC", "share": 0.31},
     ]
     out = _mark_close_peers(items)
-    assert out[0]["is_peer"] is True   # top1 自己
-    assert out[1]["is_peer"] is True   # gap 8pp ≤ 10pp
-    assert out[2]["is_peer"] is True   # gap 9pp ≤ 10pp
+    assert out[0]["is_peer"] is True  # top1 自己
+    assert out[1]["is_peer"] is True  # gap 8pp ≤ 10pp
+    assert out[2]["is_peer"] is True  # gap 9pp ≤ 10pp
 
 
 def test_mark_close_peers_outside_threshold():
@@ -214,7 +224,7 @@ def test_mark_close_peers_outside_threshold():
     ]
     out = _mark_close_peers(items)
     assert out[0]["is_peer"] is True
-    assert out[1]["is_peer"] is True   # gap 8pp ≤ 10pp
+    assert out[1]["is_peer"] is True  # gap 8pp ≤ 10pp
     assert out[2]["is_peer"] is False  # gap 25pp > 10pp
 
 
@@ -251,19 +261,6 @@ def test_user_prompt_contains_star_for_peers():
 # ============================================================
 # Task 3: Pass 1 extractor — prompt + parse + validate
 # ============================================================
-
-import copy
-
-import pytest
-
-from chat_bi_agent.agents.p3.prompts.synthesizer_extractor import (
-    SYNTHESIZER_EXTRACTOR_SYSTEM_PROMPT,
-)
-from chat_bi_agent.agents.p3.synthesizer import (
-    _parse_extraction_json,
-    _validate_extraction,
-)
-
 
 _GOOD_JSON_STR = """{
   "event": {"id": "anxin_90_expire", "name": "安鑫 90 天到期"},
@@ -363,14 +360,6 @@ def test_validate_extraction_missing_pop_pct():
 # Task 4: Pass 2 narrator — prompt + template fallback
 # ============================================================
 
-from chat_bi_agent.agents.p3.prompts.synthesizer_narrator import (
-    SYNTHESIZER_NARRATOR_SYSTEM_PROMPT,
-)
-from chat_bi_agent.agents.p3.synthesizer import (
-    _template_conclusion_from_extraction,
-    _template_narrative_from_extraction,
-)
-
 
 def test_narrator_prompt_mentions_hard_constraints():
     p = SYNTHESIZER_NARRATOR_SYSTEM_PROMPT
@@ -413,9 +402,6 @@ def test_template_narrative_handles_empty_event_id():
 # ============================================================
 # Task 5: orchestration — _synthesize_rca_two_pass + synthesize() dispatch
 # ============================================================
-
-from chat_bi_agent.agents.p3.synthesizer import _synthesize_rca_two_pass
-
 
 _PASS1_GOOD = SimpleNamespace(content="```json\n" + _GOOD_JSON_STR + "\n```")
 _PASS2_GOOD = SimpleNamespace(

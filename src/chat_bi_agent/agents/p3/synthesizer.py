@@ -154,6 +154,19 @@ def _validate_extraction(ext: dict) -> None:
         raise ValueError("scope must be a non-empty dict")
 
 
+def _reconcile_quant_with_fact_anchor(extraction: dict, fact_anchor: FactAnchor) -> None:
+    """Force extractor JSON's pop_pct / current_value to ground-truth fact_anchor.
+
+    Extractor prompt 要求"原样抄写"fact_anchor 的数字，但 LLM 偶有编造或抄错
+    （把 drill ★ 行某个 change_pct 塞到 pop_pct 等）。直接覆盖保证 narrative
+    数字 = P3 真值。fact_anchor.change_pct 可能是 None（_compute_change 熔断），
+    此时 pop_pct 保留 None，narrator/template 端会跳过百分比表达。
+    """
+    quant = extraction["quant"]
+    quant["pop_pct"] = fact_anchor.change_pct
+    quant["current_value"] = fact_anchor.current_value
+
+
 def _fallback_narrative(
     fact_anchor: FactAnchor,
     drill_results: list[DrillResult],
@@ -210,16 +223,14 @@ def _template_narrative_from_extraction(ext: dict) -> str:
     metric_zh = quant["metric_name_zh"]
     current_display = quant["current_value_display"]
     pop = quant["pop_pct"]
+    pop_str = "n/a" if pop is None else f"{pop:+.1f}%"
     window = quant.get("window", "")
     chain = " → ".join(ext["mechanism_chain"])
-    scope_parts = [
-        f"{dim}={','.join(str(v) for v in vals)}"
-        for dim, vals in ext["scope"].items()
-    ]
+    scope_parts = [f"{dim}={','.join(str(v) for v in vals)}" for dim, vals in ext["scope"].items()]
     scope_text = "; ".join(scope_parts) if scope_parts else "全行口径"
     return (
         f"受「{event_name}」影响，{metric_zh} 在 {window} 期间当前值 "
-        f"{current_display}，环比 {pop:+.1f}%。传导路径：{chain}。"
+        f"{current_display}，环比 {pop_str}。传导路径：{chain}。"
         f"影响范围集中于 {scope_text}。"
     )
 
@@ -232,8 +243,7 @@ def _template_conclusion_from_extraction(ext: dict) -> str:
     if main_scope:
         dim, vals = main_scope
         return (
-            f"本期变化主要由「{event_name}」驱动，"
-            f"集中于 {dim}={','.join(str(v) for v in vals)}。"
+            f"本期变化主要由「{event_name}」驱动，集中于 {dim}={','.join(str(v) for v in vals)}。"
         )
     return f"本期变化主要与「{event_name}」相关。"
 
@@ -284,11 +294,10 @@ def _synthesize_rca_two_pass(
         )
         extraction = _parse_extraction_json(pass1_result.content)
         _validate_extraction(extraction)
+        _reconcile_quant_with_fact_anchor(extraction, fact_anchor)
     except Exception as e:
         print(f"[synthesizer] Pass 1 failed ({type(e).__name__}: {e}); fallback to legacy")
-        return _synthesize_legacy(
-            question, fact_anchor, drill_results, matched_events, llm_client
-        )
+        return _synthesize_legacy(question, fact_anchor, drill_results, matched_events, llm_client)
 
     # Pass 2: 翻自然语言
     pass2_user_prompt = (
@@ -333,6 +342,4 @@ def synthesize(
         return _synthesize_rca_two_pass(
             question, fact_anchor, drill_results, matched_events, llm_client
         )
-    return _synthesize_legacy(
-        question, fact_anchor, drill_results, matched_events, llm_client
-    )
+    return _synthesize_legacy(question, fact_anchor, drill_results, matched_events, llm_client)
