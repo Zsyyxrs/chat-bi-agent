@@ -108,7 +108,7 @@ def test_run_fact_anchor_augments_pop_question_with_dual_window_constraint():
 
 
 def test_run_fact_anchor_skips_augment_for_meta_question():
-    # q008 类元问题（"如何设计预警模型"）不能 augment，否则 LLM 会强造无意义的 PoP SQL。
+    # 元问题（如"如何设计预警模型"这类咨询/设计题）不能 augment，否则 LLM 会强造无意义的 PoP SQL。
     p1 = FakeP1Agent(
         responses={
             "q_meta": FakeP1Result(

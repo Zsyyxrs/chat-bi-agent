@@ -1,6 +1,7 @@
 """P3 fact_anchor step: wraps P1 NL2SQL to anchor metric + period-over-period change."""
 
 import re
+from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -8,6 +9,42 @@ from chat_bi_agent.agents.p3.types import FactAnchor
 
 # psycopg2 returns PostgreSQL NUMERIC/DECIMAL as Decimal; treat as numeric here.
 _NUMERIC_TYPES = (int, float, Decimal)
+
+
+# 业务上 prior 小于此值（绝对值，单位通常元 / 笔）的 PoP 没有统计意义——
+# 极小分母会导致环比放大成天文数字（曾在 q005/q007 narrative 见到 +2513237%、+11824%）。
+# 触发熔断时返回 pct=None，下游 narrator 不会报荒诞百分比。
+_MIN_PRIOR_FOR_PCT: float = 100.0
+
+
+_BETWEEN_DATES_RE = re.compile(
+    r"BETWEEN\s+DATE\s+'(\d{4}-\d{2}-\d{2})'\s+AND\s+DATE\s+'(\d{4}-\d{2}-\d{2})'",
+    re.IGNORECASE,
+)
+
+
+def _validate_window_parity(sql: str) -> bool:
+    """Check that all `BETWEEN DATE '...' AND DATE '...'` ranges in SQL span equal days.
+
+    P3 _FACT_ANCHOR_AUGMENT Rule 3 requires "对照期 = 紧贴前等长窗口"; when P1 violates
+    it (e.g. q005 历史 bug 写成 6/26-7/20 vs 6/11-6/25 → 25天 vs 15天 → SUM 放大 67%
+    + 事件 +3% 叠加成虚假 +330%), the PoP is unreliable. Return False to signal the
+    caller should drop change_pct (set to None) rather than report a misleading number.
+    """
+    if not sql:
+        return True
+    matches = _BETWEEN_DATES_RE.findall(sql)
+    if len(matches) < 2:
+        return True
+    lengths = set()
+    for start, end in matches:
+        try:
+            s = date.fromisoformat(start)
+            e = date.fromisoformat(end)
+        except ValueError:
+            continue
+        lengths.add((e - s).days + 1)
+    return len(lengths) <= 1
 
 
 def _compute_change(
@@ -19,12 +56,13 @@ def _compute_change(
 
     Returns (current, prior, change_pct, direction).
     - prior is None → pct None, direction "flat".
-    - prior is 0 → pct None, direction inferred from sign of current.
+    - prior is 0 or |prior| < _MIN_PRIOR_FOR_PCT → pct None,
+      direction inferred from sign of current (避免极小分母放大成天文数字).
     - |pct| < flat_band_pct → direction "flat".
     """
     if prior is None:
         return current, None, None, "flat"
-    if prior == 0:
+    if prior == 0 or abs(prior) < _MIN_PRIOR_FOR_PCT:
         if current > 0:
             return current, prior, None, "up"
         if current < 0:
@@ -107,9 +145,21 @@ _FACT_ANCHOR_AUGMENT = (
     "对照期依然按上述 adjacent 规则取。\n"
     '   - current 必须对应"分析期"（事件期间/题目询问的窗口），'
     'prior 必须对应"对照期"（事件前的基线），不能颠倒。\n'
-    "4. 快照表（fct_holding 等只在月末有数据的表）必须用最近的月末作为窗口，"
-    "不能用月中区间：分析期=问题月份的月末，对照期=上月末。"
-    '示例：题面问"5 月中旬持仓下降" → current=snapshot_dt=5/31，prior=snapshot_dt=4/30。\n'
+    "4. 表的时间粒度判断（防止把日表当快照、把快照当日表）：\n"
+    "   - **日表** fct_balance_daily / fct_transaction：每日有数据，**必须**用\n"
+    "     daily window 聚合（BETWEEN dt 'X' AND dt 'Y' + SUM/AVG），\n"
+    "     **禁止**用单日 snapshot_dt 等值过滤——日表没有 snapshot 概念，\n"
+    "     单日值对比会把日波动放大成天文数字（q007 历史 bug：错用\n"
+    "     `WHERE snapshot_dt = '2026-05-31' / '2026-04-30'` 在 fct_balance_daily 上，\n"
+    "     单日余额差被算成 PoP +1161% 伪信号）。\n"
+    "   - **快照表** fct_holding：只在每月月末有数据，**必须**用最近月末\n"
+    "     （snapshot_dt = DATE 'YYYY-MM-末'），不能用月中区间。\n"
+    '   - 示例 1（日表 / daily window）：题面"5 月中旬存款下降" → fct_balance_daily 用\n'
+    "     BETWEEN dt '2026-05-11' AND '2026-05-20' vs BETWEEN dt '2026-05-01' AND '2026-05-10'。\n"
+    '   - 示例 2（快照表 / month-end snapshot）：题面"5 月中旬持仓下降" → fct_holding 用\n'
+    "     snapshot_dt = '2026-05-31' vs snapshot_dt = '2026-04-30'。\n"
+    '   - 表选择依据：题面问"余额"且 metric 是流量/存量（如 balance）→ fct_balance_daily；\n'
+    '     题面问"持仓/市值" → fct_holding。\n'
     "5. 单行输出汇总值即可，不需要按 GROUP BY 维度展开（维度拆解由后续 drill 完成）。\n"
     '6. 度量选择默认按"金额"语义解读，除非题面显式写"笔数/次数"：\n'
     '   - "交易量/支取量/存取量/转账量/消费额/收入" → SUM(amount)\n'
@@ -201,6 +251,10 @@ def run_fact_anchor(
         return None
 
     cur, prior, change_pct, direction = _compute_change(current=cur, prior=prior)
+    # 窗口对等性校验：两期窗口长度不一致时，PoP 会被窗口长度差异强烈放大，
+    # 此时 change_pct 不可信，置 None 让 narrator 跳过 PoP（同 _compute_change 熔断行为）。
+    if change_pct is not None and not _validate_window_parity(p1_result.sql):
+        change_pct = None
     return FactAnchor(
         metric_name=_infer_metric_name(rows),
         time_window=_extract_time_window(p1_result.sql),
