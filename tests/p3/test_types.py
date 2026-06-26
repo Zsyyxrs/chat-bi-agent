@@ -79,7 +79,9 @@ def test_rca_report_to_eval_input_basic():
     eval_input = report.to_eval_input()
     assert eval_input["question_id"] == "attribution_q001"
     assert "BR_CITY_0006" in eval_input["agent_response"]
-    assert eval_input["agent_conclusion"] == "根因是安鑫 90 天理财到期。"
+    # agent_conclusion 现在传 narrative（保持 runner ↔ rejudge 评分输入一致），
+    # 而非简短的 conclusion 字段——judge prompt 的 quant/mech/scope 机械化规则需要细节。
+    assert eval_input["agent_conclusion"] == report.narrative
     assert eval_input["agent_identified_event"] == "anxin_90_expire"
     assert "branch_id" in eval_input["agent_extracted_dimensions"]
     assert "BR_CITY_0006" in eval_input["agent_extracted_dimensions"]["branch_id"]
@@ -100,4 +102,5 @@ def test_rca_report_to_eval_input_no_events():
     eval_input = report.to_eval_input()
     assert eval_input["agent_identified_event"] is None
     assert eval_input["agent_extracted_dimensions"] == {}
-    assert eval_input["agent_conclusion"] == ""
+    # agent_conclusion 现在传 narrative，no-events 用例的 narrative 是 "no clear cause identified"
+    assert eval_input["agent_conclusion"] == report.narrative

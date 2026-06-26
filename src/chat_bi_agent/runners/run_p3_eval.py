@@ -159,6 +159,7 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
                     "conclusion_rubric": score.conclusion_rubric,
                     "hallucination_detected": bool(score.hallucination_detected),
                 },
+                "narrative": report.narrative,
                 "narrative_preview": report.narrative[:200],
                 "error": report.error,
             }

@@ -80,5 +80,9 @@ class RCAReport:
             "agent_response": self.narrative,
             "agent_extracted_dimensions": dims,
             "agent_identified_event": identified_event,
-            "agent_conclusion": self.conclusion,
+            # LLM judge 评分对象用完整 narrative 而非 conclusion——
+            # judge prompt 的 quantification/mechanism/scope 机械化规则需要细节
+            # （数字、传导链、scope 维度值），conclusion 一两句话不够，会让 judge 给低分。
+            # rejudge_baseline.py 历来用 narrative 评分作为基准；保持两路输入一致。
+            "agent_conclusion": self.narrative,
         }
