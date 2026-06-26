@@ -22,6 +22,9 @@ dependencies = [
     "numpy>=1.26.0",
     "sqlglot>=20,<27",
     "jieba>=0.42.1",
+    "streamlit>=1.30",
+    "plotly>=5.20",
+    "pandas>=2.0",
 ]
 
 [project.optional-dependencies]
