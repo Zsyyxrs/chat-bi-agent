@@ -19,7 +19,7 @@ for _key in ("NO_PROXY", "no_proxy"):
         )
 
 import dashscope  # noqa: E402
-from dashscope import MultiModalConversation, TextEmbedding  # noqa: E402
+from dashscope import Generation, TextEmbedding  # noqa: E402
 from langfuse import get_client, observe  # noqa: E402
 
 from chat_bi_agent.config import (  # noqa: E402
@@ -54,23 +54,23 @@ def chat(
 ) -> ChatResult:
     """单轮聊天调用。低 temperature 适合 NL2SQL。"""
     _ensure_api_key()
-    # resp = Generation.call(
-    #     model=CHAT_MODEL,
-    #     messages=[
-    #         {"role": "system", "content": system_prompt},
-    #         {"role": "user", "content": user_prompt},
-    #     ],
-    #     result_format="message",
-    #     temperature=temperature,
-    # )
-    resp = MultiModalConversation.call(
+    resp = Generation.call(
         model=CHAT_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        result_format="message",
         temperature=temperature,
     )
+    # resp = MultiModalConversation.call(
+    #     model=CHAT_MODEL,
+    #     messages=[
+    #         {"role": "system", "content": system_prompt},
+    #         {"role": "user", "content": user_prompt},
+    #     ],
+    #     temperature=temperature,
+    # )
     if resp.status_code != 200:
         raise RuntimeError(f"qwen chat 调用失败: {resp.code} {resp.message}")
     choice = resp.output.choices[0]
@@ -82,9 +82,19 @@ def chat(
             "output": resp.usage.output_tokens,
         },
     )
+    # DashScope SDK 返回的 content 有两种格式（取决于 SDK / API 版本）：
+    # 1. str（当前默认）：直接是文本
+    # 2. list[dict]（旧 multi-modal 兼容格式）：[{"text": "..."}]
+    # 在这里做兼容，无论哪种返回都能正确取文本，避免上游每次 SDK 升级都炸。
+    raw_content = choice.message.content
+    if isinstance(raw_content, list) and raw_content and isinstance(raw_content[0], dict):
+        text_content = raw_content[0].get("text", "")
+    elif isinstance(raw_content, str):
+        text_content = raw_content
+    else:
+        text_content = ""
     return ChatResult(
-        # content=choice.message.content,
-        content=choice.message.content[0]["text"],
+        content=text_content,
         prompt_tokens=resp.usage.input_tokens,
         completion_tokens=resp.usage.output_tokens,
     )
