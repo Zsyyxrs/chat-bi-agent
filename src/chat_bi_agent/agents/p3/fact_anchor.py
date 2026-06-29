@@ -113,17 +113,38 @@ def _infer_metric_name(rows: list[dict]) -> str:
 
 
 def _extract_current_prior(rows: list[dict]) -> tuple[float | None, float | None]:
-    """Look for paired (current/prior) numeric columns; fall back to first numeric only."""
+    """Look for paired (current/prior) numeric columns.
+
+    优先按 current_<suffix> ↔ prior_<suffix> 显式同后缀配对（multi-metric SQL 的
+    防错配兜底——q007 历史 bug：P1 CROSS JOIN 把 deposit AVG + AUM SUM 写到一行
+    4 列，旧逻辑取首个非 prior 列做 cur、最后一个 prior 列做 prior，结果 cur=
+    deposit 而 prior=AUM 跨指标错配，PoP 算出 -100%）。
+    无显式 current_ 前缀时回退到松匹配：第一个非 prior 列做 cur，第一个 prior 列做
+    prior（不再覆盖，避免后续 prior 列把前面覆盖掉）。
+    """
     if not rows:
         return None, None
     sample = rows[0]
+    numeric_cols = {
+        c.lower(): c
+        for c, v in sample.items()
+        if isinstance(v, _NUMERIC_TYPES) and not isinstance(v, bool)
+    }
+    for lc, orig in numeric_cols.items():
+        if lc.startswith("current_"):
+            suffix = lc[len("current_") :]
+            prior_lc = f"prior_{suffix}"
+            if prior_lc in numeric_cols:
+                return float(sample[orig]), float(sample[numeric_cols[prior_lc]])
+
     cur, prior = None, None
     for col, val in sample.items():
         if not isinstance(val, _NUMERIC_TYPES) or isinstance(val, bool):
             continue
         lc = col.lower()
         if any(t in lc for t in ("prior", "prev", "last", "lastyear", "yoy", "mom_prev")):
-            prior = float(val)
+            if prior is None:
+                prior = float(val)
         elif cur is None:
             cur = float(val)
     return cur, prior

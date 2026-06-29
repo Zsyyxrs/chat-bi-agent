@@ -4,8 +4,43 @@ from decimal import Decimal
 
 import pytest
 
-from chat_bi_agent.agents.p3.fact_anchor import _compute_change, run_fact_anchor
+from chat_bi_agent.agents.p3.fact_anchor import (
+    _compute_change,
+    _extract_current_prior,
+    run_fact_anchor,
+)
 from tests.p3.conftest import FakeP1Agent, FakeP1Result
+
+
+def test_extract_current_prior_pair_match_same_suffix():
+    # q007 历史 bug：P1 CROSS JOIN 多指标后，4 列里 cur 和 prior 是不同指标，
+    # 旧逻辑 cross-metric 错配出 -100%。新逻辑必须按 current_<suffix> ↔
+    # prior_<suffix> 配对，取首个完整对。
+    row = {
+        "current_deposit_balance": Decimal("99300"),
+        "prior_deposit_balance": Decimal("99100"),
+        "current_aum": Decimal("12000000000"),
+        "prior_aum": Decimal("11860000000"),
+    }
+    cur, prior = _extract_current_prior([row])
+    assert cur == 99300.0
+    assert prior == 99100.0
+
+
+def test_extract_current_prior_legacy_loose_match():
+    # 单对 PoP SQL（没 current_ 前缀）走旧松匹配
+    row = {"avg_balance": 100.0, "prior_avg_balance": 110.0}
+    cur, prior = _extract_current_prior([row])
+    assert cur == 100.0
+    assert prior == 110.0
+
+
+def test_extract_current_prior_no_overwrite_legacy_bug():
+    # 历史 bug：loose match 路径里多个 prior-like 列会被后面的覆盖
+    row = {"v_cur": 100.0, "v_prior": 50.0, "v_lastyear": 999.0}
+    cur, prior = _extract_current_prior([row])
+    assert cur == 100.0
+    assert prior == 50.0  # 不能被 v_lastyear=999 覆盖
 
 
 def test_compute_change_down():
