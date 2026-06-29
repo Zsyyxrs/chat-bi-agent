@@ -187,6 +187,11 @@ _FACT_ANCHOR_AUGMENT = (
     '   - 表选择依据：题面问"余额"且 metric 是流量/存量（如 balance）→ fct_balance_daily；\n'
     '     题面问"持仓/市值" → fct_holding。\n'
     "5. 单行输出汇总值即可，不需要按 GROUP BY 维度展开（维度拆解由后续 drill 完成）。\n"
+    "5b. 单行**只能包含一对** current_<metric> / prior_<metric>，**禁止** CROSS JOIN\n"
+    "    把多指标（如 deposit AVG + AUM SUM）写到同一行 4 列以上——下游提取器\n"
+    "    会跨指标错配（取 cur=deposit、prior=AUM）算出 -100% 假 PoP。\n"
+    "    题面同时问多个指标（如\"存款和 AUM 都波动\"）时挑最贴题的主指标即可；\n"
+    "    次指标由 drill 阶段单独跑或留给 narrator 引用事件库结论。\n"
     '6. 度量选择默认按"金额"语义解读，除非题面显式写"笔数/次数"：\n'
     '   - "交易量/支取量/存取量/转账量/消费额/收入" → SUM(amount)\n'
     '   - "交易笔数/支取次数/transactions count" → COUNT(*)\n'
