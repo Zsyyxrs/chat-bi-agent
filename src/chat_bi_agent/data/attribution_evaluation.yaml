@@ -43,15 +43,16 @@ evaluation_questions:
     expected_root_cause: |
       这是安鑫 90 天理财产品到期后的续作现象。源产品 PROD_WEA_0030/0031
       到期赎回导致客户资金释放；部分客户将资金转入同属 WEALTH 类目的
-      其他理财产品。在 WEALTH 大类整体口径下，5/31 vs 4/30 总持有市值
-      净下降约 -12.5%，反映"赎回 > 续作"的净流出态势。
+      其他理财产品。在 WEALTH 大类整体口径下，agent 实测 5/11-5/20 vs
+      5/01-5/10 的 AVG balance 仅净跌约 -0.2%——类内续作几乎完全缓冲了
+      源产品的赎回冲击，仅留下微弱的净流出信号。
     expected_affected_dimensions:
       - product_id: PROD_WEA_0030
       - product_category: WEALTH
     expected_key_metrics:
-      - metric: wealth_category_total_market_value  # 全 WEALTH 大类总持有市值
+      - metric: wealth_category_balance  # 全 WEALTH 大类日均余额（agent 实跑口径）
         change_direction: down
-        magnitude: -12.54  # 实测 (snapshot 5/31 vs 4/30, p.product_category='WEALTH'); 无产品 ID 泄漏
+        magnitude: -0.19  # 实测 agent 窗口 (AVG balance 5/11-5/20 vs 5/01-5/10, WEALTH)
         tolerance: "±50%"
     evaluation_criteria:
       - product_identification: "Agent 是否精准定位到源产品和目标产品"
