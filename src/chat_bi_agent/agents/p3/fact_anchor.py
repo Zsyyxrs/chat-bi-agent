@@ -1,6 +1,7 @@
 """P3 fact_anchor step: wraps P1 NL2SQL to anchor metric + period-over-period change."""
 
 import re
+from collections import Counter
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
@@ -24,27 +25,31 @@ _BETWEEN_DATES_RE = re.compile(
 
 
 def _validate_window_parity(sql: str) -> bool:
-    """Check that all `BETWEEN DATE '...' AND DATE '...'` ranges in SQL span equal days.
+    """Check that fact_anchor SQL has a valid current/prior window pair.
 
-    P3 _FACT_ANCHOR_AUGMENT Rule 3 requires "对照期 = 紧贴前等长窗口"; when P1 violates
-    it (e.g. q005 历史 bug 写成 6/26-7/20 vs 6/11-6/25 → 25天 vs 15天 → SUM 放大 67%
-    + 事件 +3% 叠加成虚假 +330%), the PoP is unreliable. Return False to signal the
-    caller should drop change_pct (set to None) rather than report a misleading number.
+    判定逻辑：SQL 里所有 BETWEEN 区间按天数计长度，取众数；众数频次 ≥ 2 即视为
+    "current/prior 双窗口存在且等长"，校验通过。这样既能拦截真实不等长伪信号
+    （q005 历史 bug：25天 vs 15天 → SUM 放大 67% 后伪 +330%），也能容忍 SQL 里
+    出现额外的过滤型 BETWEEN（如 WHERE dt BETWEEN '总起' AND '总止' 用作 prefilter，
+    长度与 current/prior 不同但合法）。
     """
     if not sql:
         return True
     matches = _BETWEEN_DATES_RE.findall(sql)
     if len(matches) < 2:
         return True
-    lengths = set()
+    lengths: list[int] = []
     for start, end in matches:
         try:
             s = date.fromisoformat(start)
             e = date.fromisoformat(end)
         except ValueError:
             continue
-        lengths.add((e - s).days + 1)
-    return len(lengths) <= 1
+        lengths.append((e - s).days + 1)
+    if len(lengths) < 2:
+        return True
+    _, freq = Counter(lengths).most_common(1)[0]
+    return freq >= 2
 
 
 def _compute_change(
