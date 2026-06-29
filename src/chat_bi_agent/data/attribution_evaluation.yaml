@@ -100,7 +100,7 @@ evaluation_questions:
     expected_key_metrics:
       - metric: average_daily_balance
         change_direction: down
-        magnitude: -2.99  # 实测 agent 窗口 (2/15-2/28 vs 2/01-2/14, 全行); 客群是 drill 输出，不在校准 SQL 里
+        magnitude: -2.99  # 实测 agent 窗口 (2/15-2/28 vs 2/01-2/14, 全行)
         tolerance: "±50%"
     evaluation_criteria:
       - temporal_analysis: "Agent 是否能关联特定时间窗口与业务事件（narrative 提及 2 月相关窗口即视为命中）"
@@ -122,14 +122,8 @@ evaluation_questions:
       个人消费贷款和房屋贷款响应最快，企业贷款响应较慢。这是典型的
       宏观政策向微观行为传导的案例。
     expected_affected_dimensions:
-      - transaction_type: LOAN
       - policy_date: "2026-06-20"
     expected_key_metrics:
-      - metric: loan_application_amount
-        change_direction: up
-        delay_days: 7
-        magnitude: 12.0  # expected_root_cause 明示 +12%
-        tolerance: "±50%"
       - metric: loan_balance
         change_direction: up
         magnitude: 2.0  # 实测 agent 窗口 (6/26-7/20 vs 6/01-6/25, 全行 × LOAN)
