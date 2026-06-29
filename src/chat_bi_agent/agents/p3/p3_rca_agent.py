@@ -79,8 +79,7 @@ class P3RootCauseAnalysisAgent:
 
         # Step 3: drill down per dimension
         # 把 fact_anchor 的整体变化方向传给 drill：让 pareto 优先取与事件同向的行，
-        # 避免反向大额噪声分行/客层抢占 Top1（如 q006 BR_SUB_0000 跌 -92637
-        # 反客为主，掩盖了真正的 +7200 七夕活动贡献者）。
+        # 避免反向大额噪声分行/客层抢占 Top1
         expected_sign = 0
         if anchor.change_pct is not None:
             if anchor.change_pct > 0:
