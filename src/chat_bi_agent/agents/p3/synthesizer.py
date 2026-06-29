@@ -40,6 +40,22 @@ def _mark_close_peers(items: list[dict]) -> list[dict]:
     ]
 
 
+_PINNED_ENTITY_RE = re.compile(
+    r"\b(BR_[A-Z]+_\d+|PROD_[A-Z]+_\d+|CAMP_[A-Z_]+|"
+    r"HIGH_NET_WORTH|AFFLUENT|MASS|BASIC)\b"
+)
+
+
+def _extract_pinned_entities(question: str) -> list[str]:
+    """从题面提取已字面给定的编码型实体（branch_id / product_id / customer_tier）。
+
+    drill 不会把题面已 pin 的维度再作下钻维度，导致 narrator 可能漏 echo 题面实体
+    （如 q001 题面已含 BR_CITY_0006，但 narrator 没写出来，dim_recall 漏召）。
+    把这些实体显式列入 user_prompt 提示 narrator 必须复述。
+    """
+    return sorted(set(_PINNED_ENTITY_RE.findall(question)))
+
+
 def _build_user_prompt(
     question: str,
     fact_anchor: FactAnchor,
@@ -49,6 +65,14 @@ def _build_user_prompt(
     """Assemble the user message for the synthesizer."""
     lines: list[str] = []
     lines.append(f"【用户问题】\n{question}\n")
+    pinned = _extract_pinned_entities(question)
+    if pinned:
+        lines.append(f"【题面已固定实体】{', '.join(pinned)}")
+        lines.append(
+            "  说明：narrative 与结论必须显式 echo 上述每个标识符的字面值，"
+            "不能省略、不能只用中文别名（如把 BR_CITY_0006 写成"
+            '"上海浦东分行"而不带编码）。\n'
+        )
     lines.append("【事实锚定】")
     lines.append(f"指标：{fact_anchor.metric_name}")
     lines.append(f"时间窗口：{fact_anchor.time_window}")

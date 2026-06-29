@@ -91,6 +91,45 @@ def test_build_user_prompt_no_events_omits_event_block():
     assert "anxin_90_expire" not in prompt
 
 
+def test_build_user_prompt_lists_pinned_entities_from_question():
+    # q001 案例：题面把 BR_CITY_0006 写在原文里，drill 不会再拿它做下钻维度，
+    # narrator 容易漏 echo。user_prompt 必须列出题面已固定的实体提醒 narrator 复述。
+    prompt = _build_user_prompt(
+        question="上海浦东分行（BR_CITY_0006）的高净值客户活期存款余额在五月中旬下降",
+        fact_anchor=_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[],
+    )
+    assert "【题面已固定实体】" in prompt
+    assert "BR_CITY_0006" in prompt.split("【题面已固定实体】")[1].split("\n")[0]
+    assert "echo" in prompt or "复述" in prompt or "字面值" in prompt
+
+
+def test_build_user_prompt_omits_pinned_section_when_no_codes():
+    # 题面无编码型实体（自然语言提问）→ 不加该段，避免噪声
+    prompt = _build_user_prompt(
+        question="为什么 2 月中旬现金支取量上升？",
+        fact_anchor=_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[],
+    )
+    assert "【题面已固定实体】" not in prompt
+
+
+def test_build_user_prompt_pinned_entities_capture_multiple_types():
+    # 多种编码混合（branch + product + tier）都应被捕获
+    prompt = _build_user_prompt(
+        question="MASS 客群在 BR_CITY_0000 分行对 PROD_DEP_0008 的认购上升",
+        fact_anchor=_fact_anchor(),
+        drill_results=[_drill()],
+        matched_events=[],
+    )
+    pinned_line = prompt.split("【题面已固定实体】")[1].split("\n")[0]
+    assert "BR_CITY_0000" in pinned_line
+    assert "PROD_DEP_0008" in pinned_line
+    assert "MASS" in pinned_line
+
+
 def test_parse_dual_output_splits_on_tags():
     content = (
         "【叙述】\n上海分行 BR_CITY_0006 出现下滑，主要受安鑫到期影响。\n"
