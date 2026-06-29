@@ -203,31 +203,13 @@ _POP_KEYWORDS: tuple[str, ...] = (
     "+",  # +12%
     "%",  # 百分比类比较
 )
-_META_KEYWORDS: tuple[str, ...] = (
-    "如何",
-    "如果我想",
-    "设计",
-    "建模",
-    "可以基于哪些",
-    "指标体系",
-    "方法论",
-    "预警模型",
-    "建议指标",
-)
-
-
 def _should_augment(question: str) -> bool:
     """决定是否给 P1 加 PoP 双窗口约束。
 
-    元问题（"如何设计指标体系/模型"）不能 augment——会让 LLM 强造一个无意义的 PoP SQL。
     PoP 问题（含变化/异动语义）必须 augment——否则 LLM 容易写单窗口 SQL，fact_anchor
-    抓不到 prior。两者都没有则保守不 augment。
+    抓不到 prior。没有 PoP 信号则保守不 augment（避免对点查类问题强造 PoP SQL）。
     """
-    if any(kw in question for kw in _META_KEYWORDS):
-        return False
-    if any(kw in question for kw in _POP_KEYWORDS):
-        return True
-    return False
+    return any(kw in question for kw in _POP_KEYWORDS)
 
 
 def run_fact_anchor(
@@ -240,7 +222,7 @@ def run_fact_anchor(
     Returns None if P1 fails (caller decides whether to abort the RCA).
     For PoP-style questions, the question is augmented to force P1 to
     emit a dual-window comparison SQL with current_/prior_ columns;
-    meta/methodology questions skip the augment to avoid degenerate SQL.
+    point-query questions (no PoP keyword) skip the augment.
     """
     if _should_augment(question):
         prompt = question + _FACT_ANCHOR_AUGMENT

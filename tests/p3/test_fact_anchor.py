@@ -107,24 +107,6 @@ def test_run_fact_anchor_augments_pop_question_with_dual_window_constraint():
     assert "prior_<metric>" in sent_question
 
 
-def test_run_fact_anchor_skips_augment_for_meta_question():
-    # 元问题（如"如何设计预警模型"这类咨询/设计题）不能 augment，否则 LLM 会强造无意义的 PoP SQL。
-    p1 = FakeP1Agent(
-        responses={
-            "q_meta": FakeP1Result(
-                question_id="q_meta",
-                sql="SELECT product_id, renewal_rate FROM t",
-                rows=[{"product_id": "PROD_X", "renewal_rate": 0.42}],
-            )
-        }
-    )
-    question = "如果我想设计一个客户续作率的早期预警模型，可以基于哪些指标？"
-    run_fact_anchor(question_id="q_meta", question=question, p1_agent=p1)
-    _, sent_question = p1.calls[0]
-    assert sent_question == question  # 原题不变，没拼 augment
-    assert "current_<metric>" not in sent_question
-
-
 def test_run_fact_anchor_accepts_decimal_rows():
     # psycopg2 RealDictCursor returns NUMERIC/DECIMAL columns as Decimal —
     # fact_anchor must treat them as numeric, not skip them.
