@@ -60,6 +60,7 @@ select = ["E", "F", "W", "I"]
 "tests/shared/test_schema_linker.py" = ["E501"]
 "tests/data/*.py" = ["E501"]
 "scripts/*.py" = ["E402", "E501"]
+"streamlit_app/app.py" = ["E402"]
 
 [tool.pytest.ini_options]
 markers = [
