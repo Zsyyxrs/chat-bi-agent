@@ -1,5 +1,7 @@
 # chat-bi-agent
 
+![CI](https://github.com/Zsyyxrs/chat-bi-agent/actions/workflows/ci.yml/badge.svg)
+
 **中文** | [English](./README.en.md)
 
 > 面向银行业务人员的对话式 BI 智能体——把"提需求→排期→开发报表→看报表→找数→人工归因"的传统链路，压缩成"一句话提问→直接出数→自动归因→可追问"

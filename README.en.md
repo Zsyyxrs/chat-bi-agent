@@ -1,5 +1,7 @@
 # chat-bi-agent
 
+![CI](https://github.com/Zsyyxrs/chat-bi-agent/actions/workflows/ci.yml/badge.svg)
+
 [中文](./README.md) | **English**
 
 > Banking BI self-service agent — Compress "submit request → wait for scheduling → develop report → find data → manual root cause analysis" into "ask once → get data instantly → auto attribution → ask follow-ups"
