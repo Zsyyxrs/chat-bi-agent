@@ -129,18 +129,24 @@ CHECKS = {
         SELECT (cur.v-pri.v)/NULLIF(pri.v,0)*100 FROM cur,pri
     """,
     ),
-    # q007: P1 视角——题面"全行 5/14-5/20"，P1 不限定 branch/tier（事件库看不到）。
-    #       Scope 缩窄 由 G-eval scope rubric 评，不在 quant 里测。
+    # q007: 题面"全行存款和 AUM"，agent 把"存款"正确理解为 CURRENT+SAVING（活期+定期），
+    #       排除 LOAN/CARD/INSURANCE 等非存款。AUM 在 fct_holding 上 5/14-5/20 无 snapshot，
+    #       _FACT_ANCHOR_AUGMENT 单指标对约束让 P1 只挑主指标（存款），AUM 不入 fact_anchor。
+    #       Scope 缩窄到 BR_CITY_0006 × HNW 震中 由 G-eval scope rubric 评。
     "attribution_q007": dict(
-        metric="AUM",
-        direction="up",  # 全行口径实测为微涨
+        metric="deposit_balance",
+        direction="down",
         sql="""
         WITH cur AS (
           SELECT AVG(b.balance) v FROM fct_balance_daily b
+          JOIN dim_account a ON b.account_id=a.account_id
           WHERE b.dt BETWEEN DATE '2026-05-14' AND DATE '2026-05-20'
+            AND a.account_type IN ('CURRENT','SAVING')
         ), pri AS (
           SELECT AVG(b.balance) v FROM fct_balance_daily b
+          JOIN dim_account a ON b.account_id=a.account_id
           WHERE b.dt BETWEEN DATE '2026-05-07' AND DATE '2026-05-13'
+            AND a.account_type IN ('CURRENT','SAVING')
         )
         SELECT (cur.v-pri.v)/NULLIF(pri.v,0)*100 FROM cur,pri
     """,

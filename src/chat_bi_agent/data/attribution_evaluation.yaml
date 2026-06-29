@@ -169,20 +169,21 @@ evaluation_questions:
     related_events: [anxin_90_expire]  # 可能有多个同期事件
     expected_root_cause: |
       主要原因是安鑫 90 天理财产品到期，但其影响范围受限于高净值客户和
-      上海分行（BR_CITY_0006）。全行 AUM 在 5/14-5/20 vs 5/07-5/13 仅微涨
-      约 +1.2%，下跌完全集中在 BR_CITY_0006 × HIGH_NET_WORTH 这一震中，
-      被其他分行/客层的常规波动稀释成全行净微涨。Agent 应通过 drill 与
-      事件匹配把 scope 缩窄到 BR_CITY_0006 + HNW，仅靠"全行 +1%"无法
-      触及根因。
+      上海分行（BR_CITY_0006）。全行存款（CURRENT+SAVING）在 5/14-5/20 vs
+      5/07-5/13 微跌约 -1.5%，下跌的核心震中是 BR_CITY_0006 × HIGH_NET_WORTH，
+      其他分行/客层吸收了部分跌幅但不足以掩盖整体下行。Agent 应通过 drill
+      与事件匹配把 scope 缩窄到 BR_CITY_0006 + HNW，仅靠"全行 -1.5%"
+      无法触及根因。
     expected_affected_dimensions:
       - branch_id: BR_CITY_0006
       - customer_tier: HIGH_NET_WORTH
     expected_key_metrics:
-      - metric: AUM
-        change_direction: up
-        magnitude: 1.16  # 实测 P1 视角 (5/14-5/20 vs 5/07-5/13, 全行 AUM); P1 看不到事件库，
-        #              不会自动缩窄到 BR_CITY_0006 × HNW。Scope 缩窄考点由 G-eval scope rubric 评，
-        #              不在 quant 里测——quant 仅校 narrative 报数是否对齐 P1 实际窗口。
+      - metric: deposit_balance  # 全行存款 = CURRENT + SAVING（agent 实跑口径）
+        change_direction: down
+        magnitude: -1.52  # 实测 agent 视角 (5/14-5/20 vs 5/07-5/13, 全行 CURRENT+SAVING)
+        # P1 看不到事件库，不会自动缩窄到 BR_CITY_0006 × HNW。Scope 缩窄考点由
+        # G-eval scope rubric 评，不在 quant 里测——quant 仅校 narrative 报数是否
+        # 对齐 P1 实际窗口口径。
         tolerance: "±50%"
     evaluation_criteria:
       - signal_separation: "Agent 是否能分离多个同期因素"
