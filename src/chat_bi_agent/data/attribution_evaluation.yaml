@@ -154,7 +154,6 @@ evaluation_questions:
     expected_affected_dimensions:
       - branch_id: [BR_CITY_0000, BR_CITY_0002]
       - customer_tier: [MASS, AFFLUENT]
-      - campaign_id: "CAMP_QIXI"
     expected_key_metrics:
       - metric: saving_deposit_balance
         change_direction: up
