@@ -168,14 +168,16 @@ evaluation_questions:
       什么？是单一原因还是多个因素共同作用？请分离信号。
     related_events: [anxin_90_expire]  # 可能有多个同期事件
     expected_root_cause: |
-      主要原因是安鑫 90 天理财产品到期，但其影响范围受限于高净值客户和
-      上海分行（BR_CITY_0006）。全行存款（CURRENT+SAVING）在 5/14-5/20 vs
-      5/07-5/13 微跌约 -1.5%，下跌的核心震中是 BR_CITY_0006 × HIGH_NET_WORTH，
-      其他分行/客层吸收了部分跌幅但不足以掩盖整体下行。Agent 应通过 drill
-      与事件匹配把 scope 缩窄到 BR_CITY_0006 + HNW，仅靠"全行 -1.5%"
-      无法触及根因。
+      主要原因是安鑫 90 天理财产品到期，影响主要集中在高净值客户层级。
+      全行存款（CURRENT+SAVING）在 5/14-5/20 vs 5/07-5/13 微跌约 -1.5%，
+      HIGH_NET_WORTH 客群是本次资金流出的主要承载者。Agent 应通过 drill
+      把 scope 缩窄到 HIGH_NET_WORTH 客层，并识别出事件是单一驱动而非
+      多因素叠加。
+      （注：原设计含"震中分行 BR_CITY_0006"的 scope 要求，但实际 seed
+      data 里 BR_CITY_0006 跌幅仅 -4857，被其他分行 ±5-10 万级随机波动
+      完全淹没，从数据上无法推导出震中分行；强求 agent 命中 BR_CITY_0006
+      等于让其从事件库泄题。故只考 HNW 客层这一数据可推导的 scope。）
     expected_affected_dimensions:
-      - branch_id: BR_CITY_0006
       - customer_tier: HIGH_NET_WORTH
     expected_key_metrics:
       - metric: deposit_balance  # 全行存款 = CURRENT + SAVING（agent 实跑口径）
@@ -186,5 +188,5 @@ evaluation_questions:
         # 对齐 P1 实际窗口口径。
         tolerance: "±50%"
     evaluation_criteria:
-      - signal_separation: "Agent 是否能分离多个同期因素"
-      - scope_delimitation: "Agent 是否精确界定事件的影响范围（而非全行）"
+      - signal_separation: "Agent 是否能识别出单一事件驱动而非多因素叠加"
+      - scope_delimitation: "Agent 是否把 scope 缩窄到 HIGH_NET_WORTH 客层（数据可推导的范围）"
