@@ -219,3 +219,104 @@ def test_run_drill_down_falls_back_to_change_pct_then_current():
     assert results[0].skipped is False
     # BR_B's |change_pct| = 0.5 > BR_A's 0.1, so BR_B leads even though BR_A has bigger current
     assert results[0].pareto_top_k[0]["key"] == "BR_B"
+
+
+def _q006_like_p1():
+    # q006 真实情形：杭州/南京 × SAVING drill 返回 3 行；
+    # 期望事件方向是 + (七夕活动拉升)，但有一个噪声分行跌幅远大于事件涨幅。
+    # 若不传 expected_sign，pareto top1 会被噪声分行抢走（|change| 最大）。
+    return FakeP1Agent(
+        responses={
+            "qid__drill_0": FakeP1Result(
+                question_id="qid__drill_0",
+                sql="SELECT branch_id, current_balance, prior_balance, balance_change FROM t",
+                rows=[
+                    {
+                        "branch_id": "BR_SUB_0000",
+                        "current_balance": Decimal("67378"),
+                        "prior_balance": Decimal("160015"),
+                        "balance_change": Decimal("-92637"),
+                    },
+                    {
+                        "branch_id": "BR_CITY_0000",
+                        "current_balance": Decimal("107200"),
+                        "prior_balance": Decimal("100000"),
+                        "balance_change": Decimal("7200"),
+                    },
+                    {
+                        "branch_id": "BR_CITY_0002",
+                        "current_balance": Decimal("107200"),
+                        "prior_balance": Decimal("100000"),
+                        "balance_change": Decimal("7200"),
+                    },
+                ],
+            )
+        }
+    )
+
+
+def test_sign_aware_filters_out_opposite_direction_outlier():
+    requests = [DrillRequest(dimension="branch_id", nl_question="按 branch_id 拆解")]
+    results = run_drill_down(
+        question_id="qid",
+        requests=requests,
+        p1_agent=_q006_like_p1(),
+        expected_sign=1,  # 事件方向 + (上涨)
+    )
+    keys = [item["key"] for item in results[0].pareto_top_k]
+    # 噪声 BR_SUB_0000 (-92637) 被剔除；剩两个 + 方向分行进 top_k
+    assert "BR_SUB_0000" not in keys
+    assert set(keys) == {"BR_CITY_0000", "BR_CITY_0002"}
+
+
+def test_no_sign_hint_keeps_legacy_behavior():
+    # 不传 expected_sign 时，仍按 |value| 排序，BR_SUB_0000 是 top1
+    requests = [DrillRequest(dimension="branch_id", nl_question="按 branch_id 拆解")]
+    results = run_drill_down(question_id="qid", requests=requests, p1_agent=_q006_like_p1())
+    assert results[0].pareto_top_k[0]["key"] == "BR_SUB_0000"
+
+
+def test_sign_aware_falls_back_when_no_matching_rows():
+    # 期望 +，但所有行都是 -：fallback 到原逻辑，不丢数据
+    requests = [DrillRequest(dimension="branch_id", nl_question="按 branch_id 拆解")]
+    p1 = FakeP1Agent(
+        responses={
+            "qid__drill_0": FakeP1Result(
+                question_id="qid__drill_0",
+                sql="SELECT branch_id, balance_change FROM t",
+                rows=[
+                    {"branch_id": "BR_X", "balance_change": Decimal("-100")},
+                    {"branch_id": "BR_Y", "balance_change": Decimal("-50")},
+                ],
+            )
+        }
+    )
+    results = run_drill_down(
+        question_id="qid", requests=requests, p1_agent=p1, expected_sign=1
+    )
+    keys = [item["key"] for item in results[0].pareto_top_k]
+    assert "BR_X" in keys  # 没有 + 方向行 → 回退到全行排序，top1 还是最大 |change|
+
+
+def test_sign_aware_negative_direction():
+    # 期望 - 方向（如安鑫到期），剔除正向噪声
+    requests = [DrillRequest(dimension="customer_tier", nl_question="按 customer_tier 拆解")]
+    p1 = FakeP1Agent(
+        responses={
+            "qid__drill_0": FakeP1Result(
+                question_id="qid__drill_0",
+                sql="SELECT customer_tier, balance_change FROM t",
+                rows=[
+                    {"customer_tier": "BASIC", "balance_change": Decimal("500")},
+                    {"customer_tier": "HIGH_NET_WORTH", "balance_change": Decimal("-200")},
+                    {"customer_tier": "AFFLUENT", "balance_change": Decimal("-150")},
+                ],
+            )
+        }
+    )
+    results = run_drill_down(
+        question_id="qid", requests=requests, p1_agent=p1, expected_sign=-1
+    )
+    keys = [item["key"] for item in results[0].pareto_top_k]
+    assert "BASIC" not in keys  # 正向噪声剔除
+    assert results[0].pareto_top_k[0]["key"] == "HIGH_NET_WORTH"

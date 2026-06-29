@@ -54,6 +54,7 @@ def _compute_pareto(
     value_col: str,
     threshold: float = 0.6,
     top_k_cap: int = 3,
+    expected_sign: int = 0,
 ) -> list[dict]:
     """Sort rows by |value| desc, return top items until cum_share >= threshold or len >= top_k_cap.
 
@@ -64,6 +65,9 @@ def _compute_pareto(
       - Total = sum of |value|. If total == 0, return [].
       - Stop when cum_share >= threshold OR len == top_k_cap (whichever first).
       - "key" is the first non-numeric field of each row (the dimension value).
+      - expected_sign (+1/-1/0): 当 fact_anchor 给定整体变化方向时，先按方向过滤再
+        排序——避免反向大额噪声（如 q006 BR_SUB_0000 跌 92637 vs 七夕活动涨 7200）
+        抢占 Top1。0 表示无方向提示（保留旧行为）；过滤后若无匹配行则回退全集。
     """
     if not rows:
         return []
@@ -72,6 +76,11 @@ def _compute_pareto(
     def _v(r: dict) -> float:
         v = r.get(value_col)
         return 0.0 if v is None else float(v)
+
+    if expected_sign != 0:
+        matched = [r for r in rows if (_v(r) > 0) == (expected_sign > 0) and _v(r) != 0]
+        if matched:
+            rows = matched
 
     total = sum(abs(_v(r)) for r in rows)
     if total == 0:
@@ -127,6 +136,7 @@ def _execute_single_drill(
     i: int,
     req: DrillRequest,
     p1_agent: Any,
+    expected_sign: int = 0,
 ) -> DrillResult:
     """Execute one drill in isolation; safe for parallel use (no shared state)."""
     sub_qid = f"{question_id}__drill_{i}"
@@ -145,7 +155,9 @@ def _execute_single_drill(
 
     try:
         value_col = _infer_value_col(p1_result.rows, dim_hint=req.dimension)
-        top_k = _compute_pareto(p1_result.rows, value_col=value_col)
+        top_k = _compute_pareto(
+            p1_result.rows, value_col=value_col, expected_sign=expected_sign
+        )
     except ValueError:
         return DrillResult(
             dimension=req.dimension,
@@ -172,6 +184,7 @@ def run_drill_down(
     question_id: str,
     requests: list[DrillRequest],
     p1_agent: Any,
+    expected_sign: int = 0,
 ) -> list[DrillResult]:
     """Execute each DrillRequest via P1 and compute Pareto TopN.
 
@@ -189,7 +202,9 @@ def run_drill_down(
     with ThreadPoolExecutor(max_workers=len(requests)) as pool:
         results = list(
             pool.map(
-                lambda pair: _execute_single_drill(question_id, pair[0], pair[1], p1_agent),
+                lambda pair: _execute_single_drill(
+                    question_id, pair[0], pair[1], p1_agent, expected_sign=expected_sign
+                ),
                 enumerate(requests),
             )
         )
