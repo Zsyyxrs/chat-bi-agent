@@ -34,21 +34,18 @@ CHECKS = {
     ),
     # q002: 题面未点名具体产品，agent 视角看到的是 WEALTH 大类整体净效果。
     #       agent fact_anchor 走 fct_balance_daily AVG 5/11-5/20 vs 5/01-5/10。
-    #       事件设计的 -12.54% snapshot 视角 agent 不会用，校准对齐 agent 实测口径。
     "attribution_q002": dict(
         metric="wealth_category_balance",
         direction="down",
         sql="""
         WITH cur AS (
           SELECT AVG(b.balance) v FROM fct_balance_daily b
-          JOIN dim_account a ON b.account_id=a.account_id
-          JOIN dim_product p ON a.product_id=p.product_id
+          JOIN dim_product p ON b.product_id=p.product_id
           WHERE b.dt BETWEEN DATE '2026-05-11' AND DATE '2026-05-20'
             AND p.product_category='WEALTH'
         ), pri AS (
           SELECT AVG(b.balance) v FROM fct_balance_daily b
-          JOIN dim_account a ON b.account_id=a.account_id
-          JOIN dim_product p ON a.product_id=p.product_id
+          JOIN dim_product p ON b.product_id=p.product_id
           WHERE b.dt BETWEEN DATE '2026-05-01' AND DATE '2026-05-10'
             AND p.product_category='WEALTH'
         )
