@@ -69,7 +69,6 @@ def render_p2_tab(call_counter: dict) -> None:
             st.caption(f"   依据：{step.rationale}")
 
     st.markdown("##### 分步执行")
-    last_df = None
     for sr in report.step_results:
         with st.expander(f"Step {sr.step.id}: {sr.step.question}", expanded=False):
             if sr.skipped:
@@ -78,9 +77,9 @@ def render_p2_tab(call_counter: dict) -> None:
             if sr.error_class:
                 st.error(f"错误：{sr.error_class.value} — {sr.error_msg}")
             render_sql_block(sr.sql)
-            last_df = render_dataframe_block(sr.rows)
+            step_df = render_dataframe_block(sr.rows)
+            render_chart_block(step_df, key=f"p2_{sr.step.id}")
             st.caption(f"耗时 {sr.latency_ms:.0f} ms")
 
-    render_chart_block(last_df, key="p2")
     render_insight_block(report.final_answer, title="最终报告")
     st.caption(f"replan {report.replan_count} 次 | 总耗时 {report.total_latency_ms:.0f} ms")

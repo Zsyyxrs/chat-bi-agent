@@ -54,8 +54,4 @@ def main() -> None:
         render_p3_tab(counter)
 
 
-if __name__ == "__main__":
-    main()
-else:
-    # streamlit run 模式下 __name__ != "__main__"
-    main()
+main()
