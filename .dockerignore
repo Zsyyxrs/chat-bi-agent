@@ -1,0 +1,45 @@
+# Version control / IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+.claude/
+.superpowers/
+
+# Local virtualenv & build artifacts
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Project-specific
+docs/
+logs/
+results/
+tests/
+*.log
+*.sqlite
+*.db
+
+# Secrets / local config (provide via env_file)
+.env
+.env.local
+.env.*.local
+config/local.yaml
+
+# Docker meta (avoid recursive copy bloating context)
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker/

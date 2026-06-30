@@ -185,6 +185,45 @@ services:
     ports:
       - "3001:3000"
 
+  # ===== chat-bi-agent 应用 =====
+  # 一键流程：
+  #   docker compose up -d postgres                          # 1) 起库
+  #   docker compose --profile seed run --rm seed            # 2) 填数据（首次或重置时）
+  #   docker compose up -d app                               # 3) 起 Streamlit (http://localhost:8501)
+  app:
+    build: .
+    image: chat-bi-agent:local
+    container_name: chatbi-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: 5432
+    ports:
+      - "8501:8501"
+
+  # seed 走 profile，不会被 `docker compose up` 拉起；
+  # 用 `docker compose --profile seed run --rm seed` 显式触发。
+  seed:
+    build: .
+    image: chat-bi-agent:local
+    container_name: chatbi-seed
+    profiles: ["seed"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      PG_HOST: postgres
+      PG_PORT: 5432
+    command: >
+      python -m chat_bi_agent.data.seed
+      --host postgres --port 5432 --truncate --with-events
+    restart: "no"
+
 volumes:
   pgdata:
   langfusedb:
