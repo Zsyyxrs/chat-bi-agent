@@ -21,6 +21,9 @@ def render(df: pd.DataFrame, spec: ChartSpec) -> go.Figure | None:
     if spec.chart_type in ("kpi", "table"):
         return None
 
+    if spec.x is None or spec.y is None:
+        return None
+
     df = _maybe_sample(df)
     fig = go.Figure()
 

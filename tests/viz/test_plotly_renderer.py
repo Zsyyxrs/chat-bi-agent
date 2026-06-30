@@ -80,3 +80,11 @@ def test_render_grouped_bar_produces_multiple_traces():
     assert isinstance(fig, go.Figure)
     # 双数值列 → 两个 trace
     assert len(fig.data) == 2
+
+
+def test_render_returns_none_when_axis_missing():
+    """spec.x / spec.y == None must not raise — return None instead."""
+    df = pd.DataFrame({"a": [1, 2, 3]})
+    assert render(df, ChartSpec(chart_type="line", x=None, y=None)) is None
+    assert render(df, ChartSpec(chart_type="bar", x=None, y="a")) is None
+    assert render(df, ChartSpec(chart_type="scatter", x="a", y=None)) is None

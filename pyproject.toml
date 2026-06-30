@@ -63,6 +63,7 @@ select = ["E", "F", "W", "I"]
 "streamlit_app/app.py" = ["E402"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "integration: requires running PostgreSQL + seed data",
 ]
