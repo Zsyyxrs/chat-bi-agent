@@ -44,7 +44,7 @@ def infer_chart_spec(df: pd.DataFrame) -> ChartSpec:
     if df.empty or df.shape[1] == 0:
         return ChartSpec(chart_type="table")
 
-    n_rows, n_cols = df.shape
+    n_rows = df.shape[0]
     types = _classify_columns(df)
     numeric_cols = [c for c, t in types.items() if t == "numeric"]
     datetime_cols = [c for c, t in types.items() if t == "datetime"]

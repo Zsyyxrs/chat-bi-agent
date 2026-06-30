@@ -7,9 +7,6 @@
 import os
 from dataclasses import dataclass
 
-# 让 dashscope 绕过本地 HTTP(S)_PROXY（如 Clash/V2Ray 的 127.0.0.1:7897），
-# 否则 dashscope.aliyuncs.com 的请求会被代理拦截抛 "InvalidParameter url error"。
-# 必须在 `import dashscope` 之前设，dashscope SDK 启动时读这两个变量。
 _DASHSCOPE_NO_PROXY = "dashscope.aliyuncs.com,aliyuncs.com"
 for _key in ("NO_PROXY", "no_proxy"):
     _existing = os.environ.get(_key, "")
