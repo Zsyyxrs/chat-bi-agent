@@ -59,6 +59,4 @@ def render_p1_tab(call_counter: dict) -> None:
     render_sql_block(result.sql)
     df = render_dataframe_block(result.rows)
     render_chart_block(df, key="p1")
-    st.caption(
-        f"尝试次数 {result.attempts} | 耗时 {result.total_latency_ms} ms"
-    )
+    st.caption(f"尝试次数 {result.attempts} | 耗时 {result.total_latency_ms} ms")

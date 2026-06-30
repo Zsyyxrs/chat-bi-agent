@@ -83,6 +83,4 @@ def render_p2_tab(call_counter: dict) -> None:
 
     render_chart_block(last_df, key="p2")
     render_insight_block(report.final_answer, title="最终报告")
-    st.caption(
-        f"replan {report.replan_count} 次 | 总耗时 {report.total_latency_ms:.0f} ms"
-    )
+    st.caption(f"replan {report.replan_count} 次 | 总耗时 {report.total_latency_ms:.0f} ms")

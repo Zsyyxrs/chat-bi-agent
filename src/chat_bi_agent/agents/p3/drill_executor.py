@@ -155,9 +155,7 @@ def _execute_single_drill(
 
     try:
         value_col = _infer_value_col(p1_result.rows, dim_hint=req.dimension)
-        top_k = _compute_pareto(
-            p1_result.rows, value_col=value_col, expected_sign=expected_sign
-        )
+        top_k = _compute_pareto(p1_result.rows, value_col=value_col, expected_sign=expected_sign)
     except ValueError:
         return DrillResult(
             dimension=req.dimension,

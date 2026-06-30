@@ -190,7 +190,7 @@ _FACT_ANCHOR_AUGMENT = (
     "5b. 单行**只能包含一对** current_<metric> / prior_<metric>，**禁止** CROSS JOIN\n"
     "    把多指标（如 deposit AVG + AUM SUM）写到同一行 4 列以上——下游提取器\n"
     "    会跨指标错配（取 cur=deposit、prior=AUM）算出 -100% 假 PoP。\n"
-    "    题面同时问多个指标（如\"存款和 AUM 都波动\"）时挑最贴题的主指标即可；\n"
+    '    题面同时问多个指标（如"存款和 AUM 都波动"）时挑最贴题的主指标即可；\n'
     "    次指标由 drill 阶段单独跑或留给 narrator 引用事件库结论。\n"
     '6. 度量选择默认按"金额"语义解读，除非题面显式写"笔数/次数"：\n'
     '   - "交易量/支取量/存取量/转账量/消费额/收入" → SUM(amount)\n'
@@ -229,6 +229,8 @@ _POP_KEYWORDS: tuple[str, ...] = (
     "+",  # +12%
     "%",  # 百分比类比较
 )
+
+
 def _should_augment(question: str) -> bool:
     """决定是否给 P1 加 PoP 双窗口约束。
 

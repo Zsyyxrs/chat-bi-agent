@@ -1,4 +1,5 @@
 """Unit tests for plotly_renderer.render()."""
+
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -7,10 +8,12 @@ from chat_bi_agent.viz.plotly_renderer import SAMPLE_THRESHOLD, render
 
 
 def test_render_line_returns_figure_with_trace():
-    df = pd.DataFrame({
-        "stat_date": pd.to_datetime(["2026-01-01", "2026-02-01"]),
-        "balance": [100.0, 200.0],
-    })
+    df = pd.DataFrame(
+        {
+            "stat_date": pd.to_datetime(["2026-01-01", "2026-02-01"]),
+            "balance": [100.0, 200.0],
+        }
+    )
     fig = render(df, ChartSpec(chart_type="line", x="stat_date", y="balance"))
     assert isinstance(fig, go.Figure)
     assert len(fig.data) >= 1
@@ -50,10 +53,12 @@ def test_render_table_returns_none():
 
 
 def test_render_samples_large_dataframe(monkeypatch):
-    big = pd.DataFrame({
-        "x": list(range(SAMPLE_THRESHOLD + 100)),
-        "y": list(range(SAMPLE_THRESHOLD + 100)),
-    })
+    big = pd.DataFrame(
+        {
+            "x": list(range(SAMPLE_THRESHOLD + 100)),
+            "y": list(range(SAMPLE_THRESHOLD + 100)),
+        }
+    )
     fig = render(big, ChartSpec(chart_type="scatter", x="x", y="y"))
     assert isinstance(fig, go.Figure)
     # 采样后点数应 == SAMPLE_THRESHOLD
@@ -61,11 +66,13 @@ def test_render_samples_large_dataframe(monkeypatch):
 
 
 def test_render_grouped_bar_produces_multiple_traces():
-    df = pd.DataFrame({
-        "channel": ["A", "B"],
-        "deposit": [10, 20],
-        "loan": [5, 15],
-    })
+    df = pd.DataFrame(
+        {
+            "channel": ["A", "B"],
+            "deposit": [10, 20],
+            "loan": [5, 15],
+        }
+    )
     fig = render(
         df,
         ChartSpec(chart_type="bar", x="channel", y="deposit", group="loan"),

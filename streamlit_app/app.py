@@ -37,11 +37,7 @@ def _render_sidebar(counter: dict) -> None:
         st.caption("注意：免费额度有限，避免短时间内大量提问。")
         st.markdown("---")
         st.markdown("#### 三个阶段")
-        st.markdown(
-            "- **P1**：NL → SQL\n"
-            "- **P2**：多步分析\n"
-            "- **P3**：RCA 归因"
-        )
+        st.markdown("- **P1**：NL → SQL\n- **P2**：多步分析\n- **P3**：RCA 归因")
 
 
 def main() -> None:

@@ -112,15 +112,17 @@ def render_p3_tab(call_counter: dict) -> None:
 
     if report.matched_events:
         st.markdown("##### 匹配业务事件")
-        events_df = pd.DataFrame([
-            {
-                "事件 ID": e.event_id,
-                "名称": e.event_name,
-                "生效日期": e.effective_date,
-                "相关性": e.relevance,
-            }
-            for e in report.matched_events
-        ])
+        events_df = pd.DataFrame(
+            [
+                {
+                    "事件 ID": e.event_id,
+                    "名称": e.event_name,
+                    "生效日期": e.effective_date,
+                    "相关性": e.relevance,
+                }
+                for e in report.matched_events
+            ]
+        )
         st.dataframe(events_df, use_container_width=True)
 
     render_insight_block(report.narrative, title="RCA 叙事")

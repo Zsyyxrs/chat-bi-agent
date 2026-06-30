@@ -291,9 +291,7 @@ def test_sign_aware_falls_back_when_no_matching_rows():
             )
         }
     )
-    results = run_drill_down(
-        question_id="qid", requests=requests, p1_agent=p1, expected_sign=1
-    )
+    results = run_drill_down(question_id="qid", requests=requests, p1_agent=p1, expected_sign=1)
     keys = [item["key"] for item in results[0].pareto_top_k]
     assert "BR_X" in keys  # 没有 + 方向行 → 回退到全行排序，top1 还是最大 |change|
 
@@ -314,9 +312,7 @@ def test_sign_aware_negative_direction():
             )
         }
     )
-    results = run_drill_down(
-        question_id="qid", requests=requests, p1_agent=p1, expected_sign=-1
-    )
+    results = run_drill_down(question_id="qid", requests=requests, p1_agent=p1, expected_sign=-1)
     keys = [item["key"] for item in results[0].pareto_top_k]
     assert "BASIC" not in keys  # 正向噪声剔除
     assert results[0].pareto_top_k[0]["key"] == "HIGH_NET_WORTH"

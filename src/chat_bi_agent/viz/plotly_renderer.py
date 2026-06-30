@@ -27,9 +27,14 @@ def render(df: pd.DataFrame, spec: ChartSpec) -> go.Figure | None:
     if spec.chart_type == "line":
         fig.add_trace(go.Scatter(x=df[spec.x], y=df[spec.y], mode="lines+markers", name=spec.y))
         if spec.group and spec.group in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df[spec.x], y=df[spec.group], mode="lines+markers", name=spec.group,
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=df[spec.x],
+                    y=df[spec.group],
+                    mode="lines+markers",
+                    name=spec.group,
+                )
+            )
 
     elif spec.chart_type == "bar":
         fig.add_trace(go.Bar(x=df[spec.x], y=df[spec.y], name=spec.y))
