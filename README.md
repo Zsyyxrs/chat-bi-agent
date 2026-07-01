@@ -1,197 +1,269 @@
 # chat-bi-agent
 
 ![CI](https://github.com/Zsyyxrs/chat-bi-agent/actions/workflows/ci.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![LLM: Qwen3.6](https://img.shields.io/badge/LLM-Qwen3.6--max--preview-7c3aed.svg)](https://dashscope.aliyun.com/)
 
 **中文** | [English](./README.en.md)
 
-> 面向银行业务人员的对话式 BI 智能体——把"提需求→排期→开发报表→看报表→找数→人工归因"的传统链路，压缩成"一句话提问→直接出数→自动归因→可追问"
+> **面向银行业务场景的对话式 BI 智能体** —— 把"提需求 → 排期 → 开发报表 → 看报表 → 找数 → 人工归因"的传统链路，压缩成"**一句话提问 → 直接出数 → 自动归因 → 可追问**"。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+---
 
-## ✨ 核心功能
+## ✨ 三路径能力
 
-- **精准取数（P1）**：通过自然语言精准获取银行数据
-  - 实时指标查询和 NL2SQL 转换
-  - 自动结果可视化
-  - 置信度评分和数据血缘追溯
+| 路径 | 能力 | 典型问题 |
+|---|---|---|
+| **P1 精准取数** | 自然语言 → SQL → 取数 → 自动图表 | "上海分行 5 月高净值客户存款余额？" |
+| **P2 多步分析** | 拆解 → 多步取数 → 事实抽取 → 综合洞察 | "春节前后现金支取行为有什么变化？" |
+| **P3 RCA 归因** | 锚定事实 → 维度下钻 → 事件命中 → 根因合成 | "上海分行存款 5/14 下降 8%，原因是什么？" |
 
-- **多步分析（P2）**：面向业务人员的智能 BI 助手
-  - 自动拆解和趋势分析
-  - 智能追问建议
-  - 可视化洞察卡片和行动建议
+---
 
-- **归因分析（P3）**：自动根因归因引擎
-  - 多维度下钻分析
-  - 同比和环比对比
-  - 贡献度分析和异常检测
-  - 智能假设验证
+## 📊 评估成绩
 
-## 🚀 快速开始
+### 自家三路径评测（2026-06-30 baseline）
 
-### 前置要求
+| 路径 | 题量 | 通过 | 平均分 | 备注 |
+|---|---:|---:|---:|---|
+| **P1 NL2SQL** | 6 | 6 | **1.000** | 多表 JOIN、时间窗、聚合、分行筛选全过 |
+| **P2 多步分析** | 3 | 3 | **0.740** | 5 维 rubric（步骤完整 + 多指标 + 洞察 + 推理 + 业务相关） |
+| **P3 RCA 归因** | 7 | 7 | **0.900** · event_hit **7/7** | 4 维 rubric，全部命中埋雷事件、零幻觉 |
 
-- Python 3.10+
-- PostgreSQL 13+
-- Docker & Docker Compose（可选）
+详细评估方法见 [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md)；原始 baseline JSON 在 [`results/`](./results/) 目录；最新 markdown 报告 [`results/eval_report_2026-06-30.md`](./results/eval_report_2026-06-30.md)。
 
-### 安装
+一键复跑：
 
 ```bash
-# 克隆仓库
-git clone https://github.com/Zsyyxrs/chat-bi-agent.git
-cd chat-bi-agent
-
-# 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 安装依赖
-pip install -e .
-pip install -e ".[dev]"  # 开发依赖
+python scripts/run_all_evals.py              # 三路径全跑 + 生成 markdown 报告
+python scripts/run_all_evals.py --only p3    # 只跑 P3
+python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 ```
 
-### 数据库配置
+### 公开 benchmark
 
-```bash
-# 方式一：使用 Docker Compose
-docker-compose up -d
+- **BIRD-financial dev subset** (n≈106)：_Coming soon_ —— 子集选 `financial`（捷克银行真实数据，8 表）是因为和本项目领域同源，难度对等。计划下阶段补全，README 会回填 EX 数字。
 
-# 方式二：手动配置 PostgreSQL
-createdb chat_bi_agent
-python -m src.chat_bi_agent.data.seed --help
-```
-
-### 运行示例数据
-
-```bash
-# 生成银行模拟数据
-python -m src.chat_bi_agent.data.seed \
-  --num-customers 100 \
-  --num-months 12 \
-  --with-events
-
-# 运行评估框架
-python -m src.chat_bi_agent.eval.rca_evaluator
-```
-
-## 📖 文档
-
-- **[架构设计](./金融data%20agent架构设计.md)** - 完整系统设计和业务逻辑
-- **[评估框架](./EVALUATION_FRAMEWORK.md)** - 三路径评估策略和指标体系
-- **[贡献指南](./CONTRIBUTING.md)** - 开发设置和贡献流程
+---
 
 ## 🏗 系统架构
 
 ```
-┌─────────────────────────────────────────┐
-│    业务人员工作台（Web）                 │
-│  指标广场 │ 对话式问答 │ 洞察卡片       │
-└────────────┬────────────────────────────┘
-             │
-┌────────────▼────────────────────────────┐
-│    LangGraph 多智能体编排                │
-│ ┌──────────┐  ┌──────────┐ ┌─────────┐ │
-│ │ 规划器   │→ │ 路由器   │→│取数智能体│ │
-│ └──────────┘  └──────────┘ └─────────┘ │
-└────────────┬────────────────────────────┘
-             │
-┌────────────▼────────────────────────────┐
-│   PostgreSQL 数据仓库                    │
-│ • 银行交易和维度数据                     │
-│ • 事件传播和归因计算                     │
-│ • 实时指标计算                          │
-└─────────────────────────────────────────┘
+                       ┌─────────────────────────────┐
+                       │  Streamlit Web UI (3 Tabs)  │
+                       │   P1 取数 / P2 分析 / P3 RCA  │
+                       └──────────────┬──────────────┘
+                                      │
+       ┌──────────────────────────────┼──────────────────────────────┐
+       │                              │                              │
+       ▼                              ▼                              ▼
+┌─────────────┐              ┌─────────────────┐            ┌───────────────────┐
+│ P1 NL2SQL   │              │ P2 Multi-Step   │            │ P3 RCA Agent      │
+│ Agent       │              │ Analysis Agent  │            │ (5-step pipeline) │
+│             │              │                 │            │                   │
+│ SchemaLink  │◄──reuse──────┤  Planner        │            │ 1. fact_anchor    │
+│ SQLGen      │              │  ↓              │            │    (调 P1 取锚)    │
+│ SQLValidate │              │  P1 Agent (×N)  │◄──reuse────┤ 2. drill_select   │
+│ SQLExecute  │              │  ↓              │            │ 3. drill_run      │
+│ Reflector   │              │  FactExtractor  │            │    (Pareto Top-K) │
+│ (×1 retry)  │              │  ↓              │            │ 4. event_match    │
+│             │              │  InsightSynth   │            │    (YAML 时间窗)  │
+│             │              │  ↓              │            │ 5. synthesize     │
+│             │              │  ReportWriter   │            │    (narrative)    │
+└──────┬──────┘              └────────┬────────┘            └────────┬──────────┘
+       │                              │                              │
+       └──────────────────┬───────────┴──────────────────────────────┘
+                          │
+       ┌──────────────────┼──────────────────┐
+       ▼                  ▼                  ▼
+┌─────────────┐  ┌────────────────┐  ┌──────────────────┐
+│ Qwen3.6     │  │ PostgreSQL 16  │  │ Langfuse v3      │
+│ (DashScope) │  │ (read-only     │  │ (self-hosted)    │
+│ + Embedding │  │  user enforced)│  │ 全链路 trace      │
+└─────────────┘  └────────────────┘  └──────────────────┘
 ```
 
-### 核心模块
+**架构要点**：
+- **三个独立 Agent，各管一条路径**（不强行复用一个 super-agent）
+- **P2/P3 复用 P1 作原子取数层**（FactAnchor / 多步 plan 的每一步都是 P1 调用）
+- **编排是函数链 + Langfuse `@observe` 装饰器**，**没用 LangGraph**（流程固定不需要图）
+- **LLM 单源**（Qwen 既做生成也做评分），**没有独立 judge 模型**
+- **P3 ground truth 用 YAML 事件库 + 传播引擎埋雷**（可控、可重放、可量化）
 
-- **`data/`** - 数据生成、种子和事件传播
-  - `seed.py` - 数据库初始化和模拟数据
-  - `transaction_generator.py` - 合成交易生成
-  - `event_loader.py` - 事件库 YAML 解析
-  - `propagation_engine.py` - 事件驱动数据变更
+完整设计取舍见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。
 
-- **`eval/`** - 三路径评估框架
-  - `rca_evaluator.py` - 根因分析评估
-  - `precision_retrieval_evaluator.py` - NL2SQL 准确度
-  - `multi_step_analysis_evaluator.py` - 复杂查询处理
+---
 
-## 🛠 技术栈
+## 🚀 Quick Start
 
-- **语言**：Python 3.10+
-- **数据库**：PostgreSQL 13+
-- **ORM**：SQLAlchemy 2.0+
-- **CLI**：Click 8.1+
-- **数据生成**：Faker 20.0+
-- **配置**：PyYAML 6.0+
-- **测试**：Pytest 7.0+
-- **代码质量**：Black, Ruff
-
-## 📊 开发指南
-
-### 运行测试
+### A. Docker Compose 一键（推荐）
 
 ```bash
-pytest -v
-pytest --cov=src --cov-report=html  # 包含覆盖率报告
+git clone https://github.com/Zsyyxrs/chat-bi-agent.git
+cd chat-bi-agent
+
+# 1. 配置 API key
+cp .env.example .env
+# 编辑 .env，填入 DASHSCOPE_API_KEY（必填）
+
+# 2. 起全栈（Postgres + Langfuse 全套 + Streamlit App）
+docker compose up -d
+
+# 3. 灌种子数据 + 埋雷事件（一次性 job）
+docker compose --profile seed run --rm seed
+
+# 4. 首次启动需要在 Langfuse 创建 API Key
+#    访问 http://localhost:3001 → admin@chatbi.local / admin12345
+#    Settings → API Keys → 新建一对 → 回填到 .env 的 LANGFUSE_PUBLIC_KEY / SECRET_KEY
+#    然后 docker compose restart app
+
+# 5. 打开 Streamlit
+open http://localhost:8501
 ```
 
-### 代码质量检查
+服务端口：
+- Streamlit App：`http://localhost:8501`
+- Langfuse UI：`http://localhost:3001`
+- pgAdmin：`http://localhost:5050`
+- Postgres：`localhost:5433`（容器内仍 5432）
+
+### B. 本地开发
 
 ```bash
-black src/
-ruff check src/
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# 起 Postgres + Langfuse（不起 App）
+docker compose up -d postgres langfuse pgadmin
+
+# 灌数据
+python -m chat_bi_agent.data.seed --truncate --with-events
+
+# 本地跑 Streamlit
+streamlit run streamlit_app/app.py
 ```
 
-### 项目结构
+### 跑评估
+
+```bash
+python scripts/run_all_evals.py                    # 三路径全跑
+python scripts/run_all_evals.py --only p1          # 只跑 P1
+python scripts/run_all_evals.py --skip p2,p3       # 跳过 P2/P3
+python scripts/run_all_evals.py --p3-limit 2       # P3 只跑前 2 题（省 token）
+python scripts/run_all_evals.py --report-only      # 不跑，仅基于最新 baseline 生成报告
+
+python scripts/eval_diff.py --phase p3             # 对比最近两个 P3 baseline
+python scripts/eval_diff.py --phase p3 \
+    --base results/baseline_p3_rca_2026-06-28.json \
+    --head results/baseline_p3_rca_2026-06-29.json
+```
+
+---
+
+## 🎬 Demo
+
+视频/GIF 待补。建议先按 Quick Start A 起 Streamlit，三个 tab 各试一题：
+
+- **P1 tab**：输入"上海分行 2026 年 5 月高净值客户的存款余额总额是多少？"
+- **P2 tab**：输入"春节前后现金支取行为有什么变化？"
+- **P3 tab**：输入"上海分行高净值客户的存款在 2026-05-14 突然下降了 8%，可能是什么原因？"
+
+每条提问都会在 Langfuse 留下完整 trace（http://localhost:3001 实时可看）。
+
+---
+
+## 🧱 项目结构
 
 ```
 chat-bi-agent/
 ├── src/chat_bi_agent/
+│   ├── agents/                # 三个 Agent + 共享组件
+│   │   ├── p1/                #   nl2sql_agent · sql_generator · sql_validator · reflector
+│   │   ├── p2/                #   p2_analysis_agent · planner · fact_extractor · insight_synthesizer · report_writer
+│   │   ├── p3/                #   p3_rca_agent · fact_anchor · drilldown_selector · drill_executor · event_matcher · synthesizer
+│   │   └── shared/            #   schema_linker · sql_executor
+│   ├── runners/               # P1/P2/P3 evaluation runners
+│   ├── llm/                   # qwen_client.py + langfuse_setup.py
+│   ├── viz/                   # chart_inference (rule-based) + plotly_renderer
+│   ├── eval/                  # precision / multi-step / rca evaluators
 │   ├── data/
-│   │   ├── events/           # YAML 事件库
-│   │   ├── db.py
-│   │   ├── seed.py
-│   │   ├── transaction_generator.py
-│   │   └── propagation_engine.py
-│   ├── eval/
-│   │   ├── rca_evaluator.py
-│   │   ├── precision_retrieval_evaluator.py
-│   │   └── multi_step_analysis_evaluator.py
-│   └── __init__.py
-├── docker/
-├── tests/
-├── results/                  # 评估结果和日志
-├── pyproject.toml
-├── docker-compose.yml
-└── README.md
+│   │   ├── seed.py            #   种子数据生成 CLI
+│   │   └── events/            #   YAML 埋雷事件库（4 个真实场景）
+│   ├── schema/                # 表/列元数据 loader
+│   └── config.py              # YAML + 默认值合并
+│
+├── streamlit_app/
+│   ├── app.py                 # 三 tab 入口
+│   ├── tabs/{p1_nl2sql,p2_analysis,p3_rca}.py
+│   └── components/{chart,dataframe,sql,insight}_block.py
+│
+├── scripts/
+│   ├── run_all_evals.py       # 一键跑齐 P1+P2+P3 + 生成 markdown 报告
+│   ├── eval_diff.py           # baseline 回归检测
+│   ├── verify_events.py       # 埋雷事件传播验证
+│   ├── rejudge_baseline.py    # 重新跑 LLM judge
+│   └── calibrate_magnitudes.py
+│
+├── config/local.yaml          # 运行时配置（模型名、检索 top_k、PG 超时等）
+├── tests/                     # 316+ 测试，按 p1/p2/p3/shared/data/viz/eval/schema 分目录
+├── results/                   # 评估 baseline JSON + markdown 报告
+├── docker-compose.yml         # Postgres + Langfuse 全套 + App + Seed
+├── Dockerfile                 # Streamlit 镜像
+├── EVALUATION_FRAMEWORK.md    # 三路径评估方法详解
+├── DESIGN_DECISIONS.md        # 技术选型 + 演进史 + ADR
+└── CONTRIBUTING.md
 ```
-
-## 🤝 贡献指南
-
-欢迎提交贡献！请按以下步骤：
-
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 开启 Pull Request
-
-详见 [CONTRIBUTING.md](./CONTRIBUTING.md)
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
-## 👤 作者
-
-- **Shangyi Zhu** - *项目初始工作*
-
-## 📧 联系方式
-
-如有问题或反馈，欢迎联系 zhusayi1994@gmail.com
 
 ---
 
-**最后更新**：2026 年 5 月
+## 🛠 技术栈
+
+| 类别 | 选型 | 备注 |
+|---|---|---|
+| LLM（生成 + 评分） | Qwen3.6-max-preview（DashScope） | 单源，中文银行场景 → ADR-001 |
+| 嵌入 | text-embedding-v4（DashScope，dim=1024） | schema 检索用 |
+| 可观测性 | Langfuse v3（self-hosted） | 全链路 trace + LLM judge 评分回流 → ADR-003 |
+| Agent 编排 | 自研函数链 + `@observe` 装饰器 | 流程固定，未用 LangGraph → ADR-002 |
+| SQL 解析/校验 | sqlglot | AST 改写 + 多方言 |
+| 中文分词 | jieba | schema 检索预处理 |
+| 数据库 | PostgreSQL 16 | 只读用户隔离（chatbi_readonly） |
+| Web UI | Streamlit | Demo 取向，3 倍开发速度 → ADR-009 |
+| 可视化 | Plotly | 6 种图表自动推断（rule-based） |
+| 测试 | pytest（316+ 项） + ruff | CI on GitHub Actions |
+
+完整决策理由与替代方案对比见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。
+
+---
+
+## 📖 文档导航
+
+- [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) —— 技术选型对比 + 架构演进史 + 10 条 ADR
+- [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md) —— 三路径评估方法、问题集、rubric、ground truth
+- [金融 data agent 架构设计](./金融data%20agent架构设计.md) —— 业务背景与原始设计稿
+- [CONTRIBUTING.md](./CONTRIBUTING.md) —— 开发环境与贡献流程
+
+---
+
+## 🧪 测试与代码质量
+
+```bash
+pytest -v                                  # 跑全部测试
+pytest tests/p3 -v                         # 只跑 P3
+pytest --cov=src --cov-report=html         # 覆盖率报告 → htmlcov/
+
+ruff check src/ tests/ streamlit_app/ scripts/
+ruff format src/ tests/ streamlit_app/ scripts/
+```
+
+---
+
+## 📄 License / Author
+
+MIT License · Shangyi Zhu · zhusayi1994@gmail.com
+
+如有问题或反馈欢迎邮件或 Issue。
+
+---
+
+**最后更新**：2026-06-30

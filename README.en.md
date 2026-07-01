@@ -1,197 +1,269 @@
 # chat-bi-agent
 
 ![CI](https://github.com/Zsyyxrs/chat-bi-agent/actions/workflows/ci.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![LLM: Qwen3.6](https://img.shields.io/badge/LLM-Qwen3.6--max--preview-7c3aed.svg)](https://dashscope.aliyun.com/)
 
 [中文](./README.md) | **English**
 
-> Banking BI self-service agent — Compress "submit request → wait for scheduling → develop report → find data → manual root cause analysis" into "ask once → get data instantly → auto attribution → ask follow-ups"
+> **A conversational BI agent for banking scenarios** — compresses the traditional "file a request → wait in the queue → build a report → read the report → dig for numbers → attribute by hand" pipeline down to **"ask in one sentence → get numbers directly → get automatic attribution → follow up freely"**.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+---
 
-## ✨ Features
+## ✨ Three Capability Tracks
 
-- **Precision Data Retrieval (P1)**: Direct access to banking data via natural language queries
-  - Real-time metric lookup with `NL2SQL`
-  - Automatic result visualization
-  - Confidence score and data lineage tracking
+| Track | Capability | Sample Question |
+|---|---|---|
+| **P1 Precise Retrieval** | Natural language → SQL → data → auto-chart | "What was the deposit balance of HNW customers in the Shanghai branch in May?" |
+| **P2 Multi-Step Analysis** | Decompose → multi-step retrieval → fact extraction → synthesized insight | "How did cash withdrawal behavior change around Chinese New Year?" |
+| **P3 RCA Attribution** | Anchor fact → drill by dimension → match events → synthesize root cause | "Shanghai branch deposits dropped 8% on 2026-05-14 — why?" |
 
-- **Multi-step Analysis (P2)**: Intelligent BI assistant for business users
-  - Automatic metric decomposition and trend analysis
-  - Smart follow-up question suggestions
-  - Insight cards with actionable recommendations
+---
 
-- **Root Cause Attribution (P3)**: Auto-attribution engine for anomaly analysis
-  - Dimensional drill-down analysis
-  - YoY and MoM comparison
-  - Contribution analysis and anomaly detection
-  - Smart hypothesis verification
+## 📊 Evaluation Results
 
-## 🚀 Quick Start
+### In-house three-track evaluation (baseline 2026-06-30)
 
-### Prerequisites
+| Track | Total | Passed | Avg Score | Notes |
+|---|---:|---:|---:|---|
+| **P1 NL2SQL** | 6 | 6 | **1.000** | Multi-table JOIN, time windows, aggregation, branch filters — all pass |
+| **P2 Multi-Step Analysis** | 3 | 3 | **0.740** | 5-dim rubric (step completeness, metric coverage, insight, reasoning, business relevance) |
+| **P3 RCA Attribution** | 7 | 7 | **0.900** · event_hit **7/7** | 4-dim rubric, all events matched, zero hallucination |
 
-- Python 3.10+
-- PostgreSQL 13+
-- Docker & Docker Compose (optional)
+Evaluation methodology in [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md); raw baseline JSONs under [`results/`](./results/); latest markdown report at [`results/eval_report_2026-06-30.md`](./results/eval_report_2026-06-30.md).
 
-### Installation
+One-click rerun:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Zsyyxrs/chat-bi-agent.git
-cd chat-bi-agent
-
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -e .
-pip install -e ".[dev]"  # For development
+python scripts/run_all_evals.py              # run all three tracks + generate markdown report
+python scripts/run_all_evals.py --only p3    # P3 only
+python scripts/eval_diff.py --phase p3       # diff latest two P3 baselines
 ```
 
-### Database Setup
+### Public benchmarks
 
-```bash
-# Option 1: Using Docker Compose
-docker-compose up -d
+- **BIRD-financial dev subset** (n≈106): _Coming soon_. We chose the `financial` subset (real Czech bank data, 8 tables) because it matches this project's domain and difficulty. Numbers will be filled in during the next iteration.
 
-# Option 2: Manual PostgreSQL setup
-createdb chat_bi_agent
-python -m src.chat_bi_agent.data.seed --help
-```
-
-### Run Demo Seed Data
-
-```bash
-# Generate sample banking data
-python -m src.chat_bi_agent.data.seed \
-  --num-customers 100 \
-  --num-months 12 \
-  --with-events
-
-# Run evaluation framework
-python -m src.chat_bi_agent.eval.rca_evaluator
-```
-
-## 📖 Documentation
-
-- **[Architecture Design](./金融data%20agent架构设计.md)** (Chinese) - Complete system design and business logic
-- **[Evaluation Framework](./EVALUATION_FRAMEWORK.md)** (Chinese) - Three-phase evaluation strategy and metrics
-- **[Contributing Guide](./CONTRIBUTING.md)** - Development setup and contribution process
+---
 
 ## 🏗 Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│    Business User Interface (Web)        │
-│  Metric Marketplace │ Q&A │ Insights   │
-└────────────┬────────────────────────────┘
-             │
-┌────────────▼────────────────────────────┐
-│    LangGraph Multi-Agent Orchestrator   │
-│ ┌──────────┐  ┌──────────┐ ┌─────────┐ │
-│ │ Planner  │→ │ Router   │→│Data Ret.│ │
-│ └──────────┘  └──────────┘ └─────────┘ │
-└────────────┬────────────────────────────┘
-             │
-┌────────────▼────────────────────────────┐
-│   PostgreSQL Data Warehouse             │
-│ • Banking transactions & dimensions     │
-│ • Event propagation for attribution     │
-│ • Real-time metric computation          │
-└─────────────────────────────────────────┘
+                       ┌─────────────────────────────┐
+                       │  Streamlit Web UI (3 Tabs)  │
+                       │  P1 Retrieval / P2 Analysis / P3 RCA │
+                       └──────────────┬──────────────┘
+                                      │
+       ┌──────────────────────────────┼──────────────────────────────┐
+       │                              │                              │
+       ▼                              ▼                              ▼
+┌─────────────┐              ┌─────────────────┐            ┌───────────────────┐
+│ P1 NL2SQL   │              │ P2 Multi-Step   │            │ P3 RCA Agent      │
+│ Agent       │              │ Analysis Agent  │            │ (5-step pipeline) │
+│             │              │                 │            │                   │
+│ SchemaLink  │◄──reuse──────┤  Planner        │            │ 1. fact_anchor    │
+│ SQLGen      │              │  ↓              │            │    (via P1)       │
+│ SQLValidate │              │  P1 Agent (×N)  │◄──reuse────┤ 2. drill_select   │
+│ SQLExecute  │              │  ↓              │            │ 3. drill_run      │
+│ Reflector   │              │  FactExtractor  │            │    (Pareto Top-K) │
+│ (×1 retry)  │              │  ↓              │            │ 4. event_match    │
+│             │              │  InsightSynth   │            │    (YAML window)  │
+│             │              │  ↓              │            │ 5. synthesize     │
+│             │              │  ReportWriter   │            │    (narrative)    │
+└──────┬──────┘              └────────┬────────┘            └────────┬──────────┘
+       │                              │                              │
+       └──────────────────┬───────────┴──────────────────────────────┘
+                          │
+       ┌──────────────────┼──────────────────┐
+       ▼                  ▼                  ▼
+┌─────────────┐  ┌────────────────┐  ┌──────────────────┐
+│ Qwen3.6     │  │ PostgreSQL 16  │  │ Langfuse v3      │
+│ (DashScope) │  │ (read-only     │  │ (self-hosted)    │
+│ + Embedding │  │  user enforced)│  │ full trace tree  │
+└─────────────┘  └────────────────┘  └──────────────────┘
 ```
 
-### Core Modules
+**Architecture highlights**:
+- **Three independent agents**, one per track (no forced single super-agent)
+- **P2/P3 reuse P1 as the atomic retrieval layer** (both FactAnchor and each planned step call P1)
+- **Orchestration is a plain function chain + Langfuse `@observe` decorators** — **no LangGraph** (fixed flow doesn't need a graph)
+- **Single LLM source** (Qwen for both generation and judge) — no separate judge model
+- **P3 ground truth via YAML event library + propagation engine** (controllable, replayable, quantifiable)
 
-- **`data/`** - Data generation, seeding, and event propagation
-  - `seed.py` - Database initialization with banking mock data
-  - `transaction_generator.py` - Synthetic transaction generation
-  - `event_loader.py` - Event library YAML parser
-  - `propagation_engine.py` - Event-driven data mutation
+Full design trade-offs in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 
-- **`eval/`** - Evaluation framework for three agent paths
-  - `rca_evaluator.py` - Root cause attribution evaluation
-  - `precision_retrieval_evaluator.py` - NL2SQL accuracy assessment
-  - `multi_step_analysis_evaluator.py` - Complex query handling
+---
 
-## 🛠 Tech Stack
+## 🚀 Quick Start
 
-- **Language**: Python 3.10+
-- **Database**: PostgreSQL 13+
-- **ORM**: SQLAlchemy 2.0+
-- **CLI**: Click 8.1+
-- **Data Generation**: Faker 20.0+
-- **Config**: PyYAML 6.0+
-- **Testing**: Pytest 7.0+
-- **Code Quality**: Black, Ruff
-
-## 📊 Development
-
-### Run Tests
+### A. Docker Compose (recommended)
 
 ```bash
-pytest -v
-pytest --cov=src --cov-report=html  # With coverage report
+git clone https://github.com/Zsyyxrs/chat-bi-agent.git
+cd chat-bi-agent
+
+# 1. Configure API key
+cp .env.example .env
+# Edit .env and fill in DASHSCOPE_API_KEY (required)
+
+# 2. Bring up the full stack (Postgres + Langfuse stack + Streamlit app)
+docker compose up -d
+
+# 3. Seed data + plant events (one-off job)
+docker compose --profile seed run --rm seed
+
+# 4. On first launch, create a Langfuse API key
+#    Visit http://localhost:3001 → sign in with admin@chatbi.local / admin12345
+#    Settings → API Keys → create a pair → fill LANGFUSE_PUBLIC_KEY / SECRET_KEY in .env
+#    Then: docker compose restart app
+
+# 5. Open Streamlit
+open http://localhost:8501
 ```
 
-### Code Quality Checks
+Service ports:
+- Streamlit App: `http://localhost:8501`
+- Langfuse UI: `http://localhost:3001`
+- pgAdmin: `http://localhost:5050`
+- Postgres: `localhost:5433` (5432 inside the container)
+
+### B. Local development
 
 ```bash
-black src/
-ruff check src/
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Bring up Postgres + Langfuse only (skip the app container)
+docker compose up -d postgres langfuse pgadmin
+
+# Seed data
+python -m chat_bi_agent.data.seed --truncate --with-events
+
+# Run Streamlit locally
+streamlit run streamlit_app/app.py
 ```
 
-### Project Structure
+### Run evaluations
+
+```bash
+python scripts/run_all_evals.py                    # run all three tracks
+python scripts/run_all_evals.py --only p1          # P1 only
+python scripts/run_all_evals.py --skip p2,p3       # skip P2/P3
+python scripts/run_all_evals.py --p3-limit 2       # P3: first 2 questions only (save tokens)
+python scripts/run_all_evals.py --report-only      # regenerate report from latest baselines, no rerun
+
+python scripts/eval_diff.py --phase p3             # diff the latest two P3 baselines
+python scripts/eval_diff.py --phase p3 \
+    --base results/baseline_p3_rca_2026-06-28.json \
+    --head results/baseline_p3_rca_2026-06-29.json
+```
+
+---
+
+## 🎬 Demo
+
+Video / GIF coming later. In the meantime, follow Quick Start A, launch Streamlit, and try one question per tab:
+
+- **P1 tab**: "What was the total deposit balance of HNW customers in the Shanghai branch in May 2026?"
+- **P2 tab**: "How did cash withdrawal behavior change around Chinese New Year?"
+- **P3 tab**: "Deposits from HNW customers at the Shanghai branch dropped 8% on 2026-05-14 — what caused it?"
+
+Every question leaves a full trace in Langfuse (`http://localhost:3001`, live).
+
+---
+
+## 🧱 Project Structure
 
 ```
 chat-bi-agent/
 ├── src/chat_bi_agent/
+│   ├── agents/                # Three agents + shared components
+│   │   ├── p1/                #   nl2sql_agent · sql_generator · sql_validator · reflector
+│   │   ├── p2/                #   p2_analysis_agent · planner · fact_extractor · insight_synthesizer · report_writer
+│   │   ├── p3/                #   p3_rca_agent · fact_anchor · drilldown_selector · drill_executor · event_matcher · synthesizer
+│   │   └── shared/            #   schema_linker · sql_executor
+│   ├── runners/               # P1/P2/P3 evaluation runners
+│   ├── llm/                   # qwen_client.py + langfuse_setup.py
+│   ├── viz/                   # chart_inference (rule-based) + plotly_renderer
+│   ├── eval/                  # precision / multi-step / rca evaluators
 │   ├── data/
-│   │   ├── events/           # YAML event library
-│   │   ├── db.py
-│   │   ├── seed.py
-│   │   ├── transaction_generator.py
-│   │   └── propagation_engine.py
-│   ├── eval/
-│   │   ├── rca_evaluator.py
-│   │   ├── precision_retrieval_evaluator.py
-│   │   └── multi_step_analysis_evaluator.py
-│   └── __init__.py
-├── docker/
-├── tests/
-├── results/                  # Evaluation results and logs
-├── pyproject.toml
-├── docker-compose.yml
-└── README.md
+│   │   ├── seed.py            #   seed data generation CLI
+│   │   └── events/            #   YAML event library (4 real-world scenarios)
+│   ├── schema/                # table/column metadata loader
+│   └── config.py              # YAML + defaults merge
+│
+├── streamlit_app/
+│   ├── app.py                 # 3-tab entry point
+│   ├── tabs/{p1_nl2sql,p2_analysis,p3_rca}.py
+│   └── components/{chart,dataframe,sql,insight}_block.py
+│
+├── scripts/
+│   ├── run_all_evals.py       # One-click: run P1+P2+P3 + generate markdown report
+│   ├── eval_diff.py           # Baseline regression detector
+│   ├── verify_events.py       # Verify event propagation
+│   ├── rejudge_baseline.py    # Re-run LLM judge
+│   └── calibrate_magnitudes.py
+│
+├── config/local.yaml          # Runtime config (model names, retrieval top_k, PG timeout, ...)
+├── tests/                     # 316+ tests, organized by p1/p2/p3/shared/data/viz/eval/schema
+├── results/                   # Evaluation baseline JSONs + markdown reports
+├── docker-compose.yml         # Postgres + Langfuse stack + App + Seed
+├── Dockerfile                 # Streamlit image
+├── EVALUATION_FRAMEWORK.md    # Three-track evaluation methodology (Chinese)
+├── DESIGN_DECISIONS.md        # Tech choices + evolution + ADRs (Chinese)
+└── CONTRIBUTING.md
 ```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed guidelines.
-
-## 📄 License
-
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details.
-
-## 👤 Authors
-
-- **Shangyi Zhu** - *Initial work*
-
-## 📧 Contact
-
-For questions or feedback, please reach out to zhusayi1994@gmail.com
 
 ---
 
-**Last Updated**: May 2026
+## 🛠 Tech Stack
+
+| Category | Choice | Notes |
+|---|---|---|
+| LLM (generation + judge) | Qwen3.6-max-preview (DashScope) | Single source, Chinese banking domain → ADR-001 |
+| Embeddings | text-embedding-v4 (DashScope, dim=1024) | For schema retrieval |
+| Observability | Langfuse v3 (self-hosted) | Full trace tree + LLM judge score writeback → ADR-003 |
+| Agent orchestration | In-house function chain + `@observe` | Fixed flow, no LangGraph → ADR-002 |
+| SQL parse/validate | sqlglot | AST rewriting + multi-dialect |
+| Chinese tokenization | jieba | Preprocessing for schema retrieval |
+| Database | PostgreSQL 16 | Isolated read-only user (chatbi_readonly) |
+| Web UI | Streamlit | Demo-oriented, ~3× dev speed → ADR-009 |
+| Visualization | Plotly | 6 chart types auto-inferred (rule-based) |
+| Testing | pytest (316+ tests) + ruff | CI on GitHub Actions |
+
+Full rationale and alternatives in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
+
+---
+
+## 📖 Documentation
+
+- [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) — Tech-choice comparison, architecture evolution, 10 ADRs (Chinese)
+- [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md) — Three-track methodology, question sets, rubrics, ground truth (Chinese)
+- [金融 data agent 架构设计](./金融data%20agent架构设计.md) — Original business-domain design (Chinese)
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — Dev environment and contribution flow
+
+---
+
+## 🧪 Tests & Code Quality
+
+```bash
+pytest -v                                  # run all tests
+pytest tests/p3 -v                         # P3 only
+pytest --cov=src --cov-report=html         # coverage → htmlcov/
+
+ruff check src/ tests/ streamlit_app/ scripts/
+ruff format src/ tests/ streamlit_app/ scripts/
+```
+
+---
+
+## 📄 License / Author
+
+MIT License · Shangyi Zhu · zhusayi1994@gmail.com
+
+Questions or feedback welcome via email or Issue.
+
+---
+
+**Last updated**: 2026-06-30
