@@ -67,3 +67,6 @@ htmlcov/
 
 # Design / planning docs stay local
 docs/
+
+# External benchmark data (BIRD dev raw files — 340MB+, license restricts redistribution)
+benchmarks/bird/

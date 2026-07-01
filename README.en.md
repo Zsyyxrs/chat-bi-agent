@@ -43,7 +43,16 @@ python scripts/eval_diff.py --phase p3       # diff latest two P3 baselines
 
 ### Public benchmarks
 
-- **BIRD-financial dev subset** (n≈106): _Coming soon_. We chose the `financial` subset (real Czech bank data, 8 tables) because it matches this project's domain and difficulty. Numbers will be filled in during the next iteration.
+- **BIRD-financial dev subset** (n=106, model `qwen3.7-max-2026-05-20`):
+
+  | Difficulty | n | EX | Hits |
+  | --- | ---: | ---: | ---: |
+  | simple | 62 | **64.52%** | 40/62 |
+  | moderate | 37 | **48.65%** | 18/37 |
+  | challenging | 7 | **28.57%** | 2/7 |
+  | **overall** | **106** | **56.60%** | **60/106** |
+
+  We chose the `financial` subset (real Czech bank data, 8 tables) because it matches this project's domain and difficulty. Runner: [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py); results: [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json). EX semantics follow BIRD's official `evaluation.py` (row-set equivalence plus the 42-entry `dev_tied_append.json` patch). Dataset provenance: [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 

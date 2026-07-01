@@ -43,7 +43,16 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
 ### 公开 benchmark
 
-- **BIRD-financial dev subset** (n≈106)：_Coming soon_ —— 子集选 `financial`（捷克银行真实数据，8 表）是因为和本项目领域同源，难度对等。计划下阶段补全，README 会回填 EX 数字。
+- **BIRD-financial dev subset** (n=106，模型 `qwen3.7-max-2026-05-20`)：
+
+  | 难度 | n | EX | 命中 |
+  | --- | ---: | ---: | ---: |
+  | simple | 62 | **64.52%** | 40/62 |
+  | moderate | 37 | **48.65%** | 18/37 |
+  | challenging | 7 | **28.57%** | 2/7 |
+  | **overall** | **106** | **56.60%** | **60/106** |
+
+  子集选 `financial`（捷克银行真实数据，8 表）是因为和本项目领域同源、难度对等。评测入口 [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py)，结果落盘 [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json)。指标口径与 BIRD 官方 `evaluation.py` 一致（EX = 行集合等价 + `dev_tied_append.json` 42 条补丁）。数据集下载见 [`benchmarks/README.md`](benchmarks/README.md)。
 
 ---
 

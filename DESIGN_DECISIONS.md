@@ -93,7 +93,7 @@
 ### 未纳入范围（明确 defer）
 
 - **Code Agent + Python sandbox**：ROI 不够（P3 已能覆盖大部分 attribution 场景），复杂度高（需要沙箱隔离）。放 backlog。
-- **BIRD-financial dev 子集评测**：见 README，下阶段补。
+- ~~**BIRD-financial dev 子集评测**~~：已完成，见 README §公开 benchmark（`qwen3.7-max-2026-05-20` 上 EX 56.60%）与 §3 新增 ADR-011。
 
 ---
 
@@ -430,6 +430,42 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 
 ---
 
+### ADR-011: BIRD-financial 只跑 P1，SQLite 直连 + 独立 NL2SQL prompt
+
+**Status**: Accepted · 2026-07-01
+
+**Context**:
+- README 承诺补齐外部公开 benchmark，选 BIRD dev 的 `financial` 子集（106 题、8 表捷克银行数据）跟本项目域同源
+- BIRD 数据以 SQLite 分发；gold SQL 是 SQLite 方言
+- P1 现网的 SQLGenerator system prompt 深度绑定本项目的银行域枚举（`branch_id` 编码、`customer_tier` 等），原样复用会污染 BIRD 评测
+
+**Decision**:
+- **DB 层**：`sqlite3` stdlib 直连 `financial.sqlite`，`mode=ro` 只读；`benchmarks/bird/` 整体 gitignore
+- **NL2SQL 层**：为 BIRD 单写一份英文 SQLite-aware system prompt（`src/chat_bi_agent/eval/bird_financial/nl2sql.py`），只复用 `qwen_client.chat` 与 JSON 解析模式，**不复用** P1 的 SQLGenerator
+- **Schema 层**：从 BIRD 自带 `dev_tables.json` + `database_description/*.csv` 动态拼英文 schema 段（含 PK/FK/枚举），不复用我们自己的 `schema_docs.yaml`
+- **评测层**：EX（行集合等价，浮点整数折叠）+ `dev_tied_append.json` 42 条补丁；SQL Validator 跳过（`sqlglot` 用 `dialect="postgres"` 会拒 SQLite 反引号，executor 天然会兜错）
+- **Executor**：`BirdSQLiteExecutor` 用 `mode=ro` URI + 后台线程 `conn.interrupt()` watchdog 兜 30s 超时
+- **结果落盘**：`results/bird_financial_<date>.json`，schema 兼容 `scripts/eval_diff.py`；支持 `--resume-from` 断点续跑
+- **首轮结果**：`qwen3.7-max-2026-05-20` 上 EX=56.60% (60/106)，无一 timeout / syntax / parse 错
+
+**Alternatives considered**:
+
+| 候选 | 为什么没选 |
+|---|---|
+| **把 BIRD schema 导入 Postgres** | BIRD gold SQL 用 SQLite 方言（反引号、`IIF()`），跨方言重写 gold SQL 会破坏可比性；且 `trans` 表 106 万行导入耗时无收益 |
+| **复用 P1 SQLGenerator 全量原样** | 该 prompt 强绑本项目银行域枚举，会让 LLM 在 BIRD 上产生大量"编造字段"错，评测结果不能反映真实能力 |
+| **跑 P2 / P3** | BIRD 只有单条 SQL gold，multi-step / attribution 无参考答案，路径不匹配 |
+| **跑全量 dev（1534 题）** | 11 个 domain 全跑一次 API 成本 15x，且其余 10 个 domain 与本项目无关；README 只承诺 `financial` |
+
+**Consequences**:
+- ✅ 零新依赖（`sqlite3` stdlib）；executor / scorer / nl2sql 全部单测覆盖（31 测试全绿）
+- ✅ 有断点续跑：跑到一半 quota 耗尽可 `--resume-from prev.json` 换模型接续
+- ✅ 结果 JSON 记录 `dev_json_md5` + `sqlite_md5`，未来 BIRD 版本变化可检测
+- ⚠️ EX 是严口径：语义等价但列位序不同 / 多余 NULL 列会算错；BIRD 官方评测同此，暂不做行匹配放宽
+- ⚠️ 单模型评测（这次是 qwen3.7-max-2026-05-20），换模型后数字不可直接对比；换模型时把结果 JSON 归档并同时更新 README 表格
+
+---
+
 ## 附：ADR 快速索引
 
 | # | 决策 | 状态 |
@@ -444,9 +480,10 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-008](#adr-008-embedding--jieba-做-schema-检索) | Embedding + jieba schema 检索 | Accepted |
 | [ADR-009](#adr-009-streamlit-做-web-ui) | Streamlit UI | Accepted |
 | [ADR-010](#adr-010-postgresql-双用户隔离-写与读) | PostgreSQL 双用户隔离 | Accepted |
+| [ADR-011](#adr-011-bird-financial-只跑-p1sqlite-直连--独立-nl2sql-prompt) | BIRD-financial 只跑 P1 + SQLite 直连 | Accepted |
 
 新增 ADR 命名 `ADR-011`、`ADR-012` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
 ---
 
-**最后更新**：2026-06-30
+**最后更新**：2026-07-01
