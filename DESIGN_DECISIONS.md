@@ -446,14 +446,15 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 - **评测层**：EX（行集合等价，浮点整数折叠）+ `dev_tied_append.json` 42 条补丁；SQL Validator 跳过（`sqlglot` 用 `dialect="postgres"` 会拒 SQLite 反引号，executor 天然会兜错）
 - **Executor**：`BirdSQLiteExecutor` 用 `mode=ro` URI + 后台线程 `conn.interrupt()` watchdog 兜 30s 超时
 - **结果落盘**：`results/bird_financial_<date>.json`，schema 兼容 `scripts/eval_diff.py`；支持 `--resume-from` 断点续跑
-- **首轮结果**：`qwen3.7-max-2026-05-20` 上 EX=56.60% (60/106)，无一 timeout / syntax / parse 错
+- **首轮结果**：`qwen3.7-max-2026-05-20` 上 lean baseline EX=56.60% (60/106)，无一 timeout / syntax / parse 错
+- **对照变体**：加跑一路"**现网 P1 pipeline 原样上 BIRD**"（`scripts/run_bird_financial_p1.py`），执行器换 `BirdSQLiteExecutor` + schema 换 BIRD 8 表，其余 SQLGenerator / SQLValidator / Reflector 一字不改。结果 EX=44.34% (47/106)，**Δ=−12.26 分**——这就是深度域特化的跨域代价。主要失分模式：27 条 syntax 错源自 P1 prompt 里的 PG 方言假设（`EXTRACT(YEAR FROM ...)` / `ILIKE` / `DATE 'YYYY-MM-DD'`）在 SQLite 上不成立；Reflector 3 轮重试收益低（35 题触发，11% 挽回）
 
 **Alternatives considered**:
 
 | 候选 | 为什么没选 |
 |---|---|
 | **把 BIRD schema 导入 Postgres** | BIRD gold SQL 用 SQLite 方言（反引号、`IIF()`），跨方言重写 gold SQL 会破坏可比性；且 `trans` 表 106 万行导入耗时无收益 |
-| **复用 P1 SQLGenerator 全量原样** | 该 prompt 强绑本项目银行域枚举，会让 LLM 在 BIRD 上产生大量"编造字段"错，评测结果不能反映真实能力 |
+| **复用 P1 SQLGenerator 全量原样** | 该 prompt 强绑本项目银行域枚举，直接当唯一评测口径会污染 LLM 能力信号。**但作为对照变体单独跑一路**（`scripts/run_bird_financial_p1.py`），拿 lean 与 P1 两个数字的 Δ 反而是有价值的信息（见下面 Consequences 里的 12.26 分口径）|
 | **跑 P2 / P3** | BIRD 只有单条 SQL gold，multi-step / attribution 无参考答案，路径不匹配 |
 | **跑全量 dev（1534 题）** | 11 个 domain 全跑一次 API 成本 15x，且其余 10 个 domain 与本项目无关；README 只承诺 `financial` |
 
@@ -463,6 +464,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 - ✅ 结果 JSON 记录 `dev_json_md5` + `sqlite_md5`，未来 BIRD 版本变化可检测
 - ⚠️ EX 是严口径：语义等价但列位序不同 / 多余 NULL 列会算错；BIRD 官方评测同此，暂不做行匹配放宽
 - ⚠️ 单模型评测（这次是 qwen3.7-max-2026-05-20），换模型后数字不可直接对比；换模型时把结果 JSON 归档并同时更新 README 表格
+- ✅ **加了对照变体，让 benchmark 从"测模型"升级为"测系统"**：lean baseline 56.60% 是能力天花板，P1 pipeline 原样 44.34% 是本项目 stack 的真实跨域表现，Δ=−12.26 分给到"深度域特化 vs 跨域泛化"的定量口径。附加发现：P1 的失分几乎全在 PG 方言假设（`EXTRACT/ILIKE/DATE 'YYYY-MM-DD'`）—— 27 条 syntax 错、Reflector 仅救回 11%——把这个作为将来做"dialect-agnostic prompt 层"的证据线索
 
 ---
 

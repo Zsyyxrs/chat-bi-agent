@@ -45,14 +45,22 @@ python scripts/eval_diff.py --phase p3       # diff latest two P3 baselines
 
 - **BIRD-financial dev subset** (n=106, model `qwen3.7-max-2026-05-20`):
 
-  | Difficulty | n | EX | Hits |
-  | --- | ---: | ---: | ---: |
-  | simple | 62 | **64.52%** | 40/62 |
-  | moderate | 37 | **48.65%** | 18/37 |
-  | challenging | 7 | **28.57%** | 2/7 |
-  | **overall** | **106** | **56.60%** | **60/106** |
+  We ran two variants side by side — one measures the **LLM/prompt-substrate ceiling** on an external benchmark, the other measures what our **live P1 pipeline** actually does when dropped onto a foreign schema unchanged:
 
-  We chose the `financial` subset (real Czech bank data, 8 tables) because it matches this project's domain and difficulty. Runner: [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py); results: [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json). EX semantics follow BIRD's official `evaluation.py` (row-set equivalence plus the 42-entry `dev_tied_append.json` patch). Dataset provenance: [`benchmarks/README.md`](benchmarks/README.md).
+  | Difficulty | n | Lean baseline<br/>(BIRD-specific prompt) | P1 pipeline<br/>(production Chinese-banking prompt as-is) | Δ |
+  | --- | ---: | ---: | ---: | ---: |
+  | simple | 62 | 64.52% (40/62) | 50.00% (31/62) | −14.52 |
+  | moderate | 37 | 48.65% (18/37) | 37.84% (14/37) | −10.81 |
+  | challenging | 7 | 28.57% (2/7) | 28.57% (2/7) | 0 |
+  | **overall** | **106** | **56.60%** (60/106) | **44.34%** (47/106) | **−12.26** |
+
+  **How to read the two numbers**:
+  - **Lean 56.60%** — a BIRD-specific English SQLite-aware prompt + full schema block + evidence. Measures LLM capability + prompt engineering quality.
+  - **P1 pipeline 44.34%** — the live P1 stack (Chinese banking-domain prompt, sqlglot PostgreSQL validator, Reflector retry loop) applied without modification, carrying its dialect assumptions and domain rules along.
+  - **Δ = 12.26 points** quantifies the cross-domain cost of deep in-domain specialization.
+  - **Dominant failure mode**: 27 syntax errors (26%), driven by PostgreSQL-dialect assumptions baked into P1's prompt (`EXTRACT(YEAR FROM ...)`, `ILIKE`, `DATE 'YYYY-MM-DD'` literals) that SQLite rejects. The Reflector's 3-attempt retry rarely rescues these (35 questions triggered reflect, only 4/35 = 11% recovered).
+
+  We chose the `financial` subset (real Czech bank data, 8 tables) because it matches this project's domain and difficulty. Runners: [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py) (lean) and [`scripts/run_bird_financial_p1.py`](scripts/run_bird_financial_p1.py) (P1); results: [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json) and [`results/bird_financial_p1_2026-07-01.json`](results/bird_financial_p1_2026-07-01.json). EX semantics follow BIRD's official `evaluation.py` (row-set equivalence plus the 42-entry `dev_tied_append.json` patch). Dataset provenance: [`benchmarks/README.md`](benchmarks/README.md).
 
 ---
 

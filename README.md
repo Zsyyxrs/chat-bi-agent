@@ -45,14 +45,22 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
 - **BIRD-financial dev subset** (n=106，模型 `qwen3.7-max-2026-05-20`)：
 
-  | 难度 | n | EX | 命中 |
-  | --- | ---: | ---: | ---: |
-  | simple | 62 | **64.52%** | 40/62 |
-  | moderate | 37 | **48.65%** | 18/37 |
-  | challenging | 7 | **28.57%** | 2/7 |
-  | **overall** | **106** | **56.60%** | **60/106** |
+  跑了两个变体做对照——一个是外部 benchmark 的**能力天花板**参考，另一个是**现网 P1 pipeline 原样上跨域数据**的真实表现：
 
-  子集选 `financial`（捷克银行真实数据，8 表）是因为和本项目领域同源、难度对等。评测入口 [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py)，结果落盘 [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json)。指标口径与 BIRD 官方 `evaluation.py` 一致（EX = 行集合等价 + `dev_tied_append.json` 42 条补丁）。数据集下载见 [`benchmarks/README.md`](benchmarks/README.md)。
+  | 难度 | n | Lean baseline<br/>(BIRD 专属 prompt) | P1 pipeline<br/>(现网中文银行域 prompt 原样) | Δ |
+  | --- | ---: | ---: | ---: | ---: |
+  | simple | 62 | 64.52% (40/62) | 50.00% (31/62) | −14.52 |
+  | moderate | 37 | 48.65% (18/37) | 37.84% (14/37) | −10.81 |
+  | challenging | 7 | 28.57% (2/7) | 28.57% (2/7) | 0 |
+  | **overall** | **106** | **56.60%** (60/106) | **44.34%** (47/106) | **−12.26** |
+
+  **两个数字怎么读**：
+  - **Lean 56.60%** — 用 BIRD 专属英文 SQLite-aware prompt + 全表 schema + evidence，是 LLM + prompt substrate 的能力上限。
+  - **P1 pipeline 44.34%** — 现网 P1（中文银行域 prompt / sqlglot PG 校验 / Reflector 重试）原样上 BIRD，把中文规则、PG 方言假设都带过去。
+  - **Δ = 12.26 分**是**"我们为本域深度特化付出的跨域代价"**。
+  - **主要失分模式**：27 条 syntax error（26%），源自 P1 prompt 里的 PG 方言假设——`EXTRACT(YEAR FROM ...)`、`ILIKE`、`DATE 'YYYY-MM-DD'` 字面量等在 SQLite 上跑不通。Reflector 3 轮重试也难救（35 题触发 reflect，只 4/35 = 11% 挽回）。
+
+  子集选 `financial`（捷克银行真实数据，8 表）是因为和本项目领域同源、难度对等。评测入口 [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py)（lean）与 [`scripts/run_bird_financial_p1.py`](scripts/run_bird_financial_p1.py)（P1），结果分别落盘 [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json) 与 [`results/bird_financial_p1_2026-07-01.json`](results/bird_financial_p1_2026-07-01.json)。指标口径与 BIRD 官方 `evaluation.py` 一致（EX = 行集合等价 + `dev_tied_append.json` 42 条补丁）。数据集下载见 [`benchmarks/README.md`](benchmarks/README.md)。
 
 ---
 
