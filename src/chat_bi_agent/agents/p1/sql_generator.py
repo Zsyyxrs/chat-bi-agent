@@ -15,16 +15,16 @@ from langfuse import observe
 
 from chat_bi_agent.llm import qwen_client
 
-SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_TEMPLATE = (
     "你是一个银行业务 NL2SQL 助手。根据用户的中文问题和给定的表 schema，"
-    "生成一条 PostgreSQL SELECT 查询。\n"
+    "生成一条 {DIALECT_NAME} SELECT 查询。\n"
     "\n"
     "严格要求：\n"
     "1. 只输出一个 JSON 对象，必须用 ```json``` 代码块包裹\n"
     "2. JSON 三个字段：thought（中文思路）、tables_used（字符串数组）、sql（SQL 字符串）\n"
     "3. SQL 只能是 SELECT 或 WITH，禁止 DML/DDL\n"
     "4. SQL 只能使用下面给定的表，禁止编造表/列名\n"
-    "5. 日期字段是 DATE 类型，请用 DATE 'YYYY-MM-DD' 字面量\n"
+    "5. {DATE_LITERAL_RULE}\n"
     "6. 字符串值用单引号\n"
     "7. 列名/表名严格按 schema 给定大小写\n"
     "8. 数据范围：fct_* 表的 dt 列覆盖 2025-01-01 至 2026-09-30。"
@@ -123,7 +123,43 @@ class InvalidJsonError(Exception):
 JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 
+_DIALECT_PROMPT_VARIANTS: dict[str, dict[str, str]] = {
+    "postgres": {
+        "DIALECT_NAME": "PostgreSQL",
+        "DATE_LITERAL_RULE": "日期字段是 DATE 类型，请用 DATE 'YYYY-MM-DD' 字面量",
+    },
+    "sqlite": {
+        "DIALECT_NAME": "SQLite",
+        "DATE_LITERAL_RULE": (
+            "日期字段用普通字符串 'YYYY-MM-DD'（SQLite 无 DATE 前缀，不要写 DATE 'YYYY-MM-DD'）；"
+            "提取年月日用 STRFTIME('%Y', col) / STRFTIME('%m', col) / STRFTIME('%d', col)，"
+            "不要用 EXTRACT(YEAR FROM col)；大小写不敏感匹配用 LOWER(col) LIKE ...，不要用 ILIKE"
+        ),
+    },
+}
+
+
+def _build_system_prompt(dialect: str) -> str:
+    if dialect not in _DIALECT_PROMPT_VARIANTS:
+        raise ValueError(
+            f"unsupported dialect {dialect!r}; expected one of {list(_DIALECT_PROMPT_VARIANTS)}"
+        )
+    fields = _DIALECT_PROMPT_VARIANTS[dialect]
+    text = _SYSTEM_PROMPT_TEMPLATE
+    for k, v in fields.items():
+        text = text.replace("{" + k + "}", v)
+    return text
+
+
+# Back-compat: existing modules may import SYSTEM_PROMPT expecting the PG variant.
+SYSTEM_PROMPT = _build_system_prompt("postgres")
+
+
 class SQLGenerator:
+    def __init__(self, dialect: str = "postgres"):
+        self.dialect = dialect
+        self.system_prompt = _build_system_prompt(dialect)
+
     def _parse(self, raw: str) -> _ParsedLLMOutput:
         m = JSON_FENCE_RE.search(raw)
         candidate = m.group(1) if m else raw.strip()
@@ -162,7 +198,7 @@ class SQLGenerator:
     ) -> SQLGenResult:
         user_prompt = self._build_user_prompt(question, schema_ddl, repair_hint)
         chat_result = qwen_client.chat(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=self.system_prompt,
             user_prompt=user_prompt,
         )
         parsed = self._parse(chat_result.content)

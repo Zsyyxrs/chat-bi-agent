@@ -76,6 +76,14 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--sql-timeout", type=float, default=30.0)
     p.add_argument(
+        "--dialect",
+        choices=["postgres", "sqlite"],
+        default="sqlite",
+        help='SQL dialect for P1 SQLGenerator / Validator / Reflector. '
+        'Default "sqlite" targets BIRD; use "postgres" to reproduce the '
+        "pre-dialect-fix baseline for A/B comparison.",
+    )
+    p.add_argument(
         "--resume-from",
         type=Path,
         default=None,
@@ -260,7 +268,9 @@ def main() -> int:
         description_dir=args.descriptions,
         sqlite_db=args.db,
         sql_timeout_s=args.sql_timeout,
+        dialect=args.dialect,
     )
+    print(f"[bird-p1] dialect: {args.dialect}", flush=True)
 
     new_outcomes: list[dict] = []
     started_at = time.time()
@@ -288,6 +298,7 @@ def main() -> int:
     result_doc: dict = {
         "benchmark": "bird_financial",
         "variant": "p1_agent",
+        "dialect": args.dialect,
         "run_date_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "model": CHAT_MODEL,
         "dev_json_md5": _md5(args.questions),

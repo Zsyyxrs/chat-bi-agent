@@ -23,6 +23,7 @@ class SQLErrorClass(str, Enum):
     OTHER = "OTHER"
     INVALID_JSON = "INVALID_JSON"  # agent 层从 SQLGenerator 抛出的错误映射
     VALIDATOR_FAIL = "VALIDATOR_FAIL"  # agent 层从 SQLValidator 失败映射
+    DIALECT_MISMATCH = "DIALECT_MISMATCH"  # Reflector 侧再分类：prev_sql 用了目标方言不认的语法
 
 
 # SET / EXECUTE / CALL are not listed: each execute() call uses a fresh connection,

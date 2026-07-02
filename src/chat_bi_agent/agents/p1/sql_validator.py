@@ -29,12 +29,19 @@ _FORBIDDEN_EXPRS = (
 
 
 class SQLValidator:
-    """sqlglot AST 静态检查。无副作用、无 LLM、可纯单元测试。"""
+    """sqlglot AST 静态检查。无副作用、无 LLM、可纯单元测试。
+
+    ``dialect`` controls the sqlglot parser dialect. Defaults to postgres to
+    preserve backward compat; set to ``"sqlite"`` for BIRD-style benchmarks.
+    """
+
+    def __init__(self, dialect: str = "postgres"):
+        self.dialect = dialect
 
     @observe(name="sql_validation")
     def validate(self, sql: str) -> ValidationResult:
         try:
-            parsed = sqlglot.parse(sql, dialect="postgres")
+            parsed = sqlglot.parse(sql, dialect=self.dialect)
         except sqlglot.errors.ParseError as e:
             return ValidationResult(ok=False, error=f"sqlglot 解析失败: {e}")
 

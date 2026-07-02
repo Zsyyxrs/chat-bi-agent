@@ -45,22 +45,31 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
 - **BIRD-financial dev subset** (n=106，模型 `qwen3.7-max-2026-05-20`)：
 
-  跑了两个变体做对照——一个是外部 benchmark 的**能力天花板**参考，另一个是**现网 P1 pipeline 原样上跨域数据**的真实表现：
+  跑了**三个变体**做对照——lean baseline 是外部 benchmark 的**能力天花板**参考；P1 pipeline 是现网系统**原样上跨域数据**的真实表现；P1 (dialect fix) 是**给 SQLGenerator/Validator/Reflector 加了 dialect 参数**后的表现——三个数字放一起才能说清 delta 到底来自哪里：
 
-  | 难度 | n | Lean baseline<br/>(BIRD 专属 prompt) | P1 pipeline<br/>(现网中文银行域 prompt 原样) | Δ |
-  | --- | ---: | ---: | ---: | ---: |
-  | simple | 62 | 64.52% (40/62) | 50.00% (31/62) | −14.52 |
-  | moderate | 37 | 48.65% (18/37) | 37.84% (14/37) | −10.81 |
-  | challenging | 7 | 28.57% (2/7) | 28.57% (2/7) | 0 |
-  | **overall** | **106** | **56.60%** (60/106) | **44.34%** (47/106) | **−12.26** |
+  | 难度 | n | Lean baseline<br/>(BIRD 专属 prompt) | P1 pipeline<br/>(pre-fix, dialect=postgres) | P1 pipeline<br/>(dialect=sqlite) | Δ dialect vs pre |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | simple | 62 | 64.52% (40/62) | 50.00% (31/62) | 59.68% (37/62) | **+9.68** |
+  | moderate | 37 | 48.65% (18/37) | 37.84% (14/37) | 37.84% (14/37) | 0 |
+  | challenging | 7 | 28.57% (2/7) | 28.57% (2/7) | 14.29% (1/7) | −14.28 (n=7 噪音) |
+  | **overall** | **106** | **56.60%** (60/106) | **44.34%** (47/106) | **49.06%** (52/106) | **+4.72** |
 
-  **两个数字怎么读**：
-  - **Lean 56.60%** — 用 BIRD 专属英文 SQLite-aware prompt + 全表 schema + evidence，是 LLM + prompt substrate 的能力上限。
-  - **P1 pipeline 44.34%** — 现网 P1（中文银行域 prompt / sqlglot PG 校验 / Reflector 重试）原样上 BIRD，把中文规则、PG 方言假设都带过去。
-  - **Δ = 12.26 分**是**"我们为本域深度特化付出的跨域代价"**。
-  - **主要失分模式**：27 条 syntax error（26%），源自 P1 prompt 里的 PG 方言假设——`EXTRACT(YEAR FROM ...)`、`ILIKE`、`DATE 'YYYY-MM-DD'` 字面量等在 SQLite 上跑不通。Reflector 3 轮重试也难救（35 题触发 reflect，只 4/35 = 11% 挽回）。
+  错误 & 效率对比：
 
-  子集选 `financial`（捷克银行真实数据，8 表）是因为和本项目领域同源、难度对等。评测入口 [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py)（lean）与 [`scripts/run_bird_financial_p1.py`](scripts/run_bird_financial_p1.py)（P1），结果分别落盘 [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json) 与 [`results/bird_financial_p1_2026-07-01.json`](results/bird_financial_p1_2026-07-01.json)。指标口径与 BIRD 官方 `evaluation.py` 一致（EX = 行集合等价 + `dev_tied_append.json` 42 条补丁）。数据集下载见 [`benchmarks/README.md`](benchmarks/README.md)。
+  | | syntax 错 | avg attempts | avg latency |
+  | --- | ---: | ---: | ---: |
+  | Lean baseline | 0 | 1.00 | 28.6s |
+  | P1 pre-fix (postgres) | 27 | 1.58 | 45.4s |
+  | P1 dialect fix (sqlite) | **0** | **1.04** | **30.1s** |
+
+  **数字怎么读**：
+  - **Lean 56.60%** = LLM + prompt substrate 的能力上限（BIRD 专属英文 SQLite-aware prompt）。
+  - **P1 pre-fix 44.34%** = 现网 P1（中文银行域 prompt / sqlglot PG 校验 / Reflector 重试）原样搬过去，PG 方言假设（`EXTRACT(YEAR FROM ...)` / `ILIKE` / `DATE 'YYYY-MM-DD'`）直接在 SQLite 上崩，27 条 syntax 错。
+  - **P1 dialect fix 49.06%** = 给 SQLGenerator / SQLValidator / Reflector 加 `dialect` 参数，SYSTEM_PROMPT 换成 SQLite 变体（提 STRFTIME / 不带 DATE 前缀 / LOWER LIKE 代替 ILIKE），sqlglot 用 sqlite dialect，Reflector 加 SYNTAX_ERROR → DIALECT_MISMATCH 兜底分类。**结果：27 条 syntax 错 → 0，avg_attempts 1.58 → 1.04，avg_latency 45.4s → 30.1s，EX +4.72 分**。
+  - **Reflector 的 DIALECT_MISMATCH 分类实际触发 0 次**——4 次 att=2 都是普通 SYNTAX_ERROR。SYSTEM_PROMPT 里加的方言规则本身就让 LLM 一次写对，Reflector 兜底是 defence in depth，实际没启用。
+  - **gap 从 12.26 分收窄到 7.54 分（关闭 38%）**。剩余 gap 里语义正确性占大头——即使 dialect 正确，日期算术、评估句意的题模型本身也难。
+
+  子集选 `financial`（捷克银行真实数据，8 表）是因为和本项目领域同源、难度对等。评测入口 [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py)（lean）与 [`scripts/run_bird_financial_p1.py`](scripts/run_bird_financial_p1.py)（P1；`--dialect {postgres,sqlite}` 切换），结果分别落盘 [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json) / [`results/bird_financial_p1_2026-07-01.json`](results/bird_financial_p1_2026-07-01.json) / [`results/bird_financial_p1_dialect_2026-07-02.json`](results/bird_financial_p1_dialect_2026-07-02.json)。指标口径与 BIRD 官方 `evaluation.py` 一致（EX = 行集合等价 + `dev_tied_append.json` 42 条补丁）。数据集下载见 [`benchmarks/README.md`](benchmarks/README.md)。
 
 ---
 

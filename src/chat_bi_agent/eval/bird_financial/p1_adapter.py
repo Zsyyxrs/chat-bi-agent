@@ -150,21 +150,25 @@ def build_p1_bird_agent(
     description_dir: Path,
     sqlite_db: Path,
     sql_timeout_s: float = 30.0,
+    dialect: str = "sqlite",
 ) -> P1NL2SQLAgent:
     """Construct a P1NL2SQLAgent with BIRD stubs, bypassing its own __init__.
 
     Uses ``object.__new__`` to skip the default constructor (which would load our
     Chinese schema YAML and build a slow embedding index for tables we don't want
-    to expose).
+    to expose). Dialect defaults to ``"sqlite"`` for BIRD; pass ``"postgres"`` to
+    reproduce the pre-dialect-fix baseline (which lost ~12 EX pts to PG-only
+    syntax leaking into SQLite executions).
     """
     agent = object.__new__(P1NL2SQLAgent)
+    agent.dialect = dialect
     loader = _BirdSchemaLoaderStub(tables_json, description_dir)
     agent.loader = loader
     agent.schema_linker = _BirdSchemaLinkerStub(loader.table_names)
-    agent.sql_generator = SQLGenerator()  # UNCHANGED — this is the variable under test
-    agent.sql_validator = SQLValidator()  # UNCHANGED — postgres dialect kept on purpose
+    agent.sql_generator = SQLGenerator(dialect=dialect)
+    agent.sql_validator = SQLValidator(dialect=dialect)
     agent.sql_executor = _BirdSQLExecutorAdapter(
         BirdSQLiteExecutor(sqlite_db, timeout_s=sql_timeout_s)
     )
-    agent.reflector = Reflector(max_attempts=MAX_ATTEMPTS)  # UNCHANGED
+    agent.reflector = Reflector(max_attempts=MAX_ATTEMPTS, dialect=dialect)
     return agent

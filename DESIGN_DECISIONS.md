@@ -447,7 +447,9 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 - **Executor**：`BirdSQLiteExecutor` 用 `mode=ro` URI + 后台线程 `conn.interrupt()` watchdog 兜 30s 超时
 - **结果落盘**：`results/bird_financial_<date>.json`，schema 兼容 `scripts/eval_diff.py`；支持 `--resume-from` 断点续跑
 - **首轮结果**：`qwen3.7-max-2026-05-20` 上 lean baseline EX=56.60% (60/106)，无一 timeout / syntax / parse 错
-- **对照变体**：加跑一路"**现网 P1 pipeline 原样上 BIRD**"（`scripts/run_bird_financial_p1.py`），执行器换 `BirdSQLiteExecutor` + schema 换 BIRD 8 表，其余 SQLGenerator / SQLValidator / Reflector 一字不改。结果 EX=44.34% (47/106)，**Δ=−12.26 分**——这就是深度域特化的跨域代价。主要失分模式：27 条 syntax 错源自 P1 prompt 里的 PG 方言假设（`EXTRACT(YEAR FROM ...)` / `ILIKE` / `DATE 'YYYY-MM-DD'`）在 SQLite 上不成立；Reflector 3 轮重试收益低（35 题触发，11% 挽回）
+- **对照变体（pre-fix）**：加跑一路"**现网 P1 pipeline 原样上 BIRD**"（`scripts/run_bird_financial_p1.py`），执行器换 `BirdSQLiteExecutor` + schema 换 BIRD 8 表，其余 SQLGenerator / SQLValidator / Reflector 一字不改。结果 EX=44.34% (47/106)，**Δ=−12.26 分**。27 条 syntax 错源自 P1 prompt 里的 PG 方言假设（`EXTRACT(YEAR FROM ...)` / `ILIKE` / `DATE 'YYYY-MM-DD'`）在 SQLite 上不成立
+- **dialect 参数化（fix）**：SQLGenerator / SQLValidator / Reflector / P1NL2SQLAgent 全部加 `dialect: str = "postgres"` 参数（默认与旧行为一致，向后兼容）；SYSTEM_PROMPT 走双变体（postgres 保留原样，sqlite 换成 STRFTIME / 无 DATE 前缀 / LOWER LIKE 规则）；`SQLErrorClass` 新增 `DIALECT_MISMATCH`，Reflector 在 SYNTAX_ERROR 时正则扫 prev_sql 里 5 个 PG-only / 2 个 SQLite-only 模式，命中就升级分类并给方言特定 hint。运行结果：EX 44.34%→**49.06%** (+4.72)、syntax 错 27→**0**、avg_attempts 1.58→**1.04**、avg_latency 45.4s→**30.1s**、gap 关闭 38%
+- **附加发现**：**Reflector 的 DIALECT_MISMATCH 分类实际触发 0 次**——4 次 att=2 都是普通 SYNTAX_ERROR。SYSTEM_PROMPT 里加的方言规则本身足够让 LLM 一次写对，Reflector 兜底是 defence in depth 但在这次评测里没启用。这说明"upstream 修 prompt" 比 "downstream 加 reflect 兜底"效益更高
 
 **Alternatives considered**:
 

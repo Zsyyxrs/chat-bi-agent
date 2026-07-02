@@ -39,15 +39,17 @@ class P1NL2SQLAgent:
         self,
         top_k: int = TOP_K_NL2SQL,
         statement_timeout_ms: int = PG_STATEMENT_TIMEOUT_MS,
+        dialect: str = "postgres",
     ):
+        self.dialect = dialect
         self.loader = SchemaLoader()
         self.loader.load()
         self.loader.build_index()
         self.schema_linker = SchemaLinker(loader=self.loader, top_k=top_k)
-        self.sql_generator = SQLGenerator()
-        self.sql_validator = SQLValidator()
+        self.sql_generator = SQLGenerator(dialect=dialect)
+        self.sql_validator = SQLValidator(dialect=dialect)
         self.sql_executor = SQLExecutor(statement_timeout_ms=statement_timeout_ms)
-        self.reflector = Reflector(max_attempts=MAX_ATTEMPTS)
+        self.reflector = Reflector(max_attempts=MAX_ATTEMPTS, dialect=dialect)
 
     @observe(name="p1_nl2sql_run")
     def run(self, question_id: str, question: str) -> P1AgentResult:
@@ -130,6 +132,11 @@ class P1NL2SQLAgent:
                     "attempt": attempt,
                     "err_class": err_class.value,
                     "action": decision.action.value,
+                    "effective_err_class": (
+                        decision.effective_err_class.value
+                        if decision.effective_err_class is not None
+                        else None
+                    ),
                 }
             )
             if decision.action == ReflectAction.GIVE_UP:
