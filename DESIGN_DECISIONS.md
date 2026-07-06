@@ -485,9 +485,64 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-009](#adr-009-streamlit-做-web-ui) | Streamlit UI | Accepted |
 | [ADR-010](#adr-010-postgresql-双用户隔离-写与读) | PostgreSQL 双用户隔离 | Accepted |
 | [ADR-011](#adr-011-bird-financial-只跑-p1sqlite-直连--独立-nl2sql-prompt) | BIRD-financial 只跑 P1 + SQLite 直连 | Accepted |
+| [ADR-012](#adr-012-q-sql-few-shot-检索注入-bird-验证净效应-0-同域生产未测) | Q-SQL few-shot 检索注入 | Accepted（默认阈值保守） |
 
-新增 ADR 命名 `ADR-011`、`ADR-012` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
+新增 ADR 命名 `ADR-012`、`ADR-013` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
 ---
 
-**最后更新**：2026-07-01
+### ADR-012: Q-SQL few-shot 检索注入，BIRD 验证净效应 ≈ 0，同域生产未测
+
+**Status**: Accepted（功能上线，默认阈值保守）
+**Date**: 2026-07-06
+
+**背景**：外部对比（Vanna、WrenAI、DB-GPT）里 RAG-over-Q-SQL 是核心加分项——把历史成功的 (question, SQL) 对灌进向量库、检索最相似的作为 few-shot 注入 SQLGenerator prompt。理论上 BIRD 类 dataset 上带来 5-10 分。
+
+**方案**：
+- 新增 `ExamplePool`（JSONL 存储、按 sha1(question||sql)[:12] 去重）+ `ExampleRetriever`（cosine top-k，dialect / tag / exclude_ids / exclude_question_texts 过滤，阈值兜底）。
+- `SQLGenerator.generate()` 加 optional `few_shot_examples: list[tuple[str, str]]`，注入到 schema 与 question 之间。
+- `P1NL2SQLAgent` 加 `example_retriever` 参数（默认 `None` 完全向后兼容）；run() 里一次检索复用所有 attempt；`retrieved_example_ids` 落 Langfuse metadata + P1AgentResult。
+- `bootstrap_example_pool.py` 从 BIRD 1427 条非 financial dev 题灌 SQLite 池——**financial 严格排除，防 dev 集自泄题**。
+
+**BIRD 验证结果**（`qwen3.7-max` 家族）：
+
+| 变体 | EX | 备注 |
+|---|---|---|
+| few-shot **off**（Jul-2, `qwen3.7-max`） | 49.06% (52/106) | 等价当前 pinned `qwen3.7-max-2026-05-17`（用户判断能力等价） |
+| few-shot **@ min_sim=0.55**（Jul-6 morning, 同模型） | 52.83% (56/106) | +3.77 EX vs Jul-2；**但逐题分析 8/8 翻转题 `retrieved_example_ids = []`**——few-shot 未激活，翻转全是模型日间噪声 |
+| few-shot @ min_sim=0.4（Jul-6 afternoon, `qwen3.7-max-preview`） | 53.77% (57/106) | **数据被污染**：这次跑跨了模型（preview 分支是独立能力线，同 20 题上 preview 12/20 vs pinned 8/20，边缘显著），不能归因给 threshold |
+| 20 题探针 @ 0.4（pinned max，0.55 零命中子集） | 8/20 vs Jul-2 baseline 10/20 | **-2 EX 反向初步信号**——低阈值放行弱相关 example 反向误导的猜想有小样本支持 |
+
+**净效应结论**：
+- **BIRD 跨库场景下 few-shot 对准确率净效应 ≈ 0**（0.55 阈值的 +3.77 归因模型噪声；0.4 阈值有 -2 反向初步信号）
+- 之前一度报告的"latency -40%（32.3s → 19.2s）"**是伪信号**——preview 那次跑里 3 道题命中 300s agent_exception 超时把平均拉高，去掉离群后 preview 典型延迟 ≈ 17s ≈ pinned 18.2s，与 few-shot / 阈值无关
+- 唯一稳定的结论：**BIRD 是 few-shot 最差场景**（跨库 pool，financial 严格排除后语义距离天然大）
+
+**方法学错误 postmortem**（留证据学习）：
+1. **跨模型 A/B 未察觉**：Jul-6 早上跑 0.55 时是 `qwen3.7-max`，下午换成 `qwen3.7-max-preview` 再跑 0.4，直接把 Δ 归因给 threshold。**教训**：任何 A/B 之前必须 grep `model:` 字段确认同 model；未来在 result JSON 里额外落 `commit_hash` + `config_hash`。
+2. **单次 latency 数字过度解读**：把 32.3s → 19.2s 直接解释成"few-shot 让模型思考更快"，没检查是否有 timeout 离群。**教训**：avg_latency 与 p50/p95 一起看；单次跑 latency 只做趋势不做归因。
+3. **过早庆祝 +3.77**：commit message 用了 "P1-on-BIRD 收 +3.77 分"，实际逐题分析否掉。**教训**：commit summary 用"检索注入"这类事实描述，不用"收 X 分"这种未经归因的绩效数字。
+
+**替代方案对比**：
+
+| 方案 | 采纳？ | 理由 |
+|---|---|---|
+| **不做 few-shot，只等语义层（WrenAI MDL 路线）** | 否 | 语义层是长期方向但工作量大；few-shot 是最便宜先验证的"是否能加"实验 |
+| **做 few-shot 但只在同域生产用，BIRD 不做** | 否 | 需要 BIRD 校验实现正确性 + 建立方法学 |
+| **做 few-shot 且以 BIRD 提分为目标** | **否**（本次结论） | 跨库场景先验就低，不适合当收益证明；工程做完但不改 default 阈值 |
+
+**默认配置**：`--few-shot-min-sim = 0.55`（保守，覆盖率仅 33% 但不制造负例）；`--example-pool` 默认 None（off）。生产 P1 目前不挂 retriever。
+
+**跟进项**：
+- **待做**：给中文银行域构建生产 pool（历史 judge=1 的 Q-SQL 对），量测同域场景下 few-shot 是否真加分——这才是 few-shot 应该证明价值的地方
+- **待做**：结果 JSON schema 加 `commit_hash` + `config_hash` 字段，防止未来跨代码/跨配置比较
+- **不做**：不在 BIRD 上继续调阈值——BIRD pool 是跨库先天劣势，再调也是在 noise floor 里打转
+
+**Trace**：
+- 代码：commit `780294c`（feat: Q-SQL few-shot 检索注入）
+- 数据：`results/bird_financial_p1_fewshot_2026-07-06.json`（0.55, max）+ `bird_financial_p1_fewshot_sim04_2026-07-06.json`（0.4, preview 污染）+ 两份 20 题探针
+- 讨论：本 ADR 完整覆盖
+
+---
+
+**最后更新**：2026-07-06

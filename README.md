@@ -71,6 +71,16 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
   子集选 `financial`（捷克银行真实数据，8 表）是因为和本项目领域同源、难度对等。评测入口 [`scripts/run_bird_financial.py`](scripts/run_bird_financial.py)（lean）与 [`scripts/run_bird_financial_p1.py`](scripts/run_bird_financial_p1.py)（P1；`--dialect {postgres,sqlite}` 切换），结果分别落盘 [`results/bird_financial_2026-07-01.json`](results/bird_financial_2026-07-01.json) / [`results/bird_financial_p1_2026-07-01.json`](results/bird_financial_p1_2026-07-01.json) / [`results/bird_financial_p1_dialect_2026-07-02.json`](results/bird_financial_p1_dialect_2026-07-02.json)。指标口径与 BIRD 官方 `evaluation.py` 一致（EX = 行集合等价 + `dev_tied_append.json` 42 条补丁）。数据集下载见 [`benchmarks/README.md`](benchmarks/README.md)。
 
+- **Q-SQL few-shot 尝试（2026-07-06）**：把 BIRD 1427 条非 financial dev 题灌成 SQLite 向量池（financial 严格排除防泄题），SQLGenerator 注入 top-k similar 作 few-shot，跑 106 题 A/B：
+
+  | 变体 | EX | 备注 |
+  | --- | ---: | --- |
+  | few-shot **off**（Jul-2，`qwen3.7-max`） | **49.06%** (52/106) | 基线 |
+  | few-shot @ `min_sim=0.55`（Jul-6，同模型） | **52.83%** (56/106) | +3.77 EX，**但逐题分析 8/8 翻转题 few-shot 未激活**——+3.77 归因模型日间噪声 |
+  | few-shot @ `min_sim=0.4`（Jul-6，`preview` 分支） | 53.77% | **数据被污染**，跨了模型；20 题探针在 pinned 上给 -2 反向信号 |
+
+  **诚实结论**：BIRD 跨库场景下 few-shot 净效应 ≈ 0。这是 few-shot 最差场景（跨库 pool 语义距离天然大，financial 严格排除后可迁移的信号仅剩 SQLite 方言）。之前一度报告的"latency -40%"经复核是伪信号（preview 有 3 道题命中 300s agent_exception 拉高平均）。**功能已上线，默认关闭**，待同域生产 pool（历史 judge=1 的 Q-SQL 对）建成后再验证真实收益。完整分析见 [DESIGN_DECISIONS.md#adr-012](./DESIGN_DECISIONS.md)。
+
 ---
 
 ## 🏗 系统架构
@@ -292,4 +302,4 @@ MIT License · Shangyi Zhu · zhusayi1994@gmail.com
 
 ---
 
-**最后更新**：2026-06-30
+**最后更新**：2026-07-06

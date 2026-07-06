@@ -75,6 +75,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output", type=Path, default=None)
     p.add_argument("--limit", type=int, default=None)
     p.add_argument(
+        "--question-ids",
+        type=str,
+        default=None,
+        help="逗号分隔的 question_id 列表；仅跑指定题目（在 --difficulty / --limit 之前生效）",
+    )
+    p.add_argument(
         "--difficulty",
         choices=["simple", "moderate", "challenging"],
         default=None,
@@ -267,6 +273,9 @@ def main() -> int:
 
     print(f"[bird-p1] loading questions from {args.questions}", flush=True)
     all_qs = load_financial_questions(args.questions)
+    if args.question_ids:
+        wanted = {int(x) for x in args.question_ids.split(",")}
+        all_qs = [q for q in all_qs if q.question_id in wanted]
     if args.difficulty:
         all_qs = [q for q in all_qs if q.difficulty == args.difficulty]
     if args.limit is not None:
