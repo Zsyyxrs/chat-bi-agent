@@ -207,3 +207,92 @@ def test_empty_schema_link_raises():
     agent.schema_linker.link.return_value = []
     with pytest.raises(RuntimeError):
         agent.run(question_id="q1", question="x")
+
+
+# ------------------------ Q-SQL few-shot retriever wiring ------------------------
+
+
+class _StubQAExample:
+    def __init__(self, example_id, question, sql):
+        self.example_id = example_id
+        self.question = question
+        self.sql = sql
+
+
+class _StubRetriever:
+    """记录 retrieve() 的调用参数并返回可控结果。"""
+
+    def __init__(self, hits):
+        self._hits = hits
+        self.calls: list[dict] = []
+
+    def retrieve(self, question, k=None, exclude_example_ids=None, exclude_question_texts=None):
+        self.calls.append(
+            {
+                "question": question,
+                "exclude_question_texts": exclude_question_texts,
+            }
+        )
+        return self._hits
+
+
+def test_retriever_wired_into_generate_and_result_ids():
+    """agent 拿到的 examples 传进 generate；命中 ID 出现在 P1AgentResult。"""
+    agent = _make_agent_with_mocks()
+    ex_a = _StubQAExample("id_aaa", "similar q A", "SELECT a")
+    ex_b = _StubQAExample("id_bbb", "similar q B", "SELECT b")
+    retriever = _StubRetriever(hits=[(ex_a, 0.9), (ex_b, 0.8)])
+    agent.example_retriever = retriever
+
+    agent.sql_generator.generate.return_value = SQLGenResult(
+        sql="SELECT 1",
+        thought="t",
+        tables_used=["dim_branch"],
+        raw_response="r",
+    )
+    agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
+    agent.sql_executor.execute.return_value = ([{"a": 1}], None)
+
+    r = agent.run(question_id="q1", question="用户问题")
+
+    # 1) retriever 收到 exclude_question_texts={"用户问题"} 防止 dev-set 自泄
+    assert retriever.calls[0]["exclude_question_texts"] == {"用户问题"}
+    # 2) few_shot_examples 转成 (question, sql) 二元组注入 generate
+    _, kwargs = agent.sql_generator.generate.call_args
+    assert kwargs["few_shot_examples"] == [("similar q A", "SELECT a"), ("similar q B", "SELECT b")]
+    # 3) retrieved_example_ids 出现在结果里，可回溯 langfuse
+    assert r.retrieved_example_ids == ["id_aaa", "id_bbb"]
+
+
+def test_no_retriever_passes_none_examples():
+    """未挂 retriever 时 few_shot_examples 传 None，行为向后兼容。"""
+    agent = _make_agent_with_mocks()
+    agent.example_retriever = None
+
+    agent.sql_generator.generate.return_value = SQLGenResult(
+        sql="SELECT 1", thought="t", tables_used=["dim_branch"], raw_response="r"
+    )
+    agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
+    agent.sql_executor.execute.return_value = ([{"a": 1}], None)
+
+    r = agent.run(question_id="q1", question="q")
+    _, kwargs = agent.sql_generator.generate.call_args
+    assert kwargs["few_shot_examples"] is None
+    assert r.retrieved_example_ids == []
+
+
+def test_retriever_empty_hits_treated_as_none():
+    """retriever 命中 0 条时也不应把空 list 传下去（接口上传 None 更干净）。"""
+    agent = _make_agent_with_mocks()
+    agent.example_retriever = _StubRetriever(hits=[])
+
+    agent.sql_generator.generate.return_value = SQLGenResult(
+        sql="SELECT 1", thought="t", tables_used=["dim_branch"], raw_response="r"
+    )
+    agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
+    agent.sql_executor.execute.return_value = ([{"a": 1}], None)
+
+    r = agent.run(question_id="q1", question="q")
+    _, kwargs = agent.sql_generator.generate.call_args
+    assert kwargs["few_shot_examples"] is None
+    assert r.retrieved_example_ids == []

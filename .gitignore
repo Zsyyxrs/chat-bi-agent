@@ -70,3 +70,6 @@ docs/
 
 # External benchmark data (BIRD dev raw files — 340MB+, license restricts redistribution)
 benchmarks/bird/
+
+# Example pool (built by scripts/bootstrap_example_pool.py; embeddings blob, ~4MB per 1k rows)
+data/example_pool*.jsonl

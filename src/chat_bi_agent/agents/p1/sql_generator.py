@@ -183,11 +183,20 @@ class SQLGenerator:
         question: str,
         schema_ddl: str,
         repair_hint: str | None,
+        few_shot_examples: list[tuple[str, str]] | None,
     ) -> str:
-        head = f"可用 schema：\n\n{schema_ddl}\n\n用户问题：{question}\n"
+        parts = [f"可用 schema：\n\n{schema_ddl}"]
+        if few_shot_examples:
+            block = ["\n### 参考示例（相似历史问答对，供参考风格与方言用法，不要照抄）"]
+            for i, (ex_q, ex_sql) in enumerate(few_shot_examples, 1):
+                block.append(f"\n示例 {i}:\n问题: {ex_q}\nSQL: {ex_sql}")
+            parts.append("\n".join(block))
+        parts.append(f"\n用户问题：{question}\n")
         if repair_hint is None:
-            return head + "\n请输出 JSON。"
-        return head + f"\n{repair_hint}\n\n请重新输出 JSON。"
+            parts.append("\n请输出 JSON。")
+        else:
+            parts.append(f"\n{repair_hint}\n\n请重新输出 JSON。")
+        return "\n".join(parts)
 
     @observe(name="sql_generation")
     def generate(
@@ -195,8 +204,11 @@ class SQLGenerator:
         question: str,
         schema_ddl: str,
         repair_hint: str | None = None,
+        few_shot_examples: list[tuple[str, str]] | None = None,
     ) -> SQLGenResult:
-        user_prompt = self._build_user_prompt(question, schema_ddl, repair_hint)
+        user_prompt = self._build_user_prompt(
+            question, schema_ddl, repair_hint, few_shot_examples
+        )
         chat_result = qwen_client.chat(
             system_prompt=self.system_prompt,
             user_prompt=user_prompt,

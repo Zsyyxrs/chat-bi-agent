@@ -26,6 +26,7 @@ from chat_bi_agent.agents.p1.nl2sql_agent import MAX_ATTEMPTS, P1NL2SQLAgent
 from chat_bi_agent.agents.p1.reflector import Reflector
 from chat_bi_agent.agents.p1.sql_generator import SQLGenerator
 from chat_bi_agent.agents.p1.sql_validator import SQLValidator
+from chat_bi_agent.agents.shared.example_retriever import ExampleRetriever
 from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass, SQLExecutor
 from chat_bi_agent.eval.bird_financial.schema_prompt import build_financial_schema_block
 from chat_bi_agent.eval.bird_financial.sqlite_executor import (
@@ -151,6 +152,7 @@ def build_p1_bird_agent(
     sqlite_db: Path,
     sql_timeout_s: float = 30.0,
     dialect: str = "sqlite",
+    example_retriever: ExampleRetriever | None = None,
 ) -> P1NL2SQLAgent:
     """Construct a P1NL2SQLAgent with BIRD stubs, bypassing its own __init__.
 
@@ -171,4 +173,5 @@ def build_p1_bird_agent(
         BirdSQLiteExecutor(sqlite_db, timeout_s=sql_timeout_s)
     )
     agent.reflector = Reflector(max_attempts=MAX_ATTEMPTS, dialect=dialect)
+    agent.example_retriever = example_retriever
     return agent

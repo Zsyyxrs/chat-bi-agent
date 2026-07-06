@@ -10,6 +10,7 @@ from langfuse import get_client, observe
 from chat_bi_agent.agents.p1.reflector import ReflectAction, Reflector
 from chat_bi_agent.agents.p1.sql_generator import InvalidJsonError, SQLGenerator
 from chat_bi_agent.agents.p1.sql_validator import SQLValidator
+from chat_bi_agent.agents.shared.example_retriever import ExampleRetriever
 from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass, SQLExecutor
 from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS, TOP_K_NL2SQL
@@ -30,6 +31,7 @@ class P1AgentResult:
     attempts: int
     total_latency_ms: int
     reflect_history: list[dict] = field(default_factory=list)
+    retrieved_example_ids: list[str] = field(default_factory=list)
 
 
 class P1NL2SQLAgent:
@@ -40,6 +42,7 @@ class P1NL2SQLAgent:
         top_k: int = TOP_K_NL2SQL,
         statement_timeout_ms: int = PG_STATEMENT_TIMEOUT_MS,
         dialect: str = "postgres",
+        example_retriever: ExampleRetriever | None = None,
     ):
         self.dialect = dialect
         self.loader = SchemaLoader()
@@ -50,6 +53,7 @@ class P1NL2SQLAgent:
         self.sql_validator = SQLValidator(dialect=dialect)
         self.sql_executor = SQLExecutor(statement_timeout_ms=statement_timeout_ms)
         self.reflector = Reflector(max_attempts=MAX_ATTEMPTS, dialect=dialect)
+        self.example_retriever = example_retriever
 
     @observe(name="p1_nl2sql_run")
     def run(self, question_id: str, question: str) -> P1AgentResult:
@@ -60,6 +64,16 @@ class P1NL2SQLAgent:
             raise RuntimeError(f"SchemaLinker 未召回任何表，question: {question!r}")
         top_names = [m.name for m in matches]
         schema_ddl = "\n\n".join(self.loader.get_ddl_text(name) for name in top_names)
+
+        # Q-SQL few-shot 检索：一次调用，供本次 run 里所有 generate() 复用
+        few_shot_pairs: list[tuple[str, str]] = []
+        retrieved_example_ids: list[str] = []
+        if self.example_retriever is not None:
+            hits = self.example_retriever.retrieve(
+                question, exclude_question_texts={question}
+            )
+            few_shot_pairs = [(ex.question, ex.sql) for ex, _ in hits]
+            retrieved_example_ids = [ex.example_id for ex, _ in hits]
 
         hint: str | None = None
         reflect_history: list[dict] = []
@@ -80,6 +94,7 @@ class P1NL2SQLAgent:
                     question=question,
                     schema_ddl=schema_ddl,
                     repair_hint=hint,
+                    few_shot_examples=few_shot_pairs or None,
                 )
             except InvalidJsonError as e:
                 err_class = SQLErrorClass.INVALID_JSON
@@ -100,7 +115,7 @@ class P1NL2SQLAgent:
                     rows, exec_err = self.sql_executor.execute(gen.sql)
                     if exec_err is None:
                         elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
-                        self._tag_trace(reflect_history, None)
+                        self._tag_trace(reflect_history, None, retrieved_example_ids)
                         return P1AgentResult(
                             question_id=question_id,
                             sql=gen.sql,
@@ -112,6 +127,7 @@ class P1NL2SQLAgent:
                             attempts=attempt,
                             total_latency_ms=elapsed_ms,
                             reflect_history=reflect_history,
+                            retrieved_example_ids=retrieved_example_ids,
                         )
                     err_class = self.sql_executor.classify_error(exec_err)
                     err_msg = exec_err
@@ -144,7 +160,7 @@ class P1NL2SQLAgent:
             hint = decision.repair_hint
 
         elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
-        self._tag_trace(reflect_history, last_err_class)
+        self._tag_trace(reflect_history, last_err_class, retrieved_example_ids)
 
         return P1AgentResult(
             question_id=question_id,
@@ -157,17 +173,23 @@ class P1NL2SQLAgent:
             attempts=attempt,
             total_latency_ms=elapsed_ms,
             reflect_history=reflect_history,
+            retrieved_example_ids=retrieved_example_ids,
         )
 
     @staticmethod
-    def _tag_trace(reflect_history: list[dict], error_class: SQLErrorClass | None) -> None:
-        """把 reflect_history / error_class 写到当前 langfuse trace 的 metadata。"""
+    def _tag_trace(
+        reflect_history: list[dict],
+        error_class: SQLErrorClass | None,
+        retrieved_example_ids: list[str] | None = None,
+    ) -> None:
+        """把 reflect_history / error_class / retrieved_example_ids 写到 langfuse trace。"""
         try:
             client = get_client()
             client.update_current_trace(
                 metadata={
                     "reflect_history": reflect_history,
                     "error_class": error_class.value if error_class else None,
+                    "retrieved_example_ids": retrieved_example_ids or [],
                 },
             )
         except Exception:

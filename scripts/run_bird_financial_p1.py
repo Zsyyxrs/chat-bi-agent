@@ -25,6 +25,10 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from chat_bi_agent.agents.shared.example_retriever import (  # noqa: E402
+    ExamplePool,
+    ExampleRetriever,
+)
 from chat_bi_agent.config import CHAT_MODEL  # noqa: E402
 from chat_bi_agent.eval.bird_financial.ex_scorer import rows_hash, score_ex  # noqa: E402
 from chat_bi_agent.eval.bird_financial.loader import (  # noqa: E402
@@ -39,6 +43,7 @@ from chat_bi_agent.eval.bird_financial.sqlite_executor import (  # noqa: E402
     ExecutorTimeout,
     ExecutorUnsafeSQL,
 )
+from chat_bi_agent.llm import qwen_client  # noqa: E402
 
 BIRD_DIR = REPO_ROOT / "benchmarks" / "bird"
 
@@ -88,6 +93,26 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="path to a prior results JSON; question_ids already present will be skipped",
+    )
+    p.add_argument(
+        "--example-pool",
+        type=Path,
+        default=None,
+        help="path to Q-SQL few-shot pool JSONL (built by scripts/bootstrap_example_pool.py); "
+        "if omitted, few-shot is disabled — reproduces the pre-B baseline.",
+    )
+    p.add_argument(
+        "--few-shot-k",
+        type=int,
+        default=3,
+        help="max number of few-shot examples to retrieve per question (default 3)",
+    )
+    p.add_argument(
+        "--few-shot-min-sim",
+        type=float,
+        default=0.55,
+        help="minimum cosine similarity threshold for few-shot retrieval (default 0.55, "
+        "tuned for cross-DB SQLite dialect signals rather than exact question match)",
     )
     return p.parse_args()
 
@@ -227,6 +252,7 @@ def _evaluate_one(agent, executor: BirdSQLiteExecutor, question, tied_map: dict)
         "attempts": p1_result.attempts,
         "reflect_history": p1_result.reflect_history,
         "schema_link_top_k": p1_result.schema_link_top_k,
+        "retrieved_example_ids": p1_result.retrieved_example_ids,
         "p1_error_class": p1_result.error_class.value if p1_result.error_class else None,
         # P1 doesn't expose per-call token usage — leave 0; Langfuse traces have the truth
         "prompt_tokens": 0,
@@ -262,6 +288,25 @@ def main() -> int:
 
     tied = load_tied_append(args.tied)
     executor = BirdSQLiteExecutor(args.db, timeout_s=args.sql_timeout)
+
+    retriever: ExampleRetriever | None = None
+    if args.example_pool is not None:
+        pool = ExamplePool.load(args.example_pool)
+        retriever = ExampleRetriever(
+            pool=pool,
+            dialect=args.dialect,
+            embed_fn=qwen_client.embed,
+            min_similarity=args.few_shot_min_sim,
+            max_k=args.few_shot_k,
+        )
+        print(
+            f"[bird-p1] few-shot ON — pool={args.example_pool} size={len(pool)} "
+            f"k={args.few_shot_k} min_sim={args.few_shot_min_sim}",
+            flush=True,
+        )
+    else:
+        print("[bird-p1] few-shot OFF (baseline)", flush=True)
+
     print("[bird-p1] building P1 agent with BIRD stubs (skips SchemaLoader index)", flush=True)
     agent = build_p1_bird_agent(
         tables_json=args.tables,
@@ -269,6 +314,7 @@ def main() -> int:
         sqlite_db=args.db,
         sql_timeout_s=args.sql_timeout,
         dialect=args.dialect,
+        example_retriever=retriever,
     )
     print(f"[bird-p1] dialect: {args.dialect}", flush=True)
 
@@ -299,6 +345,12 @@ def main() -> int:
         "benchmark": "bird_financial",
         "variant": "p1_agent",
         "dialect": args.dialect,
+        "few_shot": {
+            "enabled": args.example_pool is not None,
+            "pool_path": str(args.example_pool) if args.example_pool else None,
+            "k": args.few_shot_k,
+            "min_similarity": args.few_shot_min_sim,
+        },
         "run_date_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "model": CHAT_MODEL,
         "dev_json_md5": _md5(args.questions),
