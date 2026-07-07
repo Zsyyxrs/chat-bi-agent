@@ -81,6 +81,8 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
   **诚实结论**：BIRD 跨库场景下 few-shot 净效应 ≈ 0。这是 few-shot 最差场景（跨库 pool 语义距离天然大，financial 严格排除后可迁移的信号仅剩 SQLite 方言）。之前一度报告的"latency -40%"经复核是伪信号（preview 有 3 道题命中 300s agent_exception 拉高平均）。**功能已上线，默认关闭**，待同域生产 pool（历史 judge=1 的 Q-SQL 对）建成后再验证真实收益。完整分析见 [DESIGN_DECISIONS.md#adr-012](./DESIGN_DECISIONS.md)。
 
+- **生产同域反馈闭环**（2026-07-07）：Streamlit P1 tab 每条回答下方 👍/👎，点击后通过 Langfuse `score(name="user_feedback")` 挂到当前 trace；夜间 cron 跑 `python scripts/bootstrap_prod_pool.py --source langfuse` 把 👍 过的 (question, sql) 拉进 [`data/example_pool_prod.jsonl`](data/example_pool_prod.jsonl)（gitignored）。首次 bootstrap 已从 [`results/baseline_p2_validator_reflector_2026-06-03.json`](results/baseline_p2_validator_reflector_2026-06-03.json) 抽 6 条 P1 gold 样例做种。攒到 30+ 条真实使用样本后回来跑同域 few-shot A/B（对齐 [DESIGN_DECISIONS.md#adr-012](./DESIGN_DECISIONS.md) 里的跟进项）。
+
 ---
 
 ## 🏗 系统架构

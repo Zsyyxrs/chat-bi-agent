@@ -32,6 +32,7 @@ class P1AgentResult:
     total_latency_ms: int
     reflect_history: list[dict] = field(default_factory=list)
     retrieved_example_ids: list[str] = field(default_factory=list)
+    trace_id: str | None = None
 
 
 class P1NL2SQLAgent:
@@ -58,6 +59,12 @@ class P1NL2SQLAgent:
     @observe(name="p1_nl2sql_run")
     def run(self, question_id: str, question: str) -> P1AgentResult:
         start = time.perf_counter()
+
+        # 抓当前 langfuse trace_id → 传回 UI 层，供用户 👍/👎 反馈 attach 到同一条 trace
+        try:
+            trace_id: str | None = get_client().get_current_trace_id()
+        except Exception:
+            trace_id = None
 
         matches = self.schema_linker.link(question)
         if not matches:
@@ -128,6 +135,7 @@ class P1NL2SQLAgent:
                             total_latency_ms=elapsed_ms,
                             reflect_history=reflect_history,
                             retrieved_example_ids=retrieved_example_ids,
+                            trace_id=trace_id,
                         )
                     err_class = self.sql_executor.classify_error(exec_err)
                     err_msg = exec_err
@@ -174,6 +182,7 @@ class P1NL2SQLAgent:
             total_latency_ms=elapsed_ms,
             reflect_history=reflect_history,
             retrieved_example_ids=retrieved_example_ids,
+            trace_id=trace_id,
         )
 
     @staticmethod
