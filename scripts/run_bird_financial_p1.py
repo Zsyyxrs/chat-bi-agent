@@ -350,6 +350,11 @@ def main() -> int:
     combined = sorted(prior_outcomes + new_outcomes, key=lambda o: int(o["question_id"]))
     summary = _summarize(combined)
 
+    from chat_bi_agent.eval.run_metadata import build_run_metadata
+
+    extra_hashes: dict = {}
+    if args.example_pool is not None:
+        extra_hashes["pool_hash"] = args.example_pool
     result_doc: dict = {
         "benchmark": "bird_financial",
         "variant": "p1_agent",
@@ -361,6 +366,7 @@ def main() -> int:
             "min_similarity": args.few_shot_min_sim,
         },
         "run_date_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "run_metadata": build_run_metadata(extra_paths=extra_hashes),
         "model": CHAT_MODEL,
         "dev_json_md5": _md5(args.questions),
         "sqlite_md5": _md5(args.db),

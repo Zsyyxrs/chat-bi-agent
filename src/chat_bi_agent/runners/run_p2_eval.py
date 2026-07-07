@@ -136,9 +136,12 @@ def main() -> int:
         Path(__file__).resolve().parents[3] / "results" / f"baseline_p2_analysis_{OUTPUT_DATE}.json"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    from chat_bi_agent.eval.run_metadata import build_run_metadata
+
     payload = {
         "baseline_id": "p2_analysis_mvp",
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "run_metadata": build_run_metadata(),
         "total_questions": evaluation.total_questions,
         "passed_questions": evaluation.passed_questions,
         "pass_rate": round(evaluation.pass_rate, 4),

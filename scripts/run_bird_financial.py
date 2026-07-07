@@ -185,9 +185,12 @@ def main() -> int:
     # Recompute summary over combined outcomes so EX numbers reflect all questions.
     combined_summary = _summarize_dicts(combined_dicts)
 
+    from chat_bi_agent.eval.run_metadata import build_run_metadata
+
     result_doc: dict = {
         "benchmark": "bird_financial",
         "run_date_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "run_metadata": build_run_metadata(),
         "model": CHAT_MODEL,
         "dev_json_md5": _md5(args.questions),
         "sqlite_md5": _md5(args.db),

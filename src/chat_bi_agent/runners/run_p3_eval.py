@@ -175,9 +175,12 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS_DIR / f"baseline_p3_rca_{OUTPUT_DATE}.json"
+    from chat_bi_agent.eval.run_metadata import build_run_metadata
+
     payload = {
         "baseline_id": "p3_rca_mvp",
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "run_metadata": build_run_metadata(),
         "total_questions": total,
         "passed_questions": pass_count,
         "event_hit_count": event_hit_count,

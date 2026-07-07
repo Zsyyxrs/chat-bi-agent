@@ -111,9 +111,12 @@ def main() -> int:
         / "results"
         / "baseline_p2_validator_reflector_2026-06-03.json"
     )
+    from chat_bi_agent.eval.run_metadata import build_run_metadata
+
     payload = {
         "baseline_id": "p2_validator_reflector",
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "run_metadata": build_run_metadata(),
         "total_questions": evaluation.total_questions,
         "passed_questions": evaluation.passed_questions,
         "pass_rate": round(evaluation.pass_rate, 4),
