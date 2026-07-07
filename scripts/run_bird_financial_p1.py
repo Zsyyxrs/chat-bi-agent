@@ -123,6 +123,12 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _latency_stats(values_ms):
+    from chat_bi_agent.eval.latency_stats import latency_percentiles
+
+    return latency_percentiles(values_ms)
+
+
 def _summarize(outcomes: list[dict]) -> dict[str, Any]:
     n = len(outcomes)
     if n == 0:
@@ -156,6 +162,7 @@ def _summarize(outcomes: list[dict]) -> dict[str, Any]:
         "ex_by_difficulty": ex_by_difficulty,
         "n_by_difficulty": n_by_difficulty,
         "error_counts": dict(err_counter),
+        "latency_ms": _latency_stats([o["latency_ms"] for o in outcomes]),
         "avg_latency_ms": int(sum(int(o["latency_ms"]) for o in outcomes) / n),
         "total_prompt_tokens": sum(int(o.get("prompt_tokens") or 0) for o in outcomes),
         "total_completion_tokens": sum(int(o.get("completion_tokens") or 0) for o in outcomes),
