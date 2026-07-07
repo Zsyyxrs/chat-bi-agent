@@ -9,23 +9,37 @@ from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 # Cross-dialect syntactic tells. If prev_sql matches AND target dialect is the
 # opposite family, treat as DIALECT_MISMATCH.
 _PG_ONLY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bEXTRACT\s*\(\s*\w+\s+FROM\b", re.IGNORECASE),
-     "EXTRACT(YEAR/MONTH/DAY FROM col) 是 PG 独有；SQLite 用 STRFTIME('%Y', col) / '%m' / '%d'"),
-    (re.compile(r"\bDATE\s+'\d{4}-\d{2}-\d{2}'"),
-     "DATE 'YYYY-MM-DD' 字面量是 PG 独有；SQLite 直接写 'YYYY-MM-DD'（无 DATE 前缀）"),
-    (re.compile(r"\bILIKE\b", re.IGNORECASE),
-     "ILIKE 是 PG 独有；SQLite 用 LOWER(col) LIKE LOWER('...') 或 col LIKE '...' COLLATE NOCASE"),
-    (re.compile(r"\bDATE_PART\s*\(", re.IGNORECASE),
-     "DATE_PART() 是 PG 独有；SQLite 用 STRFTIME(...)"),
-    (re.compile(r"\bTO_CHAR\s*\(", re.IGNORECASE),
-     "TO_CHAR() 是 PG 独有；SQLite 用 STRFTIME() 格式化"),
+    (
+        re.compile(r"\bEXTRACT\s*\(\s*\w+\s+FROM\b", re.IGNORECASE),
+        "EXTRACT(YEAR/MONTH/DAY FROM col) 是 PG 独有；SQLite 用 STRFTIME('%Y', col) / '%m' / '%d'",
+    ),
+    (
+        re.compile(r"\bDATE\s+'\d{4}-\d{2}-\d{2}'"),
+        "DATE 'YYYY-MM-DD' 字面量是 PG 独有；SQLite 直接写 'YYYY-MM-DD'（无 DATE 前缀）",
+    ),
+    (
+        re.compile(r"\bILIKE\b", re.IGNORECASE),
+        "ILIKE 是 PG 独有；SQLite 用 LOWER(col) LIKE LOWER('...') 或 col LIKE '...' COLLATE NOCASE",
+    ),
+    (
+        re.compile(r"\bDATE_PART\s*\(", re.IGNORECASE),
+        "DATE_PART() 是 PG 独有；SQLite 用 STRFTIME(...)",
+    ),
+    (
+        re.compile(r"\bTO_CHAR\s*\(", re.IGNORECASE),
+        "TO_CHAR() 是 PG 独有；SQLite 用 STRFTIME() 格式化",
+    ),
 ]
 
 _SQLITE_ONLY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bSTRFTIME\s*\(", re.IGNORECASE),
-     "STRFTIME() 是 SQLite 独有；PG 用 EXTRACT(YEAR FROM col) 或 TO_CHAR()"),
-    (re.compile(r"\bIIF\s*\(", re.IGNORECASE),
-     "IIF() 是 SQLite/T-SQL 独有；PG 用 CASE WHEN ... THEN ... ELSE ... END"),
+    (
+        re.compile(r"\bSTRFTIME\s*\(", re.IGNORECASE),
+        "STRFTIME() 是 SQLite 独有；PG 用 EXTRACT(YEAR FROM col) 或 TO_CHAR()",
+    ),
+    (
+        re.compile(r"\bIIF\s*\(", re.IGNORECASE),
+        "IIF() 是 SQLite/T-SQL 独有；PG 用 CASE WHEN ... THEN ... ELSE ... END",
+    ),
 ]
 
 

@@ -20,9 +20,7 @@ def test_bad_value_raises():
 
 def test_success_calls_create_score_with_expected_args():
     mock_client = MagicMock()
-    with patch(
-        "chat_bi_agent.llm.langfuse_setup.get_client", return_value=mock_client
-    ):
+    with patch("chat_bi_agent.llm.langfuse_setup.get_client", return_value=mock_client):
         ok = submit_user_feedback(trace_id="t1", value=1.0, comment="looks right")
     assert ok is True
     mock_client.create_score.assert_called_once()
@@ -36,9 +34,7 @@ def test_success_calls_create_score_with_expected_args():
 
 def test_thumbs_down_uses_value_zero():
     mock_client = MagicMock()
-    with patch(
-        "chat_bi_agent.llm.langfuse_setup.get_client", return_value=mock_client
-    ):
+    with patch("chat_bi_agent.llm.langfuse_setup.get_client", return_value=mock_client):
         submit_user_feedback(trace_id="t1", value=0.0)
     _, kwargs = mock_client.create_score.call_args
     assert kwargs["value"] == 0.0
@@ -55,7 +51,5 @@ def test_client_init_failure_returns_false():
 def test_create_score_error_returns_false():
     mock_client = MagicMock()
     mock_client.create_score.side_effect = RuntimeError("api down")
-    with patch(
-        "chat_bi_agent.llm.langfuse_setup.get_client", return_value=mock_client
-    ):
+    with patch("chat_bi_agent.llm.langfuse_setup.get_client", return_value=mock_client):
         assert submit_user_feedback(trace_id="t1", value=1.0) is False

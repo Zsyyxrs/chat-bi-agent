@@ -74,8 +74,7 @@ def tiny_db(tmp_path: Path) -> Path:
     db = tmp_path / "tiny.sqlite"
     conn = sqlite3.connect(db)
     conn.executescript(
-        "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT);"
-        "INSERT INTO t VALUES (1, 'a'), (2, 'b');"
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT);INSERT INTO t VALUES (1, 'a'), (2, 'b');"
     )
     conn.commit()
     conn.close()

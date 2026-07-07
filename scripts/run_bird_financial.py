@@ -102,17 +102,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--db", type=Path, default=BIRD_DIR / "dev_databases/financial/financial.sqlite")
     p.add_argument("--questions", type=Path, default=BIRD_DIR / "dev.json")
     p.add_argument("--tables", type=Path, default=BIRD_DIR / "dev_tables.json")
-    p.add_argument("--descriptions", type=Path, default=BIRD_DIR / "dev_databases/financial/database_description")
+    p.add_argument(
+        "--descriptions",
+        type=Path,
+        default=BIRD_DIR / "dev_databases/financial/database_description",
+    )
     p.add_argument("--tied", type=Path, default=BIRD_DIR / "dev_tied_append.json")
-    p.add_argument("--output", type=Path, default=None, help="results JSON (default: results/bird_financial_<today>.json)")
-    p.add_argument("--limit", type=int, default=None, help="only run first N questions (order preserved)")
+    p.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="results JSON (default: results/bird_financial_<today>.json)",
+    )
+    p.add_argument(
+        "--limit", type=int, default=None, help="only run first N questions (order preserved)"
+    )
     p.add_argument(
         "--difficulty",
         choices=["simple", "moderate", "challenging"],
         default=None,
         help="restrict to one difficulty bucket",
     )
-    p.add_argument("--sql-timeout", type=float, default=30.0, help="per-query SQLite timeout in seconds")
+    p.add_argument(
+        "--sql-timeout", type=float, default=30.0, help="per-query SQLite timeout in seconds"
+    )
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument(
         "--resume-from",
@@ -164,7 +177,9 @@ def main() -> int:
     runner = BirdRunner(
         executor=executor,
         schema_block=schema_block,
-        tied_gold_sqls={qid: sqls for qid, sqls in tied.items() if any(q.question_id == qid for q in all_qs)},
+        tied_gold_sqls={
+            qid: sqls for qid, sqls in tied.items() if any(q.question_id == qid for q in all_qs)
+        },
         temperature=args.temperature,
     )
 
@@ -175,12 +190,15 @@ def main() -> int:
         try:
             outcome = runner.evaluate(q)
         except Exception as e:  # last-resort catch: don't lose the batch
-            print(f"[bird] q{q.question_id} ({q.difficulty}) UNCAUGHT: {type(e).__name__}: {e}", flush=True)
+            print(
+                f"[bird] q{q.question_id} ({q.difficulty}) UNCAUGHT: {type(e).__name__}: {e}",
+                flush=True,
+            )
             continue
         outcomes.append(outcome)
         elapsed = time.perf_counter() - t0
         mark = "✓" if outcome.ex else "✗"
-        err_tag = f" err={outcome.error.split(':',1)[0]}" if outcome.error else ""
+        err_tag = f" err={outcome.error.split(':', 1)[0]}" if outcome.error else ""
         print(
             f"[bird] {i:3d}/{len(all_qs)} q{q.question_id:<4d} ({q.difficulty:<11s}) {mark}{err_tag}  {elapsed:5.1f}s",
             flush=True,

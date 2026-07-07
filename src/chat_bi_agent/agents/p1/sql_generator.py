@@ -206,9 +206,7 @@ class SQLGenerator:
         repair_hint: str | None = None,
         few_shot_examples: list[tuple[str, str]] | None = None,
     ) -> SQLGenResult:
-        user_prompt = self._build_user_prompt(
-            question, schema_ddl, repair_hint, few_shot_examples
-        )
+        user_prompt = self._build_user_prompt(question, schema_ddl, repair_hint, few_shot_examples)
         chat_result = qwen_client.chat(
             system_prompt=self.system_prompt,
             user_prompt=user_prompt,

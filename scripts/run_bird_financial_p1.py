@@ -90,7 +90,7 @@ def parse_args() -> argparse.Namespace:
         "--dialect",
         choices=["postgres", "sqlite"],
         default="sqlite",
-        help='SQL dialect for P1 SQLGenerator / Validator / Reflector. '
+        help="SQL dialect for P1 SQLGenerator / Validator / Reflector. "
         'Default "sqlite" targets BIRD; use "postgres" to reproduce the '
         "pre-dialect-fix baseline for A/B comparison.",
     )
@@ -387,7 +387,9 @@ def main() -> int:
     print("---")
     print(f"[bird-p1] wrote {output_path}")
     total_hits = sum(int(o["ex"]) for o in combined)
-    print(f"[bird-p1] EX overall: {summary['ex_overall']:.4f}  ({total_hits}/{summary['n_questions']})")
+    print(
+        f"[bird-p1] EX overall: {summary['ex_overall']:.4f}  ({total_hits}/{summary['n_questions']})"
+    )
     for diff, score in summary["ex_by_difficulty"].items():
         n_diff = summary["n_by_difficulty"][diff]
         print(f"[bird-p1]   {diff:<11s}: {score:.4f}  ({int(round(score * n_diff))}/{n_diff})")

@@ -111,19 +111,25 @@ def render_diff(prev_path: Path, curr_path: Path, threshold: float) -> str:
                 improve += 1
         lines.append(f"| {r['question_id']} | {p_str} | {c_str} | {d_str} | {flag} |")
     lines.append("")
-    lines.append(f"**Regressions (Δ ≤ -{threshold}): {regress}** · Improvements (Δ ≥ +{threshold}): {improve}")
+    lines.append(
+        f"**Regressions (Δ ≤ -{threshold}): {regress}** · Improvements (Δ ≥ +{threshold}): {improve}"
+    )
     return "\n".join(lines)
 
 
 def _latest_two(phase: str) -> tuple[Path, Path]:
     files = sorted(RESULTS_DIR.glob(PHASE_PATTERNS[phase]), key=lambda p: p.stat().st_mtime)
     if len(files) < 2:
-        raise SystemExit(f"phase={phase} 至少需要两份 baseline JSON 才能 diff（找到 {len(files)} 份）")
+        raise SystemExit(
+            f"phase={phase} 至少需要两份 baseline JSON 才能 diff（找到 {len(files)} 份）"
+        )
     return files[-2], files[-1]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Diff per-question scores between two baseline JSONs")
+    parser = argparse.ArgumentParser(
+        description="Diff per-question scores between two baseline JSONs"
+    )
     parser.add_argument("prev", nargs="?", help="较早的 baseline JSON 路径")
     parser.add_argument("curr", nargs="?", help="较新的 baseline JSON 路径")
     parser.add_argument(

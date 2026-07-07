@@ -49,7 +49,7 @@ def _split_schema_block_by_table(block: str) -> dict[str, str]:
         if line.startswith("Table: "):
             if current is not None:
                 per_table[current] = "\n".join(buf).rstrip()
-            current = line[len("Table: "):].strip()
+            current = line[len("Table: ") :].strip()
             buf = [line]
         elif current is not None:
             buf.append(line)
@@ -132,9 +132,7 @@ class _BirdSQLExecutorAdapter:
         self.last_stats = BirdExecutorAdapterStats(latency_ms=result.latency_ms, error_source=None)
         # BIRD returns list[tuple]; P1 downstream only checks rows is not None (agent
         # doesn't act on row content itself). Wrap as dicts to satisfy list[dict] type.
-        rows_as_dicts = [
-            {f"col_{i}": v for i, v in enumerate(row)} for row in result.rows
-        ]
+        rows_as_dicts = [{f"col_{i}": v for i, v in enumerate(row)} for row in result.rows]
         return rows_as_dicts, None
 
     @staticmethod

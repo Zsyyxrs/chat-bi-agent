@@ -51,9 +51,7 @@ def _get_agent() -> P1NL2SQLAgent:
     if _AGENT_KEY not in st.session_state:
         retriever = _build_retriever_if_available()
         st.session_state[_AGENT_KEY] = P1NL2SQLAgent(top_k=4, example_retriever=retriever)
-        st.session_state["p1_pool_size"] = (
-            len(retriever.pool) if retriever is not None else 0
-        )
+        st.session_state["p1_pool_size"] = len(retriever.pool) if retriever is not None else 0
     return st.session_state[_AGENT_KEY]
 
 
@@ -126,9 +124,7 @@ def _render_feedback(result) -> None:
     feedback_map: dict = st.session_state.setdefault(_FEEDBACK_KEY, {})
     already = feedback_map.get(result.trace_id)
     if already:
-        st.caption(
-            "👍 已标记（进入 pool 候选）" if already == "1" else "👎 已标记（进入回归集）"
-        )
+        st.caption("👍 已标记（进入 pool 候选）" if already == "1" else "👎 已标记（进入回归集）")
         return
 
     st.markdown("**这条结果对你有帮助吗？**")

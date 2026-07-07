@@ -161,12 +161,8 @@ def test_retriever_min_similarity_filters_below_threshold():
 
 
 def test_retriever_dialect_filter_excludes_wrong_dialect():
-    ex_sqlite = _mk_example(
-        "sqlite ex", "SELECT 1", dialect="sqlite", embedding=[1.0, 0.0, 0.0]
-    )
-    ex_pg = _mk_example(
-        "pg ex", "SELECT 1 as x", dialect="postgres", embedding=[1.0, 0.0, 0.0]
-    )
+    ex_sqlite = _mk_example("sqlite ex", "SELECT 1", dialect="sqlite", embedding=[1.0, 0.0, 0.0])
+    ex_pg = _mk_example("pg ex", "SELECT 1 as x", dialect="postgres", embedding=[1.0, 0.0, 0.0])
     pool = ExamplePool([ex_sqlite, ex_pg])
 
     retriever = ExampleRetriever(
@@ -182,12 +178,8 @@ def test_retriever_dialect_filter_excludes_wrong_dialect():
 
 
 def test_retriever_allowed_tags_intersects():
-    ex_a = _mk_example(
-        "a", "SELECT a", tags=["bird_non_financial"], embedding=[1.0, 0.0, 0.0]
-    )
-    ex_b = _mk_example(
-        "b", "SELECT b", tags=["self_generated"], embedding=[1.0, 0.0, 0.0]
-    )
+    ex_a = _mk_example("a", "SELECT a", tags=["bird_non_financial"], embedding=[1.0, 0.0, 0.0])
+    ex_b = _mk_example("b", "SELECT b", tags=["self_generated"], embedding=[1.0, 0.0, 0.0])
     pool = ExamplePool([ex_a, ex_b])
 
     retriever = ExampleRetriever(
@@ -204,9 +196,7 @@ def test_retriever_allowed_tags_intersects():
 
 
 def test_retriever_blocked_tags_removes_match():
-    ex_a = _mk_example(
-        "a", "SELECT a", tags=["bird_dev_financial"], embedding=[1.0, 0.0, 0.0]
-    )
+    ex_a = _mk_example("a", "SELECT a", tags=["bird_dev_financial"], embedding=[1.0, 0.0, 0.0])
     ex_b = _mk_example("b", "SELECT b", tags=["gold_p1"], embedding=[1.0, 0.0, 0.0])
     pool = ExamplePool([ex_a, ex_b])
 
@@ -241,17 +231,12 @@ def test_retriever_exclude_question_texts_dedups_same_question():
         min_similarity=0.0,
         max_k=5,
     )
-    results = retriever.retrieve(
-        "How many clients?", exclude_question_texts={"How many clients?"}
-    )
+    results = retriever.retrieve("How many clients?", exclude_question_texts={"How many clients?"})
     assert [r[0].question for r in results] == ["Average balance?"]
 
 
 def test_retriever_k_override_caps_result_size():
-    exs = [
-        _mk_example(f"q{i}", f"SELECT {i}", embedding=[1.0, 0.0, 0.0])
-        for i in range(5)
-    ]
+    exs = [_mk_example(f"q{i}", f"SELECT {i}", embedding=[1.0, 0.0, 0.0]) for i in range(5)]
     pool = ExamplePool(exs)
     retriever = ExampleRetriever(
         pool=pool,

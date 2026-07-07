@@ -74,9 +74,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def load_p1_eval(
-    yaml_path: Path, baseline_path: Path, score_threshold: float
-) -> list[QAExample]:
+def load_p1_eval(yaml_path: Path, baseline_path: Path, score_threshold: float) -> list[QAExample]:
     """从 P1 eval YAML + baseline JSON 抽 pass 样本。
 
     YAML 提供 question 文本；baseline JSON 提供实际预测 SQL + score。
@@ -135,9 +133,7 @@ def load_p1_eval(
     return examples
 
 
-def load_langfuse(
-    days_back: int, score_threshold: float
-) -> list[QAExample]:
+def load_langfuse(days_back: int, score_threshold: float) -> list[QAExample]:
     """从 Langfuse 拉 P1 trace + user_feedback/judge_pass score ≥ threshold 的样本。
 
     当前状态：反馈闭环（#3）还没上线，Langfuse 里不会有 user_feedback score。
@@ -272,7 +268,7 @@ def main() -> int:
         for ex in unique[:5]:
             print(f"  - {ex.example_id} [{ex.source}] {ex.question[:60]}")
         if len(unique) > 5:
-            print(f"  ... 以及另外 {len(unique)-5} 条")
+            print(f"  ... 以及另外 {len(unique) - 5} 条")
         return 0
 
     print(f"[prod-pool] 开始 embedding via DashScope (batch={EMBED_BATCH_SIZE}) ...", flush=True)

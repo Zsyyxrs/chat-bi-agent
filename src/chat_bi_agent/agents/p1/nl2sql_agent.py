@@ -76,9 +76,7 @@ class P1NL2SQLAgent:
         few_shot_pairs: list[tuple[str, str]] = []
         retrieved_example_ids: list[str] = []
         if self.example_retriever is not None:
-            hits = self.example_retriever.retrieve(
-                question, exclude_question_texts={question}
-            )
+            hits = self.example_retriever.retrieve(question, exclude_question_texts={question})
             few_shot_pairs = [(ex.question, ex.sql) for ex, _ in hits]
             retrieved_example_ids = [ex.example_id for ex, _ in hits]
 

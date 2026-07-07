@@ -68,9 +68,7 @@ def test_run_metadata_is_json_serializable():
 def test_commit_hash_matches_git_rev_parse():
     """sanity: build_run_metadata 的 commit_hash 与 `git rev-parse HEAD` 前 12 位一致。"""
     try:
-        actual = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip()
+        actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         pytest.skip("git not available in this environment")
     meta = build_run_metadata()

@@ -5,13 +5,7 @@ from unittest.mock import patch
 from chat_bi_agent.agents.p1.sql_generator import SQLGenerator
 
 SAMPLE_OK_RESPONSE = (
-    "```json\n"
-    "{\n"
-    '  "thought": "示例响应",\n'
-    '  "tables_used": ["t"],\n'
-    '  "sql": "SELECT 1"\n'
-    "}\n"
-    "```\n"
+    '```json\n{\n  "thought": "示例响应",\n  "tables_used": ["t"],\n  "sql": "SELECT 1"\n}\n```\n'
 )
 
 
@@ -33,9 +27,7 @@ def test_generate_without_examples_omits_examples_section():
         captured["user_prompt"] = user_prompt
         return _mock_chat(SAMPLE_OK_RESPONSE)
 
-    with patch(
-        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat
-    ):
+    with patch("chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat):
         gen.generate(question="q", schema_ddl="DDL")
     assert "参考示例" not in captured["user_prompt"]
     assert "示例" not in captured["user_prompt"]  # 只要不引入示例段就行
@@ -53,12 +45,8 @@ def test_generate_with_examples_includes_examples_before_question():
         ("How many clients?", "SELECT COUNT(*) FROM client"),
         ("Average balance", "SELECT AVG(balance) FROM account"),
     ]
-    with patch(
-        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat
-    ):
-        gen.generate(
-            question="用户问题在这里", schema_ddl="DDL_HERE", few_shot_examples=examples
-        )
+    with patch("chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat):
+        gen.generate(question="用户问题在这里", schema_ddl="DDL_HERE", few_shot_examples=examples)
 
     up = captured["user_prompt"]
     # 顺序：schema → 示例段 → 用户问题
@@ -77,9 +65,7 @@ def test_generate_with_empty_examples_omits_section():
         captured["user_prompt"] = user_prompt
         return _mock_chat(SAMPLE_OK_RESPONSE)
 
-    with patch(
-        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat
-    ):
+    with patch("chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat):
         gen.generate(question="q", schema_ddl="DDL", few_shot_examples=[])
     assert "参考示例" not in captured["user_prompt"]
 
@@ -93,9 +79,7 @@ def test_examples_and_repair_hint_both_present():
         captured["user_prompt"] = user_prompt
         return _mock_chat(SAMPLE_OK_RESPONSE)
 
-    with patch(
-        "chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat
-    ):
+    with patch("chat_bi_agent.agents.p1.sql_generator.qwen_client.chat", side_effect=fake_chat):
         gen.generate(
             question="q",
             schema_ddl="DDL",

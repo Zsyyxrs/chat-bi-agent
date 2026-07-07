@@ -6,9 +6,7 @@ import importlib.util
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-_spec = importlib.util.spec_from_file_location(
-    "verify_ab", REPO_ROOT / "scripts" / "verify_ab.py"
-)
+_spec = importlib.util.spec_from_file_location("verify_ab", REPO_ROOT / "scripts" / "verify_ab.py")
 _verify_ab = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_verify_ab)
 compare = _verify_ab.compare
