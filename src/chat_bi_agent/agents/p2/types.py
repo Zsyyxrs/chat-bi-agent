@@ -60,6 +60,7 @@ class AnalysisReport:
     final_answer: str
     replan_count: int = 0
     total_latency_ms: float = 0.0
+    trace_id: str | None = None
 
     def to_eval_input(self) -> dict:
         """Map this report into the dict shape expected by

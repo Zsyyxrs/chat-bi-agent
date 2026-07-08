@@ -11,14 +11,13 @@ from chat_bi_agent.agents.shared.example_retriever import (
     ExampleRetriever,
 )
 from chat_bi_agent.llm import qwen_client
-from chat_bi_agent.llm.langfuse_feedback import submit_user_feedback
 from streamlit_app.components.chart_block import render_chart_block
 from streamlit_app.components.dataframe_block import render_dataframe_block
+from streamlit_app.components.feedback_block import render_feedback_block
 from streamlit_app.components.sql_block import render_sql_block
 
 _SESSION_KEY = "p1_last_result"
 _AGENT_KEY = "p1_agent"
-_FEEDBACK_KEY = "p1_last_feedback"  # {trace_id: "1"|"0"} 记住本会话已反馈的 trace
 
 # 生产 pool 路径（相对 repo 根）。bootstrap_prod_pool.py 落这个文件；
 # 反馈闭环夜间任务往这个文件追加。
@@ -105,43 +104,9 @@ def render_p1_tab(call_counter: dict) -> None:
         caption_parts.append(f"few-shot pool={pool_size}，本次引用 {n_used} 条")
     st.caption(" | ".join(caption_parts))
 
-    _render_feedback(result)
-
-
-def _render_feedback(result) -> None:
-    """👍/👎 反馈 → Langfuse score(user_feedback)。仅在 SQL 执行成功且有 trace_id 时显示。
-
-    生产同域 Q-SQL pool 的数据源：夜间 cron 跑
-    `python scripts/bootstrap_prod_pool.py --source langfuse`，会把这里 👍 过的
-    (question, sql) 拉进 data/example_pool_prod.jsonl。
-    """
-    if result.error_class is not None or not result.sql:
-        return
-    if not result.trace_id:
-        st.caption("💡 Langfuse trace_id 缺失，反馈按钮不可用（检查 Langfuse 是否已配置）")
-        return
-
-    feedback_map: dict = st.session_state.setdefault(_FEEDBACK_KEY, {})
-    already = feedback_map.get(result.trace_id)
-    if already:
-        st.caption("👍 已标记（进入 pool 候选）" if already == "1" else "👎 已标记（进入回归集）")
-        return
-
-    st.markdown("**这条结果对你有帮助吗？**")
-    col_up, col_down, _ = st.columns([1, 1, 6])
-    with col_up:
-        if st.button("👍 有用", key=f"p1_thumb_up_{result.trace_id}"):
-            if submit_user_feedback(result.trace_id, value=1.0, comment="ui p1 thumbs up"):
-                feedback_map[result.trace_id] = "1"
-                st.success("反馈已记录，将进入生产 pool 候选")
-                st.rerun()
-            else:
-                st.warning("反馈提交失败（Langfuse 未就绪？）")
-    with col_down:
-        if st.button("👎 不对", key=f"p1_thumb_down_{result.trace_id}"):
-            if submit_user_feedback(result.trace_id, value=0.0, comment="ui p1 thumbs down"):
-                feedback_map[result.trace_id] = "0"
-                st.success("反馈已记录，将纳入回归测试集")
-                st.rerun()
-            else:
-                st.warning("反馈提交失败（Langfuse 未就绪？）")
+    render_feedback_block(
+        trace_id=result.trace_id,
+        tab_key="p1",
+        is_valid=(result.error_class is None and bool(result.sql)),
+        invalid_hint="SQL 执行失败，无法反馈",
+    )

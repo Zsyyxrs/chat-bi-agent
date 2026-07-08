@@ -11,6 +11,7 @@ from chat_bi_agent.agents.p3 import P3RootCauseAnalysisAgent
 from chat_bi_agent.llm import qwen_client
 from streamlit_app.components.chart_block import render_chart_block
 from streamlit_app.components.dataframe_block import render_dataframe_block
+from streamlit_app.components.feedback_block import render_feedback_block
 from streamlit_app.components.insight_block import render_insight_block
 from streamlit_app.components.sql_block import render_sql_block
 
@@ -132,3 +133,10 @@ def render_p3_tab(call_counter: dict) -> None:
     if report.trace_id:
         st.caption(f"Langfuse trace_id: `{report.trace_id}`")
     st.caption(f"总耗时 {report.latency_ms} ms")
+
+    render_feedback_block(
+        trace_id=report.trace_id,
+        tab_key="p3",
+        is_valid=(report.error is None and bool(report.narrative)),
+        invalid_hint="RCA 未能完成，反馈按钮不可用",
+    )

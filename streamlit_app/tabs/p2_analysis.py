@@ -8,6 +8,7 @@ from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent
 from chat_bi_agent.agents.p2 import P2MultiStepAnalysisAgent
 from streamlit_app.components.chart_block import render_chart_block
 from streamlit_app.components.dataframe_block import render_dataframe_block
+from streamlit_app.components.feedback_block import render_feedback_block
 from streamlit_app.components.insight_block import render_insight_block
 from streamlit_app.components.sql_block import render_sql_block
 
@@ -83,3 +84,10 @@ def render_p2_tab(call_counter: dict) -> None:
 
     render_insight_block(report.final_answer, title="最终报告")
     st.caption(f"replan {report.replan_count} 次 | 总耗时 {report.total_latency_ms:.0f} ms")
+
+    render_feedback_block(
+        trace_id=report.trace_id,
+        tab_key="p2",
+        is_valid=bool(report.final_answer),
+        invalid_hint="最终报告为空，反馈按钮不可用",
+    )

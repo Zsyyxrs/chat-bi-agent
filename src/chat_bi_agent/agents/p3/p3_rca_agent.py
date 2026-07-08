@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from langfuse import observe
+from langfuse import get_client, observe
 
 from chat_bi_agent.agents.p3.drill_executor import run_drill_down
 from chat_bi_agent.agents.p3.drilldown_selector import select_drilldown_dims
@@ -39,6 +39,12 @@ class P3RootCauseAnalysisAgent:
     def run(self, question_id: str, question: str) -> RCAReport:
         t0 = time.time()
 
+        # 抓当前 langfuse trace_id → 反馈 UI 用它 attach user_feedback score
+        try:
+            trace_id: str | None = get_client().get_current_trace_id()
+        except Exception:
+            trace_id = None
+
         # Step 1: fact_anchor
         anchor = run_fact_anchor(question_id=question_id, question=question, p1_agent=self.p1_agent)
         if anchor is None:
@@ -65,7 +71,7 @@ class P3RootCauseAnalysisAgent:
                 matched_events=matched,
                 narrative=stub_narrative,
                 conclusion=stub_conclusion,
-                trace_id=None,
+                trace_id=trace_id,
                 latency_ms=int((time.time() - t0) * 1000),
                 error="fact_anchor failed: P1 returned no rows",
             )
@@ -113,7 +119,7 @@ class P3RootCauseAnalysisAgent:
             matched_events=matched,
             narrative=narrative,
             conclusion=conclusion,
-            trace_id=None,
+            trace_id=trace_id,
             latency_ms=int((time.time() - t0) * 1000),
             error=None,
         )

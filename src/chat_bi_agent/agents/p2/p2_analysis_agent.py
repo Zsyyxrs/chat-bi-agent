@@ -2,7 +2,7 @@
 
 import time
 
-from langfuse import observe
+from langfuse import get_client, observe
 
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent
 from chat_bi_agent.agents.p2.context_injector import inject_context
@@ -50,6 +50,12 @@ class P2MultiStepAnalysisAgent:
     @observe(name="p2_analysis_run")
     def run(self, question_id: str, question: str) -> AnalysisReport:
         t0 = time.perf_counter()
+
+        # 抓当前 langfuse trace_id → 反馈 UI 用它 attach user_feedback score
+        try:
+            trace_id: str | None = get_client().get_current_trace_id()
+        except Exception:
+            trace_id = None
 
         plan = self.planner.plan(question)
 
@@ -117,6 +123,7 @@ class P2MultiStepAnalysisAgent:
             final_answer=final_answer,
             replan_count=replan_count,
             total_latency_ms=total_ms,
+            trace_id=trace_id,
         )
 
 
