@@ -486,8 +486,9 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-010](#adr-010-postgresql-双用户隔离-写与读) | PostgreSQL 双用户隔离 | Accepted |
 | [ADR-011](#adr-011-bird-financial-只跑-p1sqlite-直连--独立-nl2sql-prompt) | BIRD-financial 只跑 P1 + SQLite 直连 | Accepted |
 | [ADR-012](#adr-012-q-sql-few-shot-检索注入-bird-验证净效应-0-同域生产未测) | Q-SQL few-shot 检索注入 | Accepted（默认阈值保守） |
+| [ADR-013](#adr-013-语义层-metric-resolver-原型-6-指标模板-llm-抽-spec-fallback-回原-nl2sql) | 语义层 Metric Resolver 原型 | Accepted（原型，未接线到 P1 主路径） |
 
-新增 ADR 命名 `ADR-012`、`ADR-013` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
+新增 ADR 命名 `ADR-013`、`ADR-014` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
 ---
 
@@ -545,4 +546,59 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 
 ---
 
-**最后更新**：2026-07-06
+### ADR-013: 语义层 Metric Resolver 原型（6 指标模板，LLM 抽 spec，fallback 回原 NL2SQL）
+
+**Status**: Accepted（原型阶段，未接线到 P1 主路径）
+**Date**: 2026-07-08
+
+**背景**：dbt 2026 benchmark 显示语义层比裸 text-to-SQL 高 10-14 分（GPT-5.3 Codex 从 84.1% → 100%）；WrenAI 全栈押注这条路线。ADR-012 postmortem 里 few-shot 净效应 ≈ 0 也验证了另一个方向：**改 prompt/RAG 是隔靴搔痒，真正的杠杆在"先收窄问题空间"**。原型目标：定义几个核心银行指标模板，把 NL 问题降维成 `{metric, dims, filters, time_window}`，走 governed SQL 路径。
+
+**方案**：
+- **[`config/metrics.yaml`](../config/metrics.yaml)** — 6 个种子指标：`deposit_balance` / `loan_balance` / `customer_aum` / `customer_count` / `product_count` / `transaction_amount`。每个指标声明 fact_table + fact_alias、metric_expr（`AVG(fbd.balance)` 之类）、hard_filters（永远 AND，护业务口径）、date_column、joins（join_id → SQL）、dim_catalog、filter_catalog（含 enum_values 严格校验）。
+- **[`src/chat_bi_agent/agents/p1/metric_resolver.py`](../src/chat_bi_agent/agents/p1/metric_resolver.py)**：
+  - `MetricCatalog.from_yaml()` 加载
+  - `_build_extractor_prompt(catalog)` 生成 system prompt，把可用指标 / dims / filters / enum 全枚举给 LLM
+  - `resolve(question, catalog)` 端到端：LLM → `MetricSpec` → `render_sql_from_spec` 拼 SQL
+  - `render_sql_from_spec` 严格校验：enum 值必须命中、dim/filter 名必须存在、join 自动收集去重、time_window 仅当 date_column 存在时生效
+
+**Smoke 结果**（4 个问题，qwen3.7-max）：
+
+| 问题 | 结果 |
+|---|---|
+| "查询上海分行的高净值客户 ID/姓名/等级"（list 查询） | ✅ LLM 返 `metric_id=null` → 抛 MetricResolverError → **上游 fallback 到原 NL2SQL** |
+| "统计有多少个产品分类为理财且风险等级为高" | ✅ metric=product_count、`WHERE product_category='WEALTH' AND risk_level='R5'`——**中文口语精准归一化**到英文 enum |
+| "杭州（BR_CITY_0000）和南京（BR_CITY_0002）大众客户数量" | ⚠️ metric=customer_count 对，customer_tier='MASS' 对，但**丢了 branch_id IN 过滤**——目前 `op` 只支持 `=`，多值场景不支持 |
+| "上海分行 2026 年 5 月高净值客户存款余额" | ✅ metric=deposit_balance、joins 自动带 branch+customer、time_window 从中文月份精确到 5-01/5-31、customer_tier=HIGH_NET_WORTH |
+
+**为什么原型不改 SQLGenerator 主路径**：
+- Smoke 上 1/4 case 有已知限制（多值 IN），改主路径前应先修
+- ADR-012 明写 "不动 P1 生产 agent 默认"——同样克制原则，原型先跑出来看效果
+- 接线到 P1 SQLGenerator 的 fallback 逻辑（先 resolve，失败走原 NL2SQL）是**下一个 commit**
+
+**替代方案对比**：
+
+| 方案 | 采纳？ | 理由 |
+|---|---|---|
+| **不做 metric 层，只调 few-shot 阈值/pool** | 否 | ADR-012 已证明 few-shot 在跨域 ≈ 0 净效应；同域效果预估也有限（+2~5），语义层估算 +5~10 |
+| **仿 dbt semantic layer（YAML 定义 measure + entity + dimension）** | 否 | 学习曲线陡；先用最小可用形态（metric_expr + dim_catalog + filter_catalog）验证方向 |
+| **仿 WrenAI MDL（modeling definition language 完整数据契约）** | 未来 | MDL 是完整解决方案，工程量大；当前原型只做"metric 优先"这条最有价值切片 |
+| **完全走 SQL template，不用 LLM 抽 spec** | 否 | 无法处理 NL 变体；LLM 抽 spec 是"降维"环节，不可省 |
+
+**跟进项**：
+- **P1**：`op='IN'` 多值过滤支持，覆盖 smoke Q3 的 case
+- **P1**：接线到 SQLGenerator——先 `try resolve()`，`MetricResolverError` 就走原 `generate()`；`P1AgentResult.metric_id` 字段记录本次是否命中，供 Langfuse 分析命中率
+- **P2**：Metric 命中 vs 未命中的 A/B（跑 P1 6 gold + BIRD 或未来同域 30+ 题集）
+- **P2**：扩指标目录（loan 相关、campaign_response 相关、fct_risk_event 相关；总量 15-20 个即覆盖 80% 高频问题）
+- **P3**：加"metric 追问"的 UX（Streamlit 里显示"识别到指标 X，维度 Y"让用户可以点确认/修正）
+- **P3**：Langfuse 里加 metric_hit_rate 看板——生产化上线的 GA 门槛
+
+**默认配置**：**默认不启用**——原型独立可跑（`from chat_bi_agent.agents.p1.metric_resolver import resolve`），但 P1 主路径未挂。等 IN 支持 + 3-5 个指标扩容后再启用。
+
+**Trace**：
+- 代码：本 commit
+- 数据：`config/metrics.yaml`（6 metrics）+ 17 单元测试全绿 + 4-题真 Qwen smoke（3 命中 + 1 fallback）
+- 讨论：本 ADR 完整覆盖
+
+---
+
+**最后更新**：2026-07-08

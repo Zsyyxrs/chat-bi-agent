@@ -1,0 +1,226 @@
+# chat-bi-agent · 语义层 / Metric 目录（银行域）
+#
+# ADR-013 原型：把最常用的银行业务指标定义成 governed SQL 模板；MetricResolver 用
+# LLM 从 NL 问题里抽出 {metric_id, dims, filters, time_window}，再用模板拼 SQL。
+# 命中就走这条路（结果可预测、审计友好），未命中回退到原有 NL2SQL 生成路径。
+#
+# 字段说明：
+#   id              指标机器名，MetricResolver 输出 metric_id 用它
+#   display_name    人读名字，出现在 LLM prompt 里
+#   aliases         同义词/中文口语说法，帮 LLM 命中；越多越好
+#   fact_table      核心 fact 表
+#   fact_alias      给 fact 表的短别名（SQL 里到处引用它）
+#   metric_expr     聚合表达式（AVG(fbd.balance) 之类）
+#   metric_alias    输出列别名
+#   hard_filters    永远 AND 到 WHERE（保护业务口径，例如 account_type IN ('CURRENT','SAVING')）
+#   date_column     时间列（用于 time_window 过滤）；日期 fact 都用 dt
+#   joins           join_id → 完整 JOIN 子句；resolver 按 dims/filters 需要的
+#                   join 集合自动去重拼进来
+#   dim_catalog     可选维度：
+#                     select_expr   SELECT 列表达式
+#                     alias         输出列别名
+#                     requires_join 依赖哪些 join（不填=无 join）
+#   filter_catalog  可选过滤字段：
+#                     column        WHERE 用的列表达式
+#                     type          "string" | "enum" | "date_range" | "numeric"
+#                     enum_values   （enum 时）合法值枚举，防幻觉
+#                     requires_join 同 dim_catalog
+
+version: 1
+
+metrics:
+
+  # -------------------- 存款余额（活期/储蓄） --------------------
+  - id: deposit_balance
+    display_name: 存款余额（日均，活期+储蓄）
+    aliases:
+      - 存款余额
+      - 存款
+      - 活期存款
+      - 储蓄存款
+      - 日均存款
+      - 存款规模
+      - 存款金额
+    fact_table: fct_balance_daily
+    fact_alias: fbd
+    metric_expr: AVG(fbd.balance)
+    metric_alias: avg_deposit_balance
+    hard_filters:
+      - "fbd.account_type IN ('CURRENT','SAVING')"
+    date_column: fbd.dt
+    joins:
+      branch: "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id"
+      customer: "JOIN dim_customer dc ON fbd.customer_id = dc.customer_id"
+      product: "JOIN dim_product dp ON fbd.product_id = dp.product_id"
+    dim_catalog:
+      branch_id:      {select_expr: "fbd.branch_id",      alias: "branch_id"}
+      branch_name:    {select_expr: "dbr.branch_name",    alias: "branch_name",    requires_join: [branch]}
+      branch_city:    {select_expr: "dbr.city",           alias: "city",           requires_join: [branch]}
+      customer_tier:  {select_expr: "dc.customer_tier",   alias: "customer_tier",  requires_join: [customer]}
+      product_category: {select_expr: "dp.product_category", alias: "product_category", requires_join: [product]}
+    filter_catalog:
+      branch_id:      {column: "fbd.branch_id",     type: string}
+      branch_city:    {column: "dbr.city",          type: string,  requires_join: [branch]}
+      branch_name:    {column: "dbr.branch_name",   type: string,  requires_join: [branch]}
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
+
+  # -------------------- 贷款余额 --------------------
+  - id: loan_balance
+    display_name: 贷款余额（日均）
+    aliases:
+      - 贷款余额
+      - 贷款
+      - 贷款规模
+      - 贷款金额
+      - 日均贷款
+    fact_table: fct_balance_daily
+    fact_alias: fbd
+    metric_expr: AVG(fbd.balance)
+    metric_alias: avg_loan_balance
+    hard_filters:
+      - "fbd.account_type = 'LOAN'"
+    date_column: fbd.dt
+    joins:
+      branch: "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id"
+      customer: "JOIN dim_customer dc ON fbd.customer_id = dc.customer_id"
+    dim_catalog:
+      branch_id:      {select_expr: "fbd.branch_id",    alias: "branch_id"}
+      branch_city:    {select_expr: "dbr.city",         alias: "city",          requires_join: [branch]}
+      customer_tier:  {select_expr: "dc.customer_tier", alias: "customer_tier", requires_join: [customer]}
+    filter_catalog:
+      branch_id:      {column: "fbd.branch_id",     type: string}
+      branch_city:    {column: "dbr.city",          type: string,  requires_join: [branch]}
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
+
+  # -------------------- 客户 AUM --------------------
+  - id: customer_aum
+    display_name: 客户 AUM（资产管理规模，最新快照）
+    aliases:
+      - AUM
+      - 客户资产
+      - 资产规模
+      - 客户总资产
+      - 管理资产
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: SUM(dc.aum)
+    metric_alias: total_aum
+    hard_filters:
+      - "dc.is_active = TRUE"
+    date_column: null  # AUM 是快照，不吃时间窗
+    joins:
+      branch: "JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id"
+    dim_catalog:
+      branch_id:    {select_expr: "dc.branch_id",   alias: "branch_id"}
+      branch_city:  {select_expr: "dbr.city",       alias: "city",           requires_join: [branch]}
+      customer_tier: {select_expr: "dc.customer_tier", alias: "customer_tier"}
+    filter_catalog:
+      branch_id:    {column: "dc.branch_id",   type: string}
+      branch_city:  {column: "dbr.city",       type: string,  requires_join: [branch]}
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+
+  # -------------------- 客户数（分行/层级/等维度） --------------------
+  - id: customer_count
+    display_name: 客户数
+    aliases:
+      - 客户数
+      - 客户数量
+      - 有多少客户
+      - 客户人数
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: COUNT(DISTINCT dc.customer_id)
+    metric_alias: customer_count
+    hard_filters: []
+    date_column: null
+    joins:
+      branch: "JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id"
+    dim_catalog:
+      branch_id:    {select_expr: "dc.branch_id", alias: "branch_id"}
+      branch_city:  {select_expr: "dbr.city",     alias: "city",           requires_join: [branch]}
+      customer_tier: {select_expr: "dc.customer_tier", alias: "customer_tier"}
+      gender:       {select_expr: "dc.gender",    alias: "gender"}
+    filter_catalog:
+      branch_id:    {column: "dc.branch_id",   type: string}
+      branch_city:  {column: "dbr.city",       type: string,  requires_join: [branch]}
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+      is_active:    {column: "dc.is_active",   type: string}
+
+  # -------------------- 产品数 --------------------
+  - id: product_count
+    display_name: 产品数
+    aliases:
+      - 产品数
+      - 产品数量
+      - 有多少产品
+      - 有多少个产品
+    fact_table: dim_product
+    fact_alias: dp
+    metric_expr: COUNT(*)
+    metric_alias: product_count
+    hard_filters: []
+    date_column: null
+    joins: {}
+    dim_catalog:
+      product_category: {select_expr: "dp.product_category", alias: "product_category"}
+      risk_level:       {select_expr: "dp.risk_level",       alias: "risk_level"}
+      currency:         {select_expr: "dp.currency",         alias: "currency"}
+    filter_catalog:
+      product_category:
+        column: "dp.product_category"
+        type: enum
+        enum_values: [DEPOSIT, LOAN, WEALTH, FUND, INSURANCE, CARD]
+      risk_level:
+        column: "dp.risk_level"
+        type: enum
+        enum_values: [R1, R2, R3, R4, R5]
+
+  # -------------------- 交易金额 --------------------
+  - id: transaction_amount
+    display_name: 交易金额（按类型可过滤）
+    aliases:
+      - 交易金额
+      - 交易额
+      - 现金支取金额
+      - 取现金额
+      - 转账金额
+      - 消费金额
+      - 存款交易额
+    fact_table: fct_transaction
+    fact_alias: ft
+    metric_expr: SUM(ft.amount)
+    metric_alias: total_amount
+    hard_filters: []
+    date_column: ft.dt
+    joins:
+      branch: "JOIN dim_branch dbr ON ft.branch_id = dbr.branch_id"
+    dim_catalog:
+      branch_id:        {select_expr: "ft.branch_id",       alias: "branch_id"}
+      branch_city:      {select_expr: "dbr.city",           alias: "city",            requires_join: [branch]}
+      transaction_type: {select_expr: "ft.transaction_type", alias: "transaction_type"}
+      channel:          {select_expr: "ft.channel",          alias: "channel"}
+    filter_catalog:
+      branch_id:  {column: "ft.branch_id",  type: string}
+      branch_city: {column: "dbr.city",      type: string,  requires_join: [branch]}
+      transaction_type:
+        column: "ft.transaction_type"
+        type: enum
+        enum_values: [WITHDRAW, DEPOSIT, TRANSFER, PAYMENT, LOAN]
+      channel:
+        column: "ft.channel"
+        type: enum
+        enum_values: [ATM, COUNTER, MOBILE, INTERNET, POS]

@@ -83,6 +83,8 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
 - **生产同域反馈闭环**（2026-07-07）：Streamlit 三个 tab（P1/P2/P3）每条回答下方都有 👍/👎，点击后通过 Langfuse `score(name="user_feedback")` 挂到当前 trace。生产 P1 agent 会 hot-load [`data/example_pool_prod.jsonl`](data/example_pool_prod.jsonl)（gitignored）作 few-shot，`min_sim=0.7` 严格阈值宁缺毋滥；池空时零成本 fallback。夜间 cron 通过 [`scripts/nightly_promote.sh`](scripts/nightly_promote.sh) 或 `make promote-pool` 拉最近 1 天 👍 过的 P1 (question, sql) 追加到 pool（bootstrap script 按 sha1(q||sql)[:12] 去重，重复运行幂等）。首次 bootstrap 从 [`results/baseline_p2_validator_reflector_2026-06-03.json`](results/baseline_p2_validator_reflector_2026-06-03.json) 抽 6 条 P1 gold 样例做种。攒到 30+ 条真实使用样本后跑同域 A/B（`python -m chat_bi_agent.runners.run_p1_eval --example-pool data/example_pool_prod.jsonl` + [`scripts/verify_ab.py`](scripts/verify_ab.py) 守门），对齐 [DESIGN_DECISIONS.md#adr-012](./DESIGN_DECISIONS.md) 跟进项。
 
+- **语义层 / Metric Resolver 原型**（2026-07-08）：[`config/metrics.yaml`](config/metrics.yaml) 定义 6 个种子银行业务指标（存款/贷款余额、AUM、客户数、产品数、交易金额），[`src/chat_bi_agent/agents/p1/metric_resolver.py`](src/chat_bi_agent/agents/p1/metric_resolver.py) 用 LLM 抽 `{metric_id, dims, filters, time_window}` → 套模板拼 SQL。enum 严格校验（"高净值"→`HIGH_NET_WORTH`），join 自动去重，未命中优雅抛错回退。4-题 Qwen smoke：3 命中生成正确 SQL + 1 list 查询 fallback；已知限制 `op='='` 不支持 IN（多值筛选）。**未与 SQLGenerator 主路径集成**——原型独立可跑，下次 iteration 加前置路由 + A/B。详见 [DESIGN_DECISIONS.md#adr-013](./DESIGN_DECISIONS.md)。
+
 ---
 
 ## 🏗 系统架构
