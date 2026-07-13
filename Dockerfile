@@ -7,16 +7,26 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/usr/local
+
+# 直接从官方 uv 镜像拷二进制，比 pip install uv 更快也更干净
+COPY --from=ghcr.io/astral-sh/uv:0.8.2 /uv /uvx /bin/
 
 WORKDIR /app
 
-COPY pyproject.toml ./
+# 先只拷 manifest + lock，让依赖层可以独立缓存
+COPY pyproject.toml uv.lock ./
+
+# 装第三方依赖（不装本项目自身），失败时报错而不是重解
+# --no-cache 让 uv 不留 wheel 缓存在镜像里（省 ~600MB）
+RUN uv sync --frozen --no-dev --no-install-project --no-cache
+
+# 再拷源码，装本项目
 COPY src/ ./src/
 COPY streamlit_app/ ./streamlit_app/
-
-RUN pip install --upgrade pip && pip install .
+RUN uv sync --frozen --no-dev --no-cache
 
 EXPOSE 8501
 
