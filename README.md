@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/Zsyyxrs/chat-bi-agent/actions/workflows/ci.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![LLM: Qwen3.6](https://img.shields.io/badge/LLM-Qwen3.6--max--preview-7c3aed.svg)](https://dashscope.aliyun.com/)
 
 **中文** | [English](./README.en.md)

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "chat-bi-agent"
 version = "0.1.0"
 description = "Banking BI self-service agent for out-of-bank (行外) phase mock data seeding and demo"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Shangyi Zhu", email = "zhusayi1994@gmail.com" }
 ]
@@ -36,20 +36,23 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["chat_bi_agent*", "streamlit_app*"]
 
 [tool.setuptools.package-data]
 chat_bi_agent = [
+    "schema/*.yaml",
+    "data/*.yaml",
     "data/events/*.yaml",
 ]
 
 [tool.black]
 line-length = 100
-target-version = ["py310"]
+target-version = ["py311"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

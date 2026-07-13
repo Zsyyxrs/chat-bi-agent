@@ -5,7 +5,7 @@ Thank you for your interest in contributing to chat-bi-agent! This document prov
 ## Development Setup
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.11+
 - PostgreSQL 13+ or Docker
 - Git
 
@@ -63,7 +63,7 @@ docker/                           # Docker configurations
 ### Style Guide
 - **Formatter**: Black (line length: 100)
 - **Linter**: Ruff
-- **Python Version**: 3.10+
+- **Python Version**: 3.11+
 
 ### Before Committing
 
