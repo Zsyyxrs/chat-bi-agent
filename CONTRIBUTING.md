@@ -61,15 +61,15 @@ docker/                           # Docker configurations
 ## Code Standards
 
 ### Style Guide
-- **Formatter**: Black (line length: 100)
-- **Linter**: Ruff
+- **Formatter**: Ruff (`ruff format`, line length: 100)
+- **Linter**: Ruff (`ruff check`)
 - **Python Version**: 3.11+
 
 ### Before Committing
 
 ```bash
 # Format code
-black src/
+ruff format src/
 
 # Check code quality
 ruff check src/
