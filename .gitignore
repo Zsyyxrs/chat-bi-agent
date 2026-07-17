@@ -29,13 +29,15 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# IDE
+# IDE / OS metadata
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
+Thumbs.db
+desktop.ini
 
 # Environment variables
 .env
@@ -47,23 +49,28 @@ config/local.yaml
 
 # Project-specific
 .claude/
+.superpowers/
 result/
 results/
 !results/README.md
 !results/baseline_*.json
+logs/
 *.log
 *.sqlite
 *.db
+# Merge / patch residue
+*.orig
+*.rej
 
-# Testing
+# Testing / type-checking / notebooks
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.hypothesis/
+.ipynb_checkpoints/
 .coverage
 htmlcov/
 .tox/
-
-# Mac
-.DS_Store
 
 # Design / planning docs stay local
 docs/
