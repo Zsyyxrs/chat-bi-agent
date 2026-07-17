@@ -43,3 +43,24 @@ Dockerfile
 .dockerignore
 docker-compose.yml
 docker/
+
+# ===== Large dev-only assets (BIRD benchmark data — never needed in image) =====
+# 保留 data/example_pool_prod.jsonl（136KB，P1 few-shot 生产池，将来若 COPY 可用）
+benchmarks/
+data/example_pool_bird.jsonl
+
+# ===== CI / IDE / OS metadata =====
+.github/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+
+# ===== Root docs / helpers (image doesn't need them) =====
+CONTRIBUTING.md
+DESIGN_DECISIONS.md
+EVALUATION_FRAMEWORK.md
+README.md
+README.en.md
+LICENSE
+Makefile
