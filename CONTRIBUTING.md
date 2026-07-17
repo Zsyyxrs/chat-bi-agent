@@ -29,12 +29,18 @@ Thank you for your interest in contributing to chat-bi-agent! This document prov
    pip install -e ".[dev]"
    ```
 
-4. **Set up the database**
+4. **Start services and seed the database**
    ```bash
-   docker-compose up -d
-   # or manually create PostgreSQL database and run seed
-   python -m src.chat_bi_agent.data.seed
+   # 1) Start PostgreSQL
+   docker compose up -d postgres
+
+   # 2) Seed data (first time or when resetting)
+   docker compose --profile seed run --rm seed
+
+   # 3) Start the Streamlit app (http://localhost:8501)
+   docker compose up -d app
    ```
+   > The `seed` service is gated behind a Compose profile, so a bare `docker compose up` will NOT run it. Trigger it explicitly with `--profile seed`. To seed against a local Python env instead of the container, run `python -m chat_bi_agent.data.seed --host localhost --port 5432 --truncate --with-events`.
 
 ## Project Structure
 
@@ -83,14 +89,23 @@ pytest --cov=src --cov-report=html
 
 ## Commit Messages
 
-Use clear, descriptive commit messages:
+Follow [Conventional Commits](https://www.conventionalcommits.org/) with a scope:
 
-- ✨ `feat: Add new feature` - New feature
-- 🐛 `fix: Fix bug in X` - Bug fix
-- ♻️ `refactor: Simplify data loading` - Code refactoring
-- 📝 `docs: Update README` - Documentation updates
-- ✅ `test: Add tests for X` - Test additions
-- 🚀 `perf: Optimize query performance` - Performance improvements
+```
+<type>(<scope>): <short description>
+```
+
+Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `perf`, `chore`, `ci`, `build`.
+
+Examples from this repo's history:
+
+- `feat(eval): 三路径评估框架和数据生成系统`
+- `fix(compose): pgAdmin 邮箱修复 + CLICKHOUSE_DB 清理 + 挂载 P1 few-shot 数据`
+- `chore(deps): 移除 Black，统一到 ruff format —— 单工具管 lint + format`
+- `chore(gitignore): dedupe .DS_Store + 补 defensive 规则`
+- `fix(makefile): make help 正则支持含数字的 target 名`
+
+Descriptions may be in English or Chinese. Keep the subject line under ~72 characters; put context and rationale in the commit body.
 
 ## Testing
 
