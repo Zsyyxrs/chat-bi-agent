@@ -25,9 +25,10 @@ services:
   pgadmin:
     image: dpage/pgadmin4:8
     container_name: chatbi-pgadmin
-    restart: unless-stopped
+    restart: on-failure:5
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@local
+      # pgAdmin 8 校验邮箱必须带 TLD，@local 会被拒 → 用 @local.dev
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
       PGADMIN_DEFAULT_PASSWORD: admin
       PGADMIN_CONFIG_SERVER_MODE: "False"
     ports:
@@ -61,7 +62,7 @@ services:
     container_name: chatbi-clickhouse
     restart: unless-stopped
     environment:
-      CLICKHOUSE_DB: langfuse
+      # 不设 CLICKHOUSE_DB —— Langfuse 的表实际建在 `default` 库(它自己的默认)。
       CLICKHOUSE_USER: langfuse
       CLICKHOUSE_PASSWORD: langfuse_dev
     volumes:
@@ -202,6 +203,10 @@ services:
     environment:
       PG_HOST: postgres
       PG_PORT: 5432
+    # 挂载生产 few-shot 池：主机 bootstrap/nightly 脚本会追加，
+    # 容器读取时能拿到最新版本；不挂的话 P1 few-shot 检索静默失效。
+    volumes:
+      - ./data/example_pool_prod.jsonl:/app/data/example_pool_prod.jsonl:ro
     ports:
       - "8501:8501"
 
