@@ -102,7 +102,6 @@ chat-bi-agent/
 ├── docker/                  # Auxiliary Docker configs
 ├── config/                  # App configuration files
 ├── results/                 # Evaluation output snapshots
-├── docs/                    # Design docs (see 金融data agent架构设计.md)
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
@@ -224,7 +223,6 @@ File issues at: <https://github.com/Zsyyxrs/chat-bi-agent/issues>
 - 📧 Email: zhusayi1994@gmail.com
 - 📖 Documentation: See [README.md](README.md) (中文) and [README.en.md](README.en.md) (English)
 - 🏛️ Design decisions & ADRs: [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
-- 🔍 Architecture: [docs/金融data agent架构设计.md](docs/金融data%20agent架构设计.md)
 - 📊 Evaluation: [EVALUATION_FRAMEWORK.md](EVALUATION_FRAMEWORK.md)
 
 ## License

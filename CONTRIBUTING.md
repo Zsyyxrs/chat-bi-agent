@@ -102,7 +102,6 @@ chat-bi-agent/
 ├── docker/                  # 辅助 Docker 配置
 ├── config/                  # 应用配置文件
 ├── results/                 # 评估结果快照
-├── docs/                    # 设计文档（见 金融data agent架构设计.md）
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile
@@ -224,7 +223,6 @@ pytest --cov=src --cov-report=html
 - 📧 邮箱：zhusayi1994@gmail.com
 - 📖 说明文档：[README.md](README.md)（中文）与 [README.en.md](README.en.md)（English）
 - 🏛️ 设计决策 & ADR：[DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
-- 🔍 架构文档：[docs/金融data agent架构设计.md](docs/金融data%20agent架构设计.md)
 - 📊 评估框架：[EVALUATION_FRAMEWORK.md](EVALUATION_FRAMEWORK.md)
 
 ## 许可
