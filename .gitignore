@@ -44,8 +44,19 @@ desktop.ini
 .env.local
 .env.*.local
 
+# Secret material (defensive — never commit keys/certs/service accounts)
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+service_account*.json
+
 # Local runtime config (example template is tracked)
 config/local.yaml
+
+# Streamlit secrets (streamlit_app/ uses st.secrets)
+.streamlit/secrets.toml
 
 # Project-specific
 .claude/
@@ -69,8 +80,14 @@ logs/
 .hypothesis/
 .ipynb_checkpoints/
 .coverage
+.coverage.*
+coverage.xml
+*.cover
 htmlcov/
 .tox/
+.nox/
+.dmypy.json
+dmypy.json
 
 # Design / planning docs stay local
 docs/
