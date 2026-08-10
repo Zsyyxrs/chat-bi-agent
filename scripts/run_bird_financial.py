@@ -19,18 +19,17 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from chat_bi_agent.config import CHAT_MODEL  # noqa: E402
-from chat_bi_agent.eval.bird_financial.loader import (  # noqa: E402
+from chat_bi_agent.config import CHAT_MODEL
+from chat_bi_agent.eval.bird_financial.loader import (
     load_financial_questions,
     load_tied_append,
 )
-from chat_bi_agent.eval.bird_financial.runner import BirdRunner  # noqa: E402
-from chat_bi_agent.eval.bird_financial.schema_prompt import (  # noqa: E402
+from chat_bi_agent.eval.bird_financial.runner import BirdRunner
+from chat_bi_agent.eval.bird_financial.schema_prompt import (
     build_financial_schema_block,
 )
-from chat_bi_agent.eval.bird_financial.sqlite_executor import BirdSQLiteExecutor  # noqa: E402
+from chat_bi_agent.eval.bird_financial.sqlite_executor import BirdSQLiteExecutor
 
 BIRD_DIR = REPO_ROOT / "benchmarks" / "bird"
 

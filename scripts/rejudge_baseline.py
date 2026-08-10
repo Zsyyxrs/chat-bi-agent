@@ -17,9 +17,8 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
-sys.path.insert(0, str(ROOT / "src"))
 
-from chat_bi_agent.eval.rca_evaluator import RCAEvaluator  # noqa: E402
+from chat_bi_agent.eval.rca_evaluator import RCAEvaluator
 
 DATA_YAML = ROOT / "src/chat_bi_agent/data/attribution_evaluation.yaml"
 DEFAULT_BASELINE = ROOT / "results/baseline_p3_rca_2026-06-25.json"

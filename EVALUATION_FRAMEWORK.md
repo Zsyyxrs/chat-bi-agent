@@ -188,7 +188,7 @@ score = evaluator.evaluate_response(
 
 ### 种子化过程
 ```bash
-cd /Users/zhushangyi/CourseData/LLM_Projects/chat-bi-agent
+cd <项目根目录>
 
 # 启用事件传导种子化（用于所有三个评估路径）
 python -m chat_bi_agent.data.seed \

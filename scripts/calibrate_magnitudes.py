@@ -1,11 +1,11 @@
 """V2 Reference SQL: 与 agent 实际窗口对齐。"""
 
-import sys
+from pathlib import Path
 
-sys.path.insert(0, "src")
 from dotenv import load_dotenv
 
-load_dotenv("/Users/zhushangyi/CourseData/LLM_Projects/chat-bi-agent/.env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 from chat_bi_agent.data.db import DatabaseConfig, get_cursor
 
 CHECKS = {

@@ -28,11 +28,12 @@ import sys
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "src"))
+load_dotenv(REPO_ROOT / ".env")
 
-from chat_bi_agent.agents.shared.example_retriever import (  # noqa: E402
+from chat_bi_agent.agents.shared.example_retriever import (
     ExamplePool,
     QAExample,
     compute_example_id,
