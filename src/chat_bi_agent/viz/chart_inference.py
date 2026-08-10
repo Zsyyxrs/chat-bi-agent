@@ -53,7 +53,7 @@ def infer_chart_spec(df: pd.DataFrame) -> ChartSpec:
     # Rule 1: 1 行 → KPI
     if n_rows == 1:
         if numeric_cols:
-            return ChartSpec(chart_type="kpi", y=numeric_cols[0])
+            return ChartSpec(chart_type="kpi")
         return ChartSpec(chart_type="table")
 
     # Rule 2: datetime + numeric → line

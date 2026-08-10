@@ -42,7 +42,7 @@ def test_render_pie_returns_figure():
 
 def test_render_kpi_returns_none():
     df = pd.DataFrame({"total": [42.0]})
-    fig = render(df, ChartSpec(chart_type="kpi", y="total"))
+    fig = render(df, ChartSpec(chart_type="kpi"))
     assert fig is None
 
 

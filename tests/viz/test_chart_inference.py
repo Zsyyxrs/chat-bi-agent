@@ -15,7 +15,6 @@ def test_single_value_returns_kpi():
     df = pd.DataFrame({"total_balance": [1234567.0]})
     spec = infer_chart_spec(df)
     assert spec.chart_type == "kpi"
-    assert spec.y == "total_balance"
 
 
 def test_one_row_multi_numeric_returns_kpi():

@@ -9,7 +9,7 @@ from chat_bi_agent.viz.plotly_renderer import render
 _CHART_OPTIONS: list[str] = ["自动", "line", "bar", "pie", "scatter", "kpi", "table"]
 
 
-def _render_kpi(df: pd.DataFrame, spec: ChartSpec) -> None:
+def _render_kpi(df: pd.DataFrame) -> None:
     # KPI：1 行 N 数值列展示为多张 st.metric 卡片
     cols = st.columns(min(len(df.columns), 4))
     for i, col in enumerate(df.columns):
@@ -56,7 +56,7 @@ def render_chart_block(df: pd.DataFrame | None, *, key: str) -> None:
         if df.shape[0] != 1:
             st.warning("KPI 仅适用于单行结果，已降级为表格")
             return
-        _render_kpi(df, spec)
+        _render_kpi(df)
         return
 
     try:
