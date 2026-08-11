@@ -2,11 +2,23 @@
 
 import os
 import re
+from decimal import Decimal
 from enum import Enum
 
 import psycopg2
 from langfuse import observe
 from psycopg2.extras import RealDictCursor
+
+
+def _pyify_value(v: object) -> object:
+    """把 psycopg2 从 NUMERIC 列返回的 Decimal 转成 float。
+    Why: Langfuse SDK 的默认序列化器对 Decimal 走兜底分支，
+    trace 里 aum/balance 等字段会存成字面字符串 "<Decimal>"，
+    真实数值丢失。float 是 JSON 原生类型，能被 SDK 直接序列化。
+    """
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
 
 from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS
 
@@ -71,7 +83,7 @@ class SQLExecutor:
             )
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql)
-                rows = [dict(r) for r in cur.fetchall()]
+                rows = [{k: _pyify_value(v) for k, v in r.items()} for r in cur.fetchall()]
             return rows, None
         except psycopg2.Error as e:
             err_msg = str(e).strip()

@@ -203,6 +203,9 @@ services:
     environment:
       PG_HOST: postgres
       PG_PORT: 5432
+      # .env 里的 LANGFUSE_HOST=http://localhost:3001 是给宿主机脚本用的；
+      # 容器里 localhost 指自己，必须走 compose 网络内的 service name。
+      LANGFUSE_HOST: http://langfuse:3000
     # 挂载生产 few-shot 池：主机 bootstrap/nightly 脚本会追加，
     # 容器读取时能拿到最新版本；不挂的话 P1 few-shot 检索静默失效。
     # 挂载 config/local.yaml：镜像里没这个文件（.dockerignore 已排除），

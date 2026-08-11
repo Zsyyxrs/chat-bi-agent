@@ -93,7 +93,7 @@ def load_p1_eval(yaml_path: Path, baseline_path: Path, score_threshold: float) -
     qs_by_id = {q["id"]: q for q in yaml_data.get("evaluation_questions", [])}
 
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-    ts = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+    ts = dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
     examples: list[QAExample] = []
     skipped_low_score = skipped_no_sql = skipped_no_yaml = 0
@@ -174,24 +174,33 @@ def load_langfuse(days_back: int, score_threshold: float) -> list[QAExample]:
         )
         return []
 
-    ts = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+    ts = dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     examples: list[QAExample] = []
     for tr in trace_list:
-        scores = getattr(tr, "scores", None) or []
+        # trace.scores 是分数 ID 列表（字符串），需逐个用 score_v_2.get_by_id 拉详情。
+        score_ids = getattr(tr, "scores", None) or []
         pass_score = 0.0
-        for s in scores:
-            name = getattr(s, "name", "") or (s.get("name") if isinstance(s, dict) else "")
-            val = getattr(s, "value", None) if not isinstance(s, dict) else s.get("value")
-            if name in ("user_feedback", "judge_pass") and val is not None:
-                pass_score = max(pass_score, float(val))
+        for sid in score_ids:
+            try:
+                s = client.api.score_v_2.get_by_id(score_id=sid)
+            except Exception:
+                continue
+            if getattr(s, "name", "") in ("user_feedback", "judge_pass"):
+                val = getattr(s, "value", None)
+                if val is not None:
+                    pass_score = max(pass_score, float(val))
         if pass_score < score_threshold:
             continue
-        # trace.input 一般是 dict, 我们的 P1 里 question 走的是位置参数——
-        # 从 metadata 或 input 里尽力取
+        # trace.input 结构由 langfuse @observe 装饰器生成：
+        #   {"args": [...positional], "kwargs": {"question": "..."}}
+        # Streamlit 里 P1 用 question=... 关键字调用，所以从 kwargs 取。
         raw_input = getattr(tr, "input", None) or {}
         question = None
         if isinstance(raw_input, dict):
-            question = raw_input.get("question") or raw_input.get("args", {}).get("question")
+            kwargs = raw_input.get("kwargs") or {}
+            question = raw_input.get("question") or (
+                kwargs.get("question") if isinstance(kwargs, dict) else None
+            )
         if not question:
             continue
         # output 一般是 P1AgentResult dict-ified
