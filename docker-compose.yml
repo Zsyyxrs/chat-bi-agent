@@ -205,8 +205,11 @@ services:
       PG_PORT: 5432
     # 挂载生产 few-shot 池：主机 bootstrap/nightly 脚本会追加，
     # 容器读取时能拿到最新版本；不挂的话 P1 few-shot 检索静默失效。
+    # 挂载 config/local.yaml：镜像里没这个文件（.dockerignore 已排除），
+    # 不挂的话 config.py 会走 _DEFAULTS 的 chat_model，与本地行为不一致。
     volumes:
       - ./data/example_pool_prod.jsonl:/app/data/example_pool_prod.jsonl:ro
+      - ./config/local.yaml:/app/config/local.yaml:ro
     ports:
       - "8501:8501"
 
@@ -224,6 +227,10 @@ services:
     environment:
       PG_HOST: postgres
       PG_PORT: 5432
+    # 挂载 config/local.yaml：与 app 服务同理，
+    # 避免走 _DEFAULTS 导致 embed_model 与本地不一致。
+    volumes:
+      - ./config/local.yaml:/app/config/local.yaml:ro
     command: >
       python -m chat_bi_agent.data.seed
       --host postgres --port 5432 --truncate --with-events
