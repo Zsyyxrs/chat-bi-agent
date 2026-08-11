@@ -59,6 +59,9 @@ def chat(
         ],
         result_format="message",
         temperature=temperature,
+        # DashScope SDK 默认 300s (dashscope.common.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS)，
+        # 太长——被限流/排队时会让 UI 转 5 分钟。60s 覆盖绝大多数 NL2SQL 场景。
+        timeout=60,
     )
     # resp = MultiModalConversation.call(
     #     model=CHAT_MODEL,
