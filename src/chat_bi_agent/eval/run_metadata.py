@@ -75,7 +75,7 @@ def build_run_metadata(
         "config_hash": md5_file(_DEFAULT_CONFIG),
         "python_version": platform.python_version(),
         "host": socket.gethostname(),
-        "run_ts_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "run_ts_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
     }
     if extra_paths:
         for name, p in extra_paths.items():

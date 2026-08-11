@@ -158,7 +158,7 @@ def main() -> int:
         seed=args.seed,
     )
 
-    ts = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+    ts = dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     examples = [_to_qa_example(q, ts) for q in selected]
 
     # Dedup by example_id (some datasets have identical (question, sql) pairs)
