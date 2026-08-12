@@ -48,7 +48,7 @@ class MetricDim:
 class MetricFilter:
     id: str
     column: str
-    type: str  # "string" | "enum" | "date_range" | "numeric"
+    type: str  # "string" | "enum" | "date_range" | "numeric" | "boolean"
     enum_values: list[str] = field(default_factory=list)
     requires_join: list[str] = field(default_factory=list)
 
@@ -67,6 +67,8 @@ class Metric:
     joins: dict[str, str]
     dim_catalog: dict[str, MetricDim]
     filter_catalog: dict[str, MetricFilter]
+    # hard_filters 自身依赖的 join，无条件拼进 FROM（dims/filters 为空时也要）
+    hard_filter_joins: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -111,6 +113,7 @@ class MetricCatalog:
                     joins=m.get("joins") or {},
                     dim_catalog=dim_catalog,
                     filter_catalog=filter_catalog,
+                    hard_filter_joins=m.get("hard_filter_joins") or [],
                 )
             )
         return cls(metrics=ms)
@@ -139,8 +142,9 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     """把 MetricSpec 套上 metric 模板生成 SQL。所有验证都在这里做。"""
     metric = catalog.get(spec.metric_id)
 
-    # 1. 收集需要的 join
-    needed_joins: list[str] = []
+    # 1. 收集需要的 join。hard_filters 的 join 先入队：它们无条件需要，
+    #    且排在前面能保证 FROM 后的 join 顺序稳定。
+    needed_joins: list[str] = list(metric.hard_filter_joins)
     for dim_id in spec.dims:
         if dim_id not in metric.dim_catalog:
             raise MetricResolverError(f"unknown dim {dim_id!r} for metric {metric.id}")
@@ -177,7 +181,9 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
 
         if op == "IN":
             if not isinstance(val, list):
-                raise MetricResolverError(f"IN filter {f['col']!r} val 必须是 list，收到 {type(val).__name__}")
+                raise MetricResolverError(
+                    f"IN filter {f['col']!r} val 必须是 list，收到 {type(val).__name__}"
+                )
             if len(val) == 0:
                 raise MetricResolverError(f"unsupported_op: empty IN for filter {f['col']!r}")
 
@@ -210,6 +216,12 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
             where_parts.append(f"{fdef.column} {op} '{safe}'")
         elif fdef.type == "numeric":
             where_parts.append(f"{fdef.column} {op} {val}")
+        elif fdef.type == "boolean":
+            if isinstance(val, str):
+                truthy = val.strip().lower() in {"true", "t", "1", "yes", "是"}
+            else:
+                truthy = bool(val)
+            where_parts.append(f"{fdef.column} {op} {'TRUE' if truthy else 'FALSE'}")
         else:
             raise MetricResolverError(f"unsupported filter type {fdef.type!r}")
 
@@ -342,7 +354,8 @@ class RouteResult:
     cosine: float
     sql: str | None
     spec: MetricSpec | None
-    fail_reason: str | None  # "no_metric" | "unknown_dim" | "enum_out_of_range" | "unsupported_op" | None
+    # "no_metric" | "unknown_dim" | "enum_out_of_range" | "unsupported_op" | None
+    fail_reason: str | None
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

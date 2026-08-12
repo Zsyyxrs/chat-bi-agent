@@ -342,3 +342,53 @@ def test_in_op_non_list_val_raises(tmp_path):
     )
     with pytest.raises(MetricResolverError, match="IN.*list"):
         render_sql_from_spec(spec, catalog)
+
+
+# ---------------------- hard_filter_joins ----------------------
+
+
+def test_hard_filter_joins_always_rendered():
+    """hard_filters 引用的 join 无条件拼进 FROM，即使 spec 不带 dims/filters。"""
+    cat = _get_cat()
+    spec = MetricSpec(metric_id="deposit_balance", dims=[], filters=[], time_window=None)
+    sql = render_sql_from_spec(spec, cat)
+    assert "JOIN dim_account da" in sql
+    assert "da.account_type IN ('CURRENT','SAVING')" in sql
+
+
+def test_hard_filter_joins_not_duplicated_when_also_required_by_dim():
+    """hard_filter_joins 与 dim 的 requires_join 撞车时只拼一次。"""
+    cat = _get_cat()
+    m = cat.get("deposit_balance")
+    m.dim_catalog["_probe"] = type(m.dim_catalog["branch_id"])(
+        id="_probe",
+        select_expr="da.account_type",
+        alias="acct_type",
+        requires_join=["account"],
+    )
+    spec = MetricSpec(metric_id="deposit_balance", dims=["_probe"], filters=[], time_window=None)
+    sql = render_sql_from_spec(spec, cat)
+    assert sql.count("JOIN dim_account da") == 1
+
+
+def test_catalog_columns_match_real_schema_names():
+    """transaction_amount 的 channel 列名必须是 transaction_channel。"""
+    cat = _get_cat()
+    m = cat.get("transaction_amount")
+    assert m.dim_catalog["channel"].select_expr == "ft.transaction_channel"
+    assert m.filter_catalog["channel"].column == "ft.transaction_channel"
+
+
+def test_is_active_filter_typed_boolean_not_string():
+    """dc.is_active 是 boolean 列，不能声明成 string（会拼出 = 'True'）。"""
+    cat = _get_cat()
+    m = cat.get("customer_count")
+    assert m.filter_catalog["is_active"].type == "boolean"
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "is_active", "op": "=", "val": True}],
+        time_window=None,
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "dc.is_active = TRUE" in sql

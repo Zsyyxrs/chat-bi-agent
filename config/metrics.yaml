@@ -13,6 +13,8 @@
 #   metric_expr     聚合表达式（AVG(fbd.balance) 之类）
 #   metric_alias    输出列别名
 #   hard_filters    永远 AND 到 WHERE（保护业务口径，例如 account_type IN ('CURRENT','SAVING')）
+#   hard_filter_joins  hard_filters 自身依赖的 join_id 列表；无条件拼进 FROM。
+#                   （dims/filters 为空时也要，否则 hard_filter 引用的别名不存在）
 #   date_column     时间列（用于 time_window 过滤）；日期 fact 都用 dt
 #   joins           join_id → 完整 JOIN 子句；resolver 按 dims/filters 需要的
 #                   join 集合自动去重拼进来
@@ -22,7 +24,7 @@
 #                     requires_join 依赖哪些 join（不填=无 join）
 #   filter_catalog  可选过滤字段：
 #                     column        WHERE 用的列表达式
-#                     type          "string" | "enum" | "date_range" | "numeric"
+#                     type          "string" | "enum" | "date_range" | "numeric" | "boolean"
 #                     enum_values   （enum 时）合法值枚举，防幻觉
 #                     requires_join 同 dim_catalog
 
@@ -46,9 +48,11 @@ metrics:
     metric_expr: AVG(fbd.balance)
     metric_alias: avg_deposit_balance
     hard_filters:
-      - "fbd.account_type IN ('CURRENT','SAVING')"
+      - "da.account_type IN ('CURRENT','SAVING')"
+    hard_filter_joins: [account]
     date_column: fbd.dt
     joins:
+      account: "JOIN dim_account da ON fbd.account_id = da.account_id"
       branch: "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id"
       customer: "JOIN dim_customer dc ON fbd.customer_id = dc.customer_id"
       product: "JOIN dim_product dp ON fbd.product_id = dp.product_id"
@@ -82,9 +86,11 @@ metrics:
     metric_expr: AVG(fbd.balance)
     metric_alias: avg_loan_balance
     hard_filters:
-      - "fbd.account_type = 'LOAN'"
+      - "da.account_type = 'LOAN'"
+    hard_filter_joins: [account]
     date_column: fbd.dt
     joins:
+      account: "JOIN dim_account da ON fbd.account_id = da.account_id"
       branch: "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id"
       customer: "JOIN dim_customer dc ON fbd.customer_id = dc.customer_id"
     dim_catalog:
@@ -158,7 +164,7 @@ metrics:
         column: "dc.customer_tier"
         type: enum
         enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
-      is_active:    {column: "dc.is_active",   type: string}
+      is_active:    {column: "dc.is_active",   type: boolean}
 
   # -------------------- 产品数 --------------------
   - id: product_count
@@ -212,7 +218,7 @@ metrics:
       branch_id:        {select_expr: "ft.branch_id",       alias: "branch_id"}
       branch_city:      {select_expr: "dbr.city",           alias: "city",            requires_join: [branch]}
       transaction_type: {select_expr: "ft.transaction_type", alias: "transaction_type"}
-      channel:          {select_expr: "ft.channel",          alias: "channel"}
+      channel:          {select_expr: "ft.transaction_channel", alias: "channel"}
     filter_catalog:
       branch_id:  {column: "ft.branch_id",  type: string}
       branch_city: {column: "dbr.city",      type: string,  requires_join: [branch]}
@@ -221,6 +227,6 @@ metrics:
         type: enum
         enum_values: [WITHDRAW, DEPOSIT, TRANSFER, PAYMENT, LOAN]
       channel:
-        column: "ft.channel"
+        column: "ft.transaction_channel"
         type: enum
         enum_values: [ATM, COUNTER, MOBILE, INTERNET, POS]
