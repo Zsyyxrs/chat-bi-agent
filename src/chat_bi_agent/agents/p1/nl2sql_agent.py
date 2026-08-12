@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from langfuse import get_client, observe
 
+from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
 from chat_bi_agent.agents.p1.reflector import ReflectAction, Reflector
 from chat_bi_agent.agents.p1.sql_generator import InvalidJsonError, SQLGenerator
 from chat_bi_agent.agents.p1.sql_validator import SQLValidator
@@ -33,6 +34,12 @@ class P1AgentResult:
     reflect_history: list[dict] = field(default_factory=list)
     retrieved_example_ids: list[str] = field(default_factory=list)
     trace_id: str | None = None
+    # 语义层前置路由字段（ADR-013 集成，metric_router=None 时全 None/"nl2sql"）
+    route: str = "nl2sql"  # "nl2sql" | "metric" | "metric_then_nl2sql"
+    metric_id: str | None = None
+    prefilter_cosine: float | None = None
+    metric_spec: dict | None = None  # 命中且 resolve 成功时落 MetricSpec 的 dict 形式
+    metric_fail_reason: str | None = None
 
 
 class P1NL2SQLAgent:
@@ -44,6 +51,7 @@ class P1NL2SQLAgent:
         statement_timeout_ms: int = PG_STATEMENT_TIMEOUT_MS,
         dialect: str = "postgres",
         example_retriever: ExampleRetriever | None = None,
+        metric_router: MetricRouter | None = None,
     ):
         self.dialect = dialect
         self.loader = SchemaLoader()
@@ -55,6 +63,7 @@ class P1NL2SQLAgent:
         self.sql_executor = SQLExecutor(statement_timeout_ms=statement_timeout_ms)
         self.reflector = Reflector(max_attempts=MAX_ATTEMPTS, dialect=dialect)
         self.example_retriever = example_retriever
+        self.metric_router = metric_router
 
     @observe(name="p1_nl2sql_run")
     def run(self, question_id: str, question: str) -> P1AgentResult:

@@ -296,3 +296,51 @@ def test_retriever_empty_hits_treated_as_none():
     _, kwargs = agent.sql_generator.generate.call_args
     assert kwargs["few_shot_examples"] is None
     assert r.retrieved_example_ids == []
+
+
+def test_p1_agent_result_new_fields_default():
+    r = P1AgentResult(
+        question_id="q1",
+        sql=None,
+        rows=None,
+        execution_error=None,
+        error_class=None,
+        schema_link_top_k=[],
+        thought="",
+        attempts=0,
+        total_latency_ms=1,
+    )
+    assert r.route == "nl2sql"
+    assert r.metric_id is None
+    assert r.prefilter_cosine is None
+    assert r.metric_spec is None
+    assert r.metric_fail_reason is None
+
+
+def test_p1_agent_init_accepts_metric_router_none():
+    with (
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLoader") as ml,
+    ):
+        loader_instance = ml.return_value
+        loader_instance.load.return_value = None
+        loader_instance.build_index.return_value = None
+        loader_instance.get_ddl_text.return_value = "CREATE TABLE dummy(x INT)"
+
+        agent = P1NL2SQLAgent(metric_router=None)
+        assert agent.metric_router is None
+
+
+def test_p1_agent_init_accepts_metric_router_object():
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    with (
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLoader") as ml,
+    ):
+        loader_instance = ml.return_value
+        loader_instance.load.return_value = None
+        loader_instance.build_index.return_value = None
+        loader_instance.get_ddl_text.return_value = "CREATE TABLE dummy(x INT)"
+
+        agent = P1NL2SQLAgent(metric_router=router)
+        assert agent.metric_router is router
