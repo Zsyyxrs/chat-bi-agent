@@ -100,24 +100,46 @@ def chat(
     )
 
 
+# 超过 10 条会被 DashScope 拒掉：
+#   InternalError.Algo.InvalidParameter: batch size is invalid,
+#   it should not be larger than 10
+EMBED_MAX_BATCH = 10
+
+
 @observe(as_type="embedding", name="qwen_embed")
 def embed(texts: list[str]) -> list[list[float]]:
-    """批量 embedding。返回 list of 1024-dim 向量。"""
+    """批量 embedding。返回 list of 1024-dim 向量，顺序与入参一致。
+
+    DashScope 单次最多收 10 条，这里自动切块，调用方不用关心上限。
+    """
+    if not texts:
+        return []
     _ensure_api_key()
-    resp = TextEmbedding.call(
-        model=EMBED_MODEL,
-        input=texts,
-        dimension=EMBED_DIM,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(f"qwen embedding 调用失败: {resp.code} {resp.message}")
-    # embedding 的 resp.usage 是 dict，只有 total_tokens；chat 的是对象有 input/output_tokens
-    usage = getattr(resp, "usage", None) or {}
-    input_tokens = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
+
+    vectors: list[list[float]] = []
+    total_input_tokens = 0
+    for start in range(0, len(texts), EMBED_MAX_BATCH):
+        chunk = texts[start : start + EMBED_MAX_BATCH]
+        resp = TextEmbedding.call(
+            model=EMBED_MODEL,
+            input=chunk,
+            dimension=EMBED_DIM,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"qwen embedding 调用失败: {resp.code} {resp.message}")
+        # embedding 的 resp.usage 是 dict，只有 total_tokens；chat 的是对象有 input/output_tokens
+        usage = getattr(resp, "usage", None) or {}
+        total_input_tokens += usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
+        # dashscope 返回的 embeddings 顺序与 input 一致
+        vectors.extend(item["embedding"] for item in resp.output["embeddings"])
+
     get_client().update_current_generation(
         model=EMBED_MODEL,
-        model_parameters={"dimension": EMBED_DIM, "batch_size": len(texts)},
-        usage_details={"input": input_tokens, "output": 0},
+        model_parameters={
+            "dimension": EMBED_DIM,
+            "batch_size": len(texts),
+            "n_api_calls": (len(texts) + EMBED_MAX_BATCH - 1) // EMBED_MAX_BATCH,
+        },
+        usage_details={"input": total_input_tokens, "output": 0},
     )
-    # dashscope 返回的 embeddings 顺序与 input 一致
-    return [item["embedding"] for item in resp.output["embeddings"]]
+    return vectors
