@@ -486,7 +486,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-010](#adr-010-postgresql-双用户隔离-写与读) | PostgreSQL 双用户隔离 | Accepted |
 | [ADR-011](#adr-011-bird-financial-只跑-p1sqlite-直连--独立-nl2sql-prompt) | BIRD-financial 只跑 P1 + SQLite 直连 | Accepted |
 | [ADR-012](#adr-012-q-sql-few-shot-检索注入-bird-验证净效应-0-同域生产未测) | Q-SQL few-shot 检索注入 | Accepted（默认阈值保守） |
-| [ADR-013](#adr-013-语义层-metric-resolver-原型-6-指标模板-llm-抽-spec-fallback-回原-nl2sql) | 语义层 Metric Resolver 原型 | Accepted（原型，未接线到 P1 主路径） |
+| [ADR-013](#adr-013-语义层-metric-resolver-原型-6-指标模板-llm-抽-spec-fallback-回原-nl2sql) | 语义层 Metric Resolver 原型 | Accepted（2026-08-12 已接线到 P1 主路径，见 Update） |
 
 新增 ADR 命名 `ADR-013`、`ADR-014` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
@@ -599,6 +599,48 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 - 数据：`config/metrics.yaml`（6 metrics）+ 17 单元测试全绿 + 4-题真 Qwen smoke（3 命中 + 1 fallback）
 - 讨论：本 ADR 完整覆盖
 
+### Update 2026-08-12：接线完成 + A/B 数字
+
+**变更概览**：
+- 新增 `MetricRouter` 类（`RouteResult` dataclass + `try_route()` never raises）
+- `P1NL2SQLAgent.__init__` 加 `metric_router: MetricRouter | None = None` 参数
+- `run()` 在 SchemaLinker 之前 try_route；命中且模板 SQL 跑通直接返（不进 Reflect Loop）
+- `P1AgentResult` 加 5 字段：`route / metric_id / prefilter_cosine / metric_spec / metric_fail_reason`
+- `render_sql_from_spec` 加 `op='IN'` 支持（enum/string/numeric 三类校验；空 list 与非 list val 抛 `unsupported_op` / 类型错）
+- `run_p1_eval.py` 加 `--metric-catalog` / `--metric-prefilter-threshold`；`results/*.json` 顶层 `metric_router` 汇总段
+- Langfuse trace metadata 加 `route / metric_id / prefilter_cosine / metric_fail_reason`；batch trace 打 `arm:baseline` / `arm:metric_router` tag 区分实验臂
+
+**接线时发现并修掉的 catalog 定义错**（集成 smoke 打真 Postgres 暴露）：
+
+原型阶段的 4-题 smoke 只覆盖了 3 个命中 case，`config/metrics.yaml` 里有 3 处定义
+从未被真实执行过，全是必挂的错：
+
+| 问题 | 影响 | 修法 |
+|---|---|---|
+| `fbd.account_type` 列不存在（在 `dim_account` 上） | `deposit_balance` + `loan_balance` 100% executor_fail | 加 `account` join；因 `hard_filters` 无法声明 `requires_join`，给 `Metric` 新增 `hard_filter_joins` 字段，无条件拼进 FROM |
+| `ft.channel` 列不存在（实际 `transaction_channel`） | `transaction_amount` 的 channel 维度/过滤全废 | 改列名 |
+| `dc.is_active` 是 boolean 却声明成 `string` | 拼出 `= 'True'`，PG 类型错 | 新增 `boolean` filter 类型，渲染 TRUE/FALSE |
+
+`dim_account` 与 `fct_balance_daily` 是多对一，join 不放大行数（实测 449 行 join 后仍 449 行），
+AVG 口径不变。回归验证：6 metric × 全部 dim/filter 共 48 个组合真打 PG，改前 18 broken → 改后 0 broken。
+
+**教训**：原型阶段"单测全绿 + 少量 smoke"不足以证明 catalog 正确——模板里的列名只有真正
+execute 才会被校验。catalog 类改动必须配一个「全组合真打 DB」的回归扫描。
+
+**A/B 数字**（首次跑，2026-08-12）：
+
+TODO_AFTER_AB_RUN
+
+**跟进项闭环**：
+- P1 ✅ `op='IN'` 支持完成
+- P1 ✅ 接线到 P1 主路径完成（前置路由而非 SQLGenerator 内部 try/except）
+- P2 保留：指标目录扩容至 15-20 个（loan/campaign/risk 相关，独立 PR）
+- P3 保留：Streamlit "识别到 metric=X 确认" UX
+- P3 保留：Langfuse 看板 `metric_hit_rate` 图
+
+**Trace**：本次代码见 branch `feat/metric-router-p1-integration`；spec 与 plan 在
+`docs/superpowers/`（gitignored，本地保留）
+
 ---
 
-**最后更新**：2026-07-08
+**最后更新**：2026-08-12
