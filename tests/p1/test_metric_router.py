@@ -11,7 +11,6 @@ from chat_bi_agent.agents.p1.metric_resolver import (
     MetricResolverError,
     MetricRouter,
     MetricSpec,
-    RouteResult,
 )
 
 
@@ -75,7 +74,7 @@ def test_router_builds_index_on_construct(tmp_path):
     catalog = _tiny_catalog(tmp_path)
     aliases = ["存款余额", "日均存款", "客户数", "客户数量"]
     embed = MagicMock(side_effect=lambda texts: [[1.0, 0.0, 0.0] for _ in texts])
-    router = MetricRouter(catalog=catalog, embed_fn=embed, threshold=0.7)
+    MetricRouter(catalog=catalog, embed_fn=embed, threshold=0.7)
     # 构造时应对全部 4 条 aliases 批 embed 一次
     embed.assert_called_once()
     called_texts = embed.call_args[0][0]
@@ -177,7 +176,9 @@ def test_router_resolve_enum_error_classifies(tmp_path):
     router = MetricRouter(catalog=catalog, embed_fn=_fake_embed(q_vec, alias_vecs), threshold=0.7)
     from chat_bi_agent.agents.p1 import metric_resolver as mr
     mr._resolve_to_spec_and_sql = MagicMock(
-        side_effect=MetricResolverError("bad enum value '不存在' for filter customer_tier; expected ...")
+        side_effect=MetricResolverError(
+            "bad enum value '不存在' for filter customer_tier; expected ..."
+        )
     )
     result = router.try_route("XXX")
     assert result.fail_reason == "enum_out_of_range"
