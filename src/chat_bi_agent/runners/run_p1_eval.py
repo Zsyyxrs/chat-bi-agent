@@ -21,6 +21,7 @@ load_dotenv()
 
 from langfuse import observe  # noqa: E402
 
+from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog, MetricRouter  # noqa: E402
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent  # noqa: E402
 from chat_bi_agent.agents.shared.example_retriever import (  # noqa: E402
     ExamplePool,
@@ -67,6 +68,18 @@ def parse_args() -> argparse.Namespace:
         help="同域场景默认 0.7（比 BIRD 跨库的 0.55 严格，宁缺毋滥）",
     )
     p.add_argument(
+        "--metric-catalog",
+        type=Path,
+        default=None,
+        help="MetricCatalog YAML 路径（config/metrics.yaml）；不传就 metric router off",
+    )
+    p.add_argument(
+        "--metric-prefilter-threshold",
+        type=float,
+        default=0.7,
+        help="Metric router prefilter cosine 阈值，默认 0.7",
+    )
+    p.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -93,6 +106,78 @@ def _build_retriever(args: argparse.Namespace) -> ExampleRetriever | None:
     )
 
 
+def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
+    if args.metric_catalog is None:
+        return None
+    catalog = MetricCatalog.from_yaml(args.metric_catalog)
+    print(
+        f"[p1-eval] metric router ON catalog={args.metric_catalog} "
+        f"n_metrics={len(catalog.metrics)} threshold={args.metric_prefilter_threshold}",
+        flush=True,
+    )
+    return MetricRouter(
+        catalog=catalog,
+        embed_fn=qwen_client.embed,
+        threshold=args.metric_prefilter_threshold,
+    )
+
+
+def _summarize_metric_router(
+    per_question: list[dict],
+    enabled: bool,
+    catalog_path,
+    threshold: float | None,
+) -> dict | None:
+    if not enabled:
+        return None
+    n_total = len(per_question)
+    n_metric = sum(1 for r in per_question if r["route"] == "metric")
+    n_fallback = sum(1 for r in per_question if r["route"] == "metric_then_nl2sql")
+    n_bypass = sum(1 for r in per_question if r["route"] == "nl2sql")
+    n_prefilter_hit = n_metric + n_fallback
+
+    def _avg(scores: list[float]) -> float | None:
+        return round(sum(scores) / len(scores), 4) if scores else None
+
+    hit_scores = [r["score"] for r in per_question if r["route"] == "metric"]
+    fb_scores = [r["score"] for r in per_question if r["route"] == "metric_then_nl2sql"]
+    bp_scores = [r["score"] for r in per_question if r["route"] == "nl2sql"]
+
+    fallback_rate = round(n_fallback / n_prefilter_hit, 4) if n_prefilter_hit > 0 else None
+
+    fail_reasons = [
+        "no_metric",
+        "unknown_dim",
+        "enum_out_of_range",
+        "unsupported_op",
+        "validator_fail",
+        "executor_fail",
+    ]
+    breakdown = {fr: 0 for fr in fail_reasons}
+    for r in per_question:
+        fr = r.get("metric_fail_reason")
+        if fr in breakdown:
+            breakdown[fr] += 1
+
+    return {
+        "enabled": True,
+        "catalog_path": str(catalog_path) if catalog_path else None,
+        "prefilter_threshold": threshold,
+        "n_total": n_total,
+        "n_prefilter_hit": n_prefilter_hit,
+        "n_route_metric": n_metric,
+        "n_route_metric_then_nl2sql": n_fallback,
+        "n_route_nl2sql": n_bypass,
+        "metric_hit_rate": round(n_metric / n_total, 4) if n_total else 0.0,
+        "prefilter_hit_rate": round(n_prefilter_hit / n_total, 4) if n_total else 0.0,
+        "precision_when_hit": _avg(hit_scores),
+        "precision_when_fallback": _avg(fb_scores),
+        "precision_when_bypass": _avg(bp_scores),
+        "fallback_rate": fallback_rate,
+        "fail_reason_breakdown": breakdown,
+    }
+
+
 @observe(name="p1_eval_batch")
 def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
@@ -100,7 +185,19 @@ def main(args: argparse.Namespace | None = None) -> int:
     get_client()
     questions = load_questions()
     retriever = _build_retriever(args)
-    agent = P1NL2SQLAgent(top_k=4, example_retriever=retriever)
+    metric_router = _build_metric_router(args)
+    agent = P1NL2SQLAgent(top_k=4, example_retriever=retriever, metric_router=metric_router)
+    # A/B 实验臂打到 batch trace 的 tags 上。agent._tag_trace 只写 metadata，不碰 tags，
+    # 所以这里不会被逐题覆盖；Langfuse UI 里可直接按臂筛选。
+    try:
+        get_client().update_current_trace(
+            tags=[
+                "arm:metric_router" if metric_router is not None else "arm:baseline",
+                "fewshot:on" if retriever is not None else "fewshot:off",
+            ],
+        )
+    except Exception:
+        pass
     evaluator = PrecisionRetrievalEvaluator()
 
     evaluation = PrecisionEvaluation()
@@ -149,6 +246,11 @@ def main(args: argparse.Namespace | None = None) -> int:
                 "error_class": agent_result.error_class.value if agent_result.error_class else None,
                 "reflect_history": agent_result.reflect_history,
                 "sql": agent_result.sql,
+                "route": agent_result.route,
+                "metric_id": agent_result.metric_id,
+                "prefilter_cosine": agent_result.prefilter_cosine,
+                "metric_spec": agent_result.metric_spec,
+                "metric_fail_reason": agent_result.metric_fail_reason,
             }
         )
 
@@ -182,6 +284,12 @@ def main(args: argparse.Namespace | None = None) -> int:
             "k": args.few_shot_k,
             "min_similarity": args.few_shot_min_sim,
         },
+        "metric_router": _summarize_metric_router(
+            per_question=per_question,
+            enabled=metric_router is not None,
+            catalog_path=args.metric_catalog,
+            threshold=args.metric_prefilter_threshold if metric_router else None,
+        ),
         "total_questions": evaluation.total_questions,
         "passed_questions": evaluation.passed_questions,
         "pass_rate": round(evaluation.pass_rate, 4),
