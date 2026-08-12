@@ -84,6 +84,7 @@ class P1NL2SQLAgent:
 
         if self.metric_router is not None:
             from dataclasses import asdict as _asdict
+
             rr = self.metric_router.try_route(question)
             r_prefilter_cosine = rr.cosine
             if rr.prefilter_hit:
@@ -100,7 +101,9 @@ class P1NL2SQLAgent:
                         if exec_err is None:
                             elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
                             self._tag_trace(
-                                [], None, [],
+                                [],
+                                None,
+                                [],
                                 route="metric",
                                 metric_id=rr.metric_id,
                                 prefilter_cosine=rr.cosine,
@@ -192,7 +195,9 @@ class P1NL2SQLAgent:
                     if exec_err is None:
                         elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
                         self._tag_trace(
-                            reflect_history, None, retrieved_example_ids,
+                            reflect_history,
+                            None,
+                            retrieved_example_ids,
                             route=route,
                             metric_id=r_metric_id,
                             prefilter_cosine=r_prefilter_cosine,
@@ -249,7 +254,9 @@ class P1NL2SQLAgent:
 
         elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
         self._tag_trace(
-            reflect_history, last_err_class, retrieved_example_ids,
+            reflect_history,
+            last_err_class,
+            retrieved_example_ids,
             route=route,
             metric_id=r_metric_id,
             prefilter_cosine=r_prefilter_cosine,

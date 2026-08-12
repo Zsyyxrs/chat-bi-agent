@@ -196,7 +196,7 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
                         )
                 joined = ", ".join(f"'{v}'" for v in val)
             elif fdef.type == "string":
-                joined = ", ".join(f"'{str(v).replace(chr(39), chr(39)*2)}'" for v in val)
+                joined = ", ".join(f"'{str(v).replace(chr(39), chr(39) * 2)}'" for v in val)
             elif fdef.type == "numeric":
                 joined = ", ".join(str(v) for v in val)
             else:

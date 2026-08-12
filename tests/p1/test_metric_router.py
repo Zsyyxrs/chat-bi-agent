@@ -97,6 +97,7 @@ def test_router_prefilter_hit_returns_metric_id(tmp_path):
     )
     # mock resolve 下游
     from chat_bi_agent.agents.p1 import metric_resolver as mr
+
     mr._resolve_to_spec_and_sql = MagicMock(
         return_value=(MetricSpec(metric_id="deposit_balance"), "SELECT 1")
     )
@@ -146,6 +147,7 @@ def test_router_threshold_boundary_above(tmp_path):
     alias_vecs = {a: [1.0, 0.0, 0.0] for a in ["存款余额", "日均存款", "客户数", "客户数量"]}
     router = MetricRouter(catalog=catalog, embed_fn=_fake_embed(q_vec, alias_vecs), threshold=0.7)
     from chat_bi_agent.agents.p1 import metric_resolver as mr
+
     mr._resolve_to_spec_and_sql = MagicMock(
         return_value=(MetricSpec(metric_id="deposit_balance"), "SELECT 1")
     )
@@ -160,6 +162,7 @@ def test_router_resolve_no_metric_classifies_fail_reason(tmp_path):
     alias_vecs = {a: [1.0, 0.0, 0.0] for a in ["存款余额", "日均存款", "客户数", "客户数量"]}
     router = MetricRouter(catalog=catalog, embed_fn=_fake_embed(q_vec, alias_vecs), threshold=0.7)
     from chat_bi_agent.agents.p1 import metric_resolver as mr
+
     mr._resolve_to_spec_and_sql = MagicMock(
         side_effect=MetricResolverError("no metric matched (LLM returned metric_id=null)")
     )
@@ -175,6 +178,7 @@ def test_router_resolve_enum_error_classifies(tmp_path):
     alias_vecs = {a: [1.0, 0.0, 0.0] for a in ["存款余额", "日均存款", "客户数", "客户数量"]}
     router = MetricRouter(catalog=catalog, embed_fn=_fake_embed(q_vec, alias_vecs), threshold=0.7)
     from chat_bi_agent.agents.p1 import metric_resolver as mr
+
     mr._resolve_to_spec_and_sql = MagicMock(
         side_effect=MetricResolverError(
             "bad enum value '不存在' for filter customer_tier; expected ..."
@@ -190,6 +194,7 @@ def test_router_resolve_unknown_dim_classifies(tmp_path):
     alias_vecs = {a: [1.0, 0.0, 0.0] for a in ["存款余额", "日均存款", "客户数", "客户数量"]}
     router = MetricRouter(catalog=catalog, embed_fn=_fake_embed(q_vec, alias_vecs), threshold=0.7)
     from chat_bi_agent.agents.p1 import metric_resolver as mr
+
     mr._resolve_to_spec_and_sql = MagicMock(
         side_effect=MetricResolverError("unknown dim 'not_a_dim' for metric deposit_balance")
     )
@@ -203,6 +208,7 @@ def test_router_resolve_unsupported_op_classifies(tmp_path):
     alias_vecs = {a: [1.0, 0.0, 0.0] for a in ["存款余额", "日均存款", "客户数", "客户数量"]}
     router = MetricRouter(catalog=catalog, embed_fn=_fake_embed(q_vec, alias_vecs), threshold=0.7)
     from chat_bi_agent.agents.p1 import metric_resolver as mr
+
     mr._resolve_to_spec_and_sql = MagicMock(
         side_effect=MetricResolverError("unsupported_op: empty IN for filter customer_tier")
     )

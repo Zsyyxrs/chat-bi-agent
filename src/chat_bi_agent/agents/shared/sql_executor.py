@@ -9,6 +9,8 @@ import psycopg2
 from langfuse import observe
 from psycopg2.extras import RealDictCursor
 
+from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS
+
 
 def _pyify_value(v: object) -> object:
     """把 psycopg2 从 NUMERIC 列返回的 Decimal 转成 float。
@@ -19,8 +21,6 @@ def _pyify_value(v: object) -> object:
     if isinstance(v, Decimal):
         return float(v)
     return v
-
-from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS
 
 
 class UnsafeSQLError(Exception):

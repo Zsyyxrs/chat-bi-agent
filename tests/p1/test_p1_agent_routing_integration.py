@@ -75,15 +75,11 @@ def test_every_metric_dim_filter_combo_executes_on_real_pg(real_catalog):
 
         for dims, filters in combos:
             checked += 1
-            spec = MetricSpec(
-                metric_id=m.id, dims=dims, filters=filters, time_window=tw
-            )
+            spec = MetricSpec(metric_id=m.id, dims=dims, filters=filters, time_window=tw)
             sql = render_sql_from_spec(spec, real_catalog)
             _, err = executor.execute(sql)
             if err is not None:
-                failures.append(
-                    f"{m.id} dims={dims} filters={filters}: {err.splitlines()[0]}"
-                )
+                failures.append(f"{m.id} dims={dims} filters={filters}: {err.splitlines()[0]}")
 
     assert checked >= 40, f"组合数骤降到 {checked}，catalog 可能被截断"
     assert not failures, "以下 metric 组合在真实 schema 上跑不通：\n" + "\n".join(failures)

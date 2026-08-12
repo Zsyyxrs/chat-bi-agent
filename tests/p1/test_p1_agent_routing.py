@@ -12,12 +12,14 @@ from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 
 def _make_agent(metric_router=None):
     """构造 agent，patch 掉 schema loader 与 embedding 索引构建。"""
-    with patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLoader") as mock_loader_cls, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLinker") as mock_linker_cls, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLGenerator"), \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLValidator") as mock_val_cls, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLExecutor") as mock_exec_cls, \
-         patch("chat_bi_agent.agents.p1.nl2sql_agent.Reflector"):
+    with (
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLoader") as mock_loader_cls,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SchemaLinker") as mock_linker_cls,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLGenerator"),
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLValidator") as mock_val_cls,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.SQLExecutor") as mock_exec_cls,
+        patch("chat_bi_agent.agents.p1.nl2sql_agent.Reflector"),
+    ):
         mock_loader = MagicMock()
         mock_loader.get_ddl_text = MagicMock(return_value="DDL")
         mock_loader_cls.return_value = mock_loader
@@ -61,8 +63,12 @@ def test_run_prefilter_miss_falls_through_to_nl2sql():
     """prefilter miss → route='nl2sql', 但 prefilter_cosine 记录 max cosine。"""
     router = MagicMock()
     router.try_route.return_value = RouteResult(
-        prefilter_hit=False, metric_id=None, cosine=0.42,
-        sql=None, spec=None, fail_reason=None,
+        prefilter_hit=False,
+        metric_id=None,
+        cosine=0.42,
+        sql=None,
+        spec=None,
+        fail_reason=None,
     )
     agent = _make_agent(metric_router=router)
     with patch.object(agent.sql_generator, "generate") as mock_gen:
@@ -78,8 +84,12 @@ def test_run_route_metric_success_skips_reflect_loop():
     spec = MetricSpec(metric_id="deposit_balance")
     router = MagicMock()
     router.try_route.return_value = RouteResult(
-        prefilter_hit=True, metric_id="deposit_balance", cosine=0.85,
-        sql="SELECT AVG(balance) FROM fct_balance_daily", spec=spec, fail_reason=None,
+        prefilter_hit=True,
+        metric_id="deposit_balance",
+        cosine=0.85,
+        sql="SELECT AVG(balance) FROM fct_balance_daily",
+        spec=spec,
+        fail_reason=None,
     )
     agent = _make_agent(metric_router=router)
     result = agent.run(question_id="q1", question="存款余额")
@@ -96,8 +106,12 @@ def test_run_route_metric_success_skips_reflect_loop():
 def test_run_route_metric_then_nl2sql_on_resolve_no_metric():
     router = MagicMock()
     router.try_route.return_value = RouteResult(
-        prefilter_hit=True, metric_id="deposit_balance", cosine=0.85,
-        sql=None, spec=None, fail_reason="no_metric",
+        prefilter_hit=True,
+        metric_id="deposit_balance",
+        cosine=0.85,
+        sql=None,
+        spec=None,
+        fail_reason="no_metric",
     )
     agent = _make_agent(metric_router=router)
     with patch.object(agent.sql_generator, "generate") as mock_gen:
@@ -113,8 +127,12 @@ def test_run_route_metric_then_nl2sql_on_validator_fail():
     spec = MetricSpec(metric_id="deposit_balance")
     router = MagicMock()
     router.try_route.return_value = RouteResult(
-        prefilter_hit=True, metric_id="deposit_balance", cosine=0.85,
-        sql="BAD SQL", spec=spec, fail_reason=None,
+        prefilter_hit=True,
+        metric_id="deposit_balance",
+        cosine=0.85,
+        sql="BAD SQL",
+        spec=spec,
+        fail_reason=None,
     )
     agent = _make_agent(metric_router=router)
     agent._mocks["validator"].validate.return_value = MagicMock(ok=False, error="syntax")
@@ -129,8 +147,12 @@ def test_run_route_metric_then_nl2sql_on_executor_fail():
     spec = MetricSpec(metric_id="deposit_balance")
     router = MagicMock()
     router.try_route.return_value = RouteResult(
-        prefilter_hit=True, metric_id="deposit_balance", cosine=0.85,
-        sql="SELECT * FROM t", spec=spec, fail_reason=None,
+        prefilter_hit=True,
+        metric_id="deposit_balance",
+        cosine=0.85,
+        sql="SELECT * FROM t",
+        spec=spec,
+        fail_reason=None,
     )
     agent = _make_agent(metric_router=router)
     agent._mocks["executor"].execute.return_value = (None, "relation does not exist")
@@ -156,8 +178,12 @@ def test_run_route_metric_success_spec_serialized_to_dict():
     )
     router = MagicMock()
     router.try_route.return_value = RouteResult(
-        prefilter_hit=True, metric_id="deposit_balance", cosine=0.9,
-        sql="SELECT 1", spec=spec, fail_reason=None,
+        prefilter_hit=True,
+        metric_id="deposit_balance",
+        cosine=0.9,
+        sql="SELECT 1",
+        spec=spec,
+        fail_reason=None,
     )
     agent = _make_agent(metric_router=router)
     result = agent.run(question_id="q1", question="X")
@@ -168,6 +194,7 @@ def test_run_route_metric_success_spec_serialized_to_dict():
 
 def test_tag_trace_includes_route_metadata_when_metric_hit():
     from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent
+
     with patch("chat_bi_agent.agents.p1.nl2sql_agent.get_client") as mock_gc:
         mock_client = MagicMock()
         mock_gc.return_value = mock_client
