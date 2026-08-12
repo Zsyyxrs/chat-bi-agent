@@ -17,6 +17,7 @@ NL2SQL 路径。
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -312,11 +313,133 @@ def _parse_spec(raw: str) -> MetricSpec:
     )
 
 
-@observe(name="metric_resolve")
-def resolve(question: str, catalog: MetricCatalog) -> str:
-    """端到端：question → SQL；失败抛 MetricResolverError（调用方兜底走 NL2SQL）。"""
+def _resolve_to_spec_and_sql(question: str, catalog: MetricCatalog) -> tuple[MetricSpec, str]:
+    """内部：question → (spec, sql)。失败抛 MetricResolverError。"""
     system_prompt = _build_extractor_prompt(catalog)
     user_prompt = f"用户问题：{question}\n请输出 JSON。"
     chat_result = qwen_client.chat(system_prompt=system_prompt, user_prompt=user_prompt)
     spec = _parse_spec(chat_result.content)
-    return render_sql_from_spec(spec, catalog)
+    sql = render_sql_from_spec(spec, catalog)
+    return spec, sql
+
+
+@observe(name="metric_resolve")
+def resolve(question: str, catalog: MetricCatalog) -> str:
+    """端到端：question → SQL；失败抛 MetricResolverError（调用方兜底走 NL2SQL）。"""
+    _, sql = _resolve_to_spec_and_sql(question, catalog)
+    return sql
+
+
+# ---------------------------- 前置路由 ----------------------------
+
+
+@dataclass
+class RouteResult:
+    """MetricRouter.try_route 的返回值——永远不 raise。"""
+
+    prefilter_hit: bool
+    metric_id: str | None
+    cosine: float
+    sql: str | None
+    spec: MetricSpec | None
+    fail_reason: str | None  # "no_metric" | "unknown_dim" | "enum_out_of_range" | "unsupported_op" | None
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _classify_metric_error(msg: str) -> str:
+    """把 MetricResolverError 的 message 映射到 fail_reason 枚举。"""
+    low = msg.lower()
+    if "no metric matched" in low or "metric_id=null" in low:
+        return "no_metric"
+    if "unknown dim" in low:
+        return "unknown_dim"
+    if "bad enum value" in low:
+        return "enum_out_of_range"
+    if "unsupported_op" in low or "unsupported filter type" in low or "in filter" in low:
+        return "unsupported_op"
+    if "unknown filter" in low or "unknown metric_id" in low:
+        return "unknown_dim"  # 归到最相近的
+    return "unknown_dim"  # 兜底：未识别的 metric 结构错
+
+
+class MetricRouter:
+    """catalog embedding prefilter + resolve 的一体化路由层。构造时批量 embed 所有 aliases。"""
+
+    def __init__(
+        self,
+        catalog: MetricCatalog,
+        embed_fn,  # Callable[[list[str]], list[list[float]]]
+        threshold: float = 0.7,
+    ):
+        self.catalog = catalog
+        self.embed_fn = embed_fn
+        self.threshold = threshold
+
+        # 构建索引：list of (metric_id, alias_vec)
+        all_aliases: list[tuple[str, str]] = []
+        for m in catalog.metrics:
+            for a in m.aliases:
+                all_aliases.append((m.id, a))
+
+        self._alias_index: list[tuple[str, list[float]]] = []
+        if all_aliases:
+            texts = [a for _, a in all_aliases]
+            vecs = embed_fn(texts)
+            self._alias_index = [
+                (mid, vec) for (mid, _), vec in zip(all_aliases, vecs, strict=True)
+            ]
+
+    def try_route(self, question: str) -> RouteResult:
+        """从不抛异常。"""
+        # 1. embed 问题
+        q_vec = self.embed_fn([question])[0]
+
+        # 2. 找 top-1 alias
+        best_mid: str | None = None
+        best_cos: float = -1.0
+        for mid, vec in self._alias_index:
+            cos = _cosine(q_vec, vec)
+            if cos > best_cos:
+                best_cos = cos
+                best_mid = mid
+
+        # 3. 阈值 gate
+        if best_cos < self.threshold or best_mid is None:
+            return RouteResult(
+                prefilter_hit=False,
+                metric_id=None,
+                cosine=best_cos if best_cos > -1.0 else 0.0,
+                sql=None,
+                spec=None,
+                fail_reason=None,
+            )
+
+        # 4. resolve
+        try:
+            spec, sql = _resolve_to_spec_and_sql(question, self.catalog)
+        except MetricResolverError as e:
+            return RouteResult(
+                prefilter_hit=True,
+                metric_id=best_mid,
+                cosine=best_cos,
+                sql=None,
+                spec=None,
+                fail_reason=_classify_metric_error(str(e)),
+            )
+
+        return RouteResult(
+            prefilter_hit=True,
+            metric_id=spec.metric_id,
+            cosine=best_cos,
+            sql=sql,
+            spec=spec,
+            fail_reason=None,
+        )
