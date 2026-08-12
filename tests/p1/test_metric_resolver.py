@@ -235,3 +235,110 @@ def test_resolve_invalid_llm_json_raises():
     ):
         with pytest.raises(MetricResolverError):
             resolve(question="q", catalog=_get_cat())
+
+
+# ---------------------- IN operator tests ----------------------
+
+
+def _mini_catalog(tmp_path):
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(
+        """
+version: 1
+metrics:
+  - id: customer_count
+    display_name: 客户数
+    aliases: [客户数, 客户数量]
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    joins:
+      branch: JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id
+    dim_catalog: {}
+    filter_catalog:
+      customer_tier:
+        column: dc.customer_tier
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+      branch_id:
+        column: dc.branch_id
+        type: string
+      age:
+        column: dc.age
+        type: numeric
+""",
+        encoding="utf-8",
+    )
+    return MetricCatalog.from_yaml(yml)
+
+
+def test_in_op_enum_multi_values(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "customer_tier", "op": "IN", "val": ["HIGH_NET_WORTH", "AFFLUENT"]}],
+    )
+    sql = render_sql_from_spec(spec, catalog)
+    assert "dc.customer_tier IN ('HIGH_NET_WORTH', 'AFFLUENT')" in sql
+
+
+def test_in_op_enum_single_value(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "customer_tier", "op": "IN", "val": ["MASS"]}],
+    )
+    sql = render_sql_from_spec(spec, catalog)
+    assert "dc.customer_tier IN ('MASS')" in sql
+
+
+def test_in_op_enum_bad_value_raises(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "customer_tier", "op": "IN", "val": ["HIGH_NET_WORTH", "无此层级"]}],
+    )
+    with pytest.raises(MetricResolverError, match="bad enum value"):
+        render_sql_from_spec(spec, catalog)
+
+
+def test_in_op_string_type_quotes_and_escapes(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "branch_id", "op": "IN", "val": ["BR_CITY_0000", "BR_CITY_0002"]}],
+    )
+    sql = render_sql_from_spec(spec, catalog)
+    assert "dc.branch_id IN ('BR_CITY_0000', 'BR_CITY_0002')" in sql
+
+
+def test_in_op_numeric_type_no_quotes(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "age", "op": "IN", "val": [60, 65, 70]}],
+    )
+    sql = render_sql_from_spec(spec, catalog)
+    assert "dc.age IN (60, 65, 70)" in sql
+
+
+def test_in_op_empty_list_raises_unsupported(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "customer_tier", "op": "IN", "val": []}],
+    )
+    with pytest.raises(MetricResolverError, match="empty IN"):
+        render_sql_from_spec(spec, catalog)
+
+
+def test_in_op_non_list_val_raises(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "branch_id", "op": "IN", "val": "BR_CITY_0000"}],
+    )
+    with pytest.raises(MetricResolverError, match="IN.*list"):
+        render_sql_from_spec(spec, catalog)

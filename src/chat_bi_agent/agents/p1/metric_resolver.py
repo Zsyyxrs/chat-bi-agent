@@ -173,6 +173,30 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
         fdef = metric.filter_catalog[f["col"]]
         op = f.get("op", "=")
         val = f.get("val")
+
+        if op == "IN":
+            if not isinstance(val, list):
+                raise MetricResolverError(f"IN filter {f['col']!r} val 必须是 list，收到 {type(val).__name__}")
+            if len(val) == 0:
+                raise MetricResolverError(f"unsupported_op: empty IN for filter {f['col']!r}")
+
+            if fdef.type == "enum":
+                for v in val:
+                    if v not in fdef.enum_values:
+                        raise MetricResolverError(
+                            f"bad enum value {v!r} for filter {f['col']}; "
+                            f"expected one of {fdef.enum_values}"
+                        )
+                joined = ", ".join(f"'{v}'" for v in val)
+            elif fdef.type == "string":
+                joined = ", ".join(f"'{str(v).replace(chr(39), chr(39)*2)}'" for v in val)
+            elif fdef.type == "numeric":
+                joined = ", ".join(str(v) for v in val)
+            else:
+                raise MetricResolverError(f"unsupported filter type {fdef.type!r} for IN")
+            where_parts.append(f"{fdef.column} IN ({joined})")
+            continue
+
         if fdef.type == "enum":
             if val not in fdef.enum_values:
                 raise MetricResolverError(
@@ -181,7 +205,6 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
                 )
             where_parts.append(f"{fdef.column} {op} '{val}'")
         elif fdef.type == "string":
-            # 简单转义单引号
             safe = str(val).replace("'", "''")
             where_parts.append(f"{fdef.column} {op} '{safe}'")
         elif fdef.type == "numeric":
