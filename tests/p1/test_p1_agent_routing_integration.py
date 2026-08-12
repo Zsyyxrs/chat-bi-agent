@@ -19,6 +19,7 @@ from chat_bi_agent.agents.p1.metric_resolver import (
     render_sql_from_spec,
 )
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent
+from chat_bi_agent.agents.shared.sql_executor import SQLExecutor
 
 CATALOG_PATH = Path(__file__).resolve().parents[2] / "config" / "metrics.yaml"
 
@@ -38,6 +39,54 @@ def _make_embed_fn(target_aliases: set[str]):
         return [[1.0, 0.0] if t in target_aliases else [0.0, 1.0] for t in texts]
 
     return fake_embed
+
+
+@pytest.mark.integration
+def test_every_metric_dim_filter_combo_executes_on_real_pg(real_catalog):
+    """catalog 全组合真打 PG。
+
+    模板里的列名/类型只有真正 execute 才会被校验——单测拼出 SQL 字符串就算过，
+    但列不存在照样 100% executor_fail。2026-08-12 就是这么漏掉 3 处定义错的
+    （fbd.account_type / ft.channel / dc.is_active），48 组合里 18 组挂。
+    catalog 改完必须跑这个。
+    """
+    if not os.environ.get("PG_HOST"):
+        pytest.skip("PG 未配置")
+
+    executor = SQLExecutor()
+    failures: list[str] = []
+    checked = 0
+
+    for m in real_catalog.metrics:
+        tw = {"start": "2026-05-01", "end": "2026-05-31"} if m.date_column else None
+
+        combos: list[tuple[list[str], list[dict]]] = [([], [])]
+        combos += [([dim_id], []) for dim_id in m.dim_catalog]
+        for fid, fdef in m.filter_catalog.items():
+            if fdef.type == "enum":
+                val = fdef.enum_values[0]
+            elif fdef.type == "boolean":
+                val = True
+            elif fdef.type == "numeric":
+                val = 0
+            else:
+                val = "X"
+            combos.append(([], [{"col": fid, "op": "=", "val": val}]))
+
+        for dims, filters in combos:
+            checked += 1
+            spec = MetricSpec(
+                metric_id=m.id, dims=dims, filters=filters, time_window=tw
+            )
+            sql = render_sql_from_spec(spec, real_catalog)
+            _, err = executor.execute(sql)
+            if err is not None:
+                failures.append(
+                    f"{m.id} dims={dims} filters={filters}: {err.splitlines()[0]}"
+                )
+
+    assert checked >= 40, f"组合数骤降到 {checked}，catalog 可能被截断"
+    assert not failures, "以下 metric 组合在真实 schema 上跑不通：\n" + "\n".join(failures)
 
 
 @pytest.mark.integration
