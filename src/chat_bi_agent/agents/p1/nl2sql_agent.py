@@ -75,6 +75,68 @@ class P1NL2SQLAgent:
         except Exception:
             trace_id = None
 
+        # ---- 语义层前置路由（metric_router=None 时短路） ----
+        route: str = "nl2sql"
+        r_metric_id: str | None = None
+        r_prefilter_cosine: float | None = None
+        r_metric_spec_dict: dict | None = None
+        r_metric_fail_reason: str | None = None
+
+        if self.metric_router is not None:
+            from dataclasses import asdict as _asdict
+            rr = self.metric_router.try_route(question)
+            r_prefilter_cosine = rr.cosine
+            if rr.prefilter_hit:
+                r_metric_id = rr.metric_id
+                if rr.sql is not None and rr.spec is not None:
+                    # 命中且 resolve 成功：跑 template SQL 完整链
+                    template_sql = rr.sql
+                    val = self.sql_validator.validate(template_sql)
+                    if not val.ok:
+                        route = "metric_then_nl2sql"
+                        r_metric_fail_reason = "validator_fail"
+                    else:
+                        rows, exec_err = self.sql_executor.execute(template_sql)
+                        if exec_err is None:
+                            elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
+                            self._tag_trace(
+                                [], None, [],
+                                route="metric",
+                                metric_id=rr.metric_id,
+                                prefilter_cosine=rr.cosine,
+                                metric_fail_reason=None,
+                            )
+                            return P1AgentResult(
+                                question_id=question_id,
+                                sql=template_sql,
+                                rows=rows,
+                                execution_error=None,
+                                error_class=None,
+                                schema_link_top_k=[],
+                                thought="",
+                                attempts=1,
+                                total_latency_ms=elapsed_ms,
+                                reflect_history=[],
+                                retrieved_example_ids=[],
+                                trace_id=trace_id,
+                                route="metric",
+                                metric_id=rr.metric_id,
+                                prefilter_cosine=rr.cosine,
+                                metric_spec=_asdict(rr.spec),
+                                metric_fail_reason=None,
+                            )
+                        # executor failed
+                        route = "metric_then_nl2sql"
+                        r_metric_fail_reason = "executor_fail"
+                else:
+                    # resolve 失败
+                    route = "metric_then_nl2sql"
+                    r_metric_fail_reason = rr.fail_reason
+                # 命中但没跑通：保留 spec 以便 A/B 事后审计
+                if rr.spec is not None:
+                    r_metric_spec_dict = _asdict(rr.spec)
+            # prefilter miss：route 保持 "nl2sql"，仅 prefilter_cosine 记录
+
         matches = self.schema_linker.link(question)
         if not matches:
             raise RuntimeError(f"SchemaLinker 未召回任何表，question: {question!r}")
@@ -129,7 +191,13 @@ class P1NL2SQLAgent:
                     rows, exec_err = self.sql_executor.execute(gen.sql)
                     if exec_err is None:
                         elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
-                        self._tag_trace(reflect_history, None, retrieved_example_ids)
+                        self._tag_trace(
+                            reflect_history, None, retrieved_example_ids,
+                            route=route,
+                            metric_id=r_metric_id,
+                            prefilter_cosine=r_prefilter_cosine,
+                            metric_fail_reason=r_metric_fail_reason,
+                        )
                         return P1AgentResult(
                             question_id=question_id,
                             sql=gen.sql,
@@ -143,6 +211,11 @@ class P1NL2SQLAgent:
                             reflect_history=reflect_history,
                             retrieved_example_ids=retrieved_example_ids,
                             trace_id=trace_id,
+                            route=route,
+                            metric_id=r_metric_id,
+                            prefilter_cosine=r_prefilter_cosine,
+                            metric_spec=r_metric_spec_dict,
+                            metric_fail_reason=r_metric_fail_reason,
                         )
                     err_class = self.sql_executor.classify_error(exec_err)
                     err_msg = exec_err
@@ -175,7 +248,13 @@ class P1NL2SQLAgent:
             hint = decision.repair_hint
 
         elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
-        self._tag_trace(reflect_history, last_err_class, retrieved_example_ids)
+        self._tag_trace(
+            reflect_history, last_err_class, retrieved_example_ids,
+            route=route,
+            metric_id=r_metric_id,
+            prefilter_cosine=r_prefilter_cosine,
+            metric_fail_reason=r_metric_fail_reason,
+        )
 
         return P1AgentResult(
             question_id=question_id,
@@ -190,6 +269,11 @@ class P1NL2SQLAgent:
             reflect_history=reflect_history,
             retrieved_example_ids=retrieved_example_ids,
             trace_id=trace_id,
+            route=route,
+            metric_id=r_metric_id,
+            prefilter_cosine=r_prefilter_cosine,
+            metric_spec=r_metric_spec_dict,
+            metric_fail_reason=r_metric_fail_reason,
         )
 
     @staticmethod
@@ -197,8 +281,13 @@ class P1NL2SQLAgent:
         reflect_history: list[dict],
         error_class: SQLErrorClass | None,
         retrieved_example_ids: list[str] | None = None,
+        *,
+        route: str = "nl2sql",
+        metric_id: str | None = None,
+        prefilter_cosine: float | None = None,
+        metric_fail_reason: str | None = None,
     ) -> None:
-        """把 reflect_history / error_class / retrieved_example_ids 写到 langfuse trace。"""
+        """把 reflect_history / error_class / metric router 字段写到 langfuse trace。"""
         try:
             client = get_client()
             client.update_current_trace(
@@ -206,6 +295,10 @@ class P1NL2SQLAgent:
                     "reflect_history": reflect_history,
                     "error_class": error_class.value if error_class else None,
                     "retrieved_example_ids": retrieved_example_ids or [],
+                    "route": route,
+                    "metric_id": metric_id,
+                    "prefilter_cosine": prefilter_cosine,
+                    "metric_fail_reason": metric_fail_reason,
                 },
             )
         except Exception:
