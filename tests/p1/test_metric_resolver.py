@@ -434,3 +434,47 @@ def test_extractor_prompt_requires_value_domain_match():
 
     prompt = _build_extractor_prompt(_get_cat())
     assert "值域" in prompt
+
+
+# ---------------------- 冗余别名 ----------------------
+
+
+def test_dim_alias_omitted_when_same_as_bare_column():
+    """别名与裸列名相同时不输出 AS——冗余，且会干扰按列名比对的评分器。"""
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=["branch_id"],
+        filters=[],
+        time_window=None,
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "dc.branch_id AS branch_id" not in sql
+    assert "SELECT dc.branch_id," in sql
+
+
+def test_dim_alias_kept_when_it_renames_the_column():
+    """别名与列名不同时必须保留 AS（branch_city 的列是 dbr.city，别名 city）。"""
+    cat = _get_cat()
+    m = cat.get("customer_count")
+    assert m.dim_catalog["branch_city"].select_expr == "dbr.city"
+    assert m.dim_catalog["branch_city"].alias == "city"
+    # 别名 city == 裸列名 city → 应省略
+    spec = MetricSpec(metric_id="customer_count", dims=["branch_city"], time_window=None)
+    assert "dbr.city AS city" not in render_sql_from_spec(spec, cat)
+
+    # 构造一个真正重命名的 dim，AS 必须留着
+    probe = type(m.dim_catalog["branch_id"])(
+        id="_probe", select_expr="dc.branch_id", alias="网点编号"
+    )
+    m.dim_catalog["_probe"] = probe
+    spec2 = MetricSpec(metric_id="customer_count", dims=["_probe"], time_window=None)
+    assert "dc.branch_id AS 网点编号" in render_sql_from_spec(spec2, cat)
+
+
+def test_metric_expr_always_keeps_its_alias():
+    """聚合表达式的别名永远保留——COUNT(...) 没有裸列名可省。"""
+    cat = _get_cat()
+    spec = MetricSpec(metric_id="customer_count", dims=[], time_window=None)
+    sql = render_sql_from_spec(spec, cat)
+    assert "AS customer_count" in sql

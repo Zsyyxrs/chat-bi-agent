@@ -137,6 +137,9 @@ class MetricSpec:
 
 # ---------------------------- SQL 拼装 ----------------------------
 
+# 形如 `tbl.col` 或 `col` 的裸列引用（不含函数/运算/字面量）
+_PLAIN_COLUMN_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?")
+
 
 def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     """把 MetricSpec 套上 metric 模板生成 SQL。所有验证都在这里做。"""
@@ -168,7 +171,14 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     group_by_parts: list[str] = []
     for dim_id in spec.dims:
         d = metric.dim_catalog[dim_id]
-        select_parts.append(f"{d.select_expr} AS {d.alias}")
+        # 别名与裸列名相同就别输出 AS：纯冗余，且会干扰按列名比对的下游
+        # （评分器要剥掉带 AS 的列来还原"真实 schema 列"，全别名化会剥成空集）
+        bare_col = d.select_expr.rsplit(".", 1)[-1]
+        is_plain_column = _PLAIN_COLUMN_RE.fullmatch(d.select_expr) is not None
+        if is_plain_column and bare_col == d.alias:
+            select_parts.append(d.select_expr)
+        else:
+            select_parts.append(f"{d.select_expr} AS {d.alias}")
         group_by_parts.append(d.select_expr)
     select_parts.append(f"{metric.metric_expr} AS {metric.metric_alias}")
 
