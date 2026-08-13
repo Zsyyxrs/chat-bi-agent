@@ -598,3 +598,17 @@ def test_router_without_probe_fn_skips_domain_check(tmp_path):
         rr = router.try_route("随便问点什么")
     assert rr.fail_reason is None
     assert rr.sql == "SELECT 1"
+
+
+def test_extractor_prompt_rejects_ordering_and_top_n():
+    """spec 结构里没有 ORDER BY / LIMIT，排序取顶类问题必须拒绝而非硬凑。
+
+    A/B 实测：问"存款余额最高的前 5 个分行"，LLM 映射到 deposit_balance 却丢掉
+    Top-5，返回全部分行。SQL 合法、值域也对，只是答的是另一个问题——和当初丢掉
+    IN 约束同一类失败。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "排序" in prompt
+    assert "最高" in prompt or "前 N" in prompt

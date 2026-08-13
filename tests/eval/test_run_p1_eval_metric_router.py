@@ -100,23 +100,21 @@ def test_routing_accuracy_counts_tp_fp_fn_tn():
     from chat_bi_agent.runners.run_p1_eval import _summarize_metric_router
 
     per_q = [
-        _mkr("metric", 1.0, "metric"),              # TP：该走且走了
+        _mkr("metric", 1.0, "metric"),  # TP：该走且走了
         _mkr("metric_then_nl2sql", 0.9, "metric"),  # FN：该走但没走通
-        _mkr("nl2sql", 0.9, "metric"),              # FN：该走但 prefilter 没命中
-        _mkr("metric", 0.5, "nl2sql"),              # FP：不该走却走了
-        _mkr("nl2sql", 0.9, "nl2sql"),              # TN
+        _mkr("nl2sql", 0.9, "metric"),  # FN：该走但 prefilter 没命中
+        _mkr("metric", 0.5, "nl2sql"),  # FP：不该走却走了
+        _mkr("nl2sql", 0.9, "nl2sql"),  # TN
         _mkr("metric_then_nl2sql", 0.9, "nl2sql"),  # TN（prefilter 误触但已回退）
     ]
-    r = _summarize_metric_router(
-        per_question=per_q, enabled=True, catalog_path="x", threshold=0.6
-    )
+    r = _summarize_metric_router(per_question=per_q, enabled=True, catalog_path="x", threshold=0.6)
     acc = r["routing_accuracy"]
     assert acc["n_labeled"] == 6
     assert acc["true_positive"] == 1
     assert acc["false_positive"] == 1
     assert acc["false_negative"] == 2
     assert acc["true_negative"] == 2
-    assert acc["precision"] == 0.5     # 1/(1+1)
+    assert acc["precision"] == 0.5  # 1/(1+1)
     assert acc["recall"] == round(1 / 3, 4)
     # 两条都不该过阈值却过了：一条走成了 metric，一条误触后回退。
     # 回退那条答案不受影响，但仍算 prefilter 误触——它白花了一次 LLM 调用。
