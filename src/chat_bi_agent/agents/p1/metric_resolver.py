@@ -141,6 +141,58 @@ class MetricSpec:
 _PLAIN_COLUMN_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?")
 
 
+def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
+    """把一条 filter 渲染成 WHERE 谓词。所有值校验都在这里。
+
+    主渲染与值域探针共用同一份实现——分成两份迟早会漂移。
+    """
+    op = f.get("op", "=")
+    val = f.get("val")
+
+    if op == "IN":
+        if not isinstance(val, list):
+            raise MetricResolverError(
+                f"IN filter {f['col']!r} val 必须是 list，收到 {type(val).__name__}"
+            )
+        if len(val) == 0:
+            raise MetricResolverError(f"unsupported_op: empty IN for filter {f['col']!r}")
+
+        if fdef.type == "enum":
+            for v in val:
+                if v not in fdef.enum_values:
+                    raise MetricResolverError(
+                        f"bad enum value {v!r} for filter {f['col']}; "
+                        f"expected one of {fdef.enum_values}"
+                    )
+            joined = ", ".join(f"'{v}'" for v in val)
+        elif fdef.type == "string":
+            joined = ", ".join(f"'{str(v).replace(chr(39), chr(39) * 2)}'" for v in val)
+        elif fdef.type == "numeric":
+            joined = ", ".join(str(v) for v in val)
+        else:
+            raise MetricResolverError(f"unsupported filter type {fdef.type!r} for IN")
+        return f"{fdef.column} IN ({joined})"
+
+    if fdef.type == "enum":
+        if val not in fdef.enum_values:
+            raise MetricResolverError(
+                f"bad enum value {val!r} for filter {f['col']}; expected one of {fdef.enum_values}"
+            )
+        return f"{fdef.column} {op} '{val}'"
+    if fdef.type == "string":
+        safe = str(val).replace("'", "''")
+        return f"{fdef.column} {op} '{safe}'"
+    if fdef.type == "numeric":
+        return f"{fdef.column} {op} {val}"
+    if fdef.type == "boolean":
+        if isinstance(val, str):
+            truthy = val.strip().lower() in {"true", "t", "1", "yes", "是"}
+        else:
+            truthy = bool(val)
+        return f"{fdef.column} {op} {'TRUE' if truthy else 'FALSE'}"
+    raise MetricResolverError(f"unsupported filter type {fdef.type!r}")
+
+
 def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     """把 MetricSpec 套上 metric 模板生成 SQL。所有验证都在这里做。"""
     metric = catalog.get(spec.metric_id)
@@ -185,55 +237,7 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     # 3. WHERE 子句 = hard_filters + user filters + time_window
     where_parts: list[str] = list(metric.hard_filters)
     for f in spec.filters:
-        fdef = metric.filter_catalog[f["col"]]
-        op = f.get("op", "=")
-        val = f.get("val")
-
-        if op == "IN":
-            if not isinstance(val, list):
-                raise MetricResolverError(
-                    f"IN filter {f['col']!r} val 必须是 list，收到 {type(val).__name__}"
-                )
-            if len(val) == 0:
-                raise MetricResolverError(f"unsupported_op: empty IN for filter {f['col']!r}")
-
-            if fdef.type == "enum":
-                for v in val:
-                    if v not in fdef.enum_values:
-                        raise MetricResolverError(
-                            f"bad enum value {v!r} for filter {f['col']}; "
-                            f"expected one of {fdef.enum_values}"
-                        )
-                joined = ", ".join(f"'{v}'" for v in val)
-            elif fdef.type == "string":
-                joined = ", ".join(f"'{str(v).replace(chr(39), chr(39) * 2)}'" for v in val)
-            elif fdef.type == "numeric":
-                joined = ", ".join(str(v) for v in val)
-            else:
-                raise MetricResolverError(f"unsupported filter type {fdef.type!r} for IN")
-            where_parts.append(f"{fdef.column} IN ({joined})")
-            continue
-
-        if fdef.type == "enum":
-            if val not in fdef.enum_values:
-                raise MetricResolverError(
-                    f"bad enum value {val!r} for filter {f['col']}; "
-                    f"expected one of {fdef.enum_values}"
-                )
-            where_parts.append(f"{fdef.column} {op} '{val}'")
-        elif fdef.type == "string":
-            safe = str(val).replace("'", "''")
-            where_parts.append(f"{fdef.column} {op} '{safe}'")
-        elif fdef.type == "numeric":
-            where_parts.append(f"{fdef.column} {op} {val}")
-        elif fdef.type == "boolean":
-            if isinstance(val, str):
-                truthy = val.strip().lower() in {"true", "t", "1", "yes", "是"}
-            else:
-                truthy = bool(val)
-            where_parts.append(f"{fdef.column} {op} {'TRUE' if truthy else 'FALSE'}")
-        else:
-            raise MetricResolverError(f"unsupported filter type {fdef.type!r}")
+        where_parts.append(_render_filter_predicate(f, metric.filter_catalog[f["col"]]))
 
     if spec.time_window and metric.date_column:
         start = spec.time_window.get("start")
@@ -254,6 +258,39 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     if group_by_parts:
         lines.append("GROUP BY " + ", ".join(group_by_parts))
 
+    return "\n".join(lines)
+
+
+def render_domain_probe_sql(spec: MetricSpec, catalog: MetricCatalog) -> str | None:
+    """给 spec 里的 string 类型 filter 生成一条存在性探针；没有 string filter 返 None。
+
+    为什么只探 string：enum 有 `enum_values` 兜底，numeric/boolean 值域无穷，
+    time_window 合法地可以为空。只有 string filter 完全没有防护——LLM 把
+    branch_id 的值塞进 branch_city 时 SQL 照样合法，只是静默返回 0 行。
+
+    探针刻意**不带** time_window 与 hard_filters：那两者为空是业务事实，
+    不是抽取错误。这里只回答"这个值在这一列里存在吗"。
+    """
+    metric = catalog.get(spec.metric_id)
+
+    string_filters = [f for f in spec.filters if metric.filter_catalog[f["col"]].type == "string"]
+    if not string_filters:
+        return None
+
+    needed_joins: list[str] = []
+    for f in string_filters:
+        for j in metric.filter_catalog[f["col"]].requires_join:
+            if j not in needed_joins:
+                needed_joins.append(j)
+
+    where_parts = [
+        _render_filter_predicate(f, metric.filter_catalog[f["col"]]) for f in string_filters
+    ]
+
+    lines = ["SELECT 1", f"FROM {metric.fact_table} {metric.fact_alias}"]
+    lines += [metric.joins[j] for j in needed_joins]
+    lines.append("WHERE " + "\n  AND ".join(where_parts))
+    lines.append("LIMIT 1")
     return "\n".join(lines)
 
 
@@ -415,10 +452,13 @@ class MetricRouter:
         catalog: MetricCatalog,
         embed_fn,  # Callable[[list[str]], list[list[float]]]
         threshold: float = 0.7,
+        probe_fn=None,  # Callable[[str], tuple[list[dict] | None, str | None]] | None
     ):
         self.catalog = catalog
         self.embed_fn = embed_fn
         self.threshold = threshold
+        # 注入后才做 string filter 值域探针；不注入则行为与之前完全一致
+        self.probe_fn = probe_fn
 
         # 构建索引：list of (metric_id, alias_vec)
         all_aliases: list[tuple[str, str]] = []
@@ -471,6 +511,26 @@ class MetricRouter:
                 spec=None,
                 fail_reason=_classify_metric_error(str(e)),
             )
+
+        # 5. string filter 值域探针：LLM 把 branch_id 的值塞进 branch_city 时
+        #    SQL 依然合法，只会静默返回 0 行。这里主动探一下值存不存在，
+        #    存疑就退回 NL2SQL——宁可不用语义层，也不要答一个空结果。
+        if self.probe_fn is not None:
+            try:
+                probe_sql = render_domain_probe_sql(spec, self.catalog)
+            except MetricResolverError:
+                probe_sql = None
+            if probe_sql is not None:
+                rows, err = self.probe_fn(probe_sql)
+                if err is None and not rows:
+                    return RouteResult(
+                        prefilter_hit=True,
+                        metric_id=spec.metric_id,
+                        cosine=best_cos,
+                        sql=None,
+                        spec=spec,  # 保留 spec 供审计
+                        fail_reason="value_out_of_domain",
+                    )
 
         return RouteResult(
             prefilter_hit=True,

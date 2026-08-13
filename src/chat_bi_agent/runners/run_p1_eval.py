@@ -27,6 +27,7 @@ from chat_bi_agent.agents.shared.example_retriever import (  # noqa: E402
     ExamplePool,
     ExampleRetriever,
 )
+from chat_bi_agent.agents.shared.sql_executor import SQLExecutor  # noqa: E402
 from chat_bi_agent.eval.precision_retrieval_evaluator import (  # noqa: E402
     PrecisionEvaluation,
     PrecisionRetrievalEvaluator,
@@ -115,10 +116,13 @@ def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
         f"n_metrics={len(catalog.metrics)} threshold={args.metric_prefilter_threshold}",
         flush=True,
     )
+    # probe_fn 用只读 executor：给 string filter 做值域存在性探针
+    probe_executor = SQLExecutor()
     return MetricRouter(
         catalog=catalog,
         embed_fn=qwen_client.embed,
         threshold=args.metric_prefilter_threshold,
+        probe_fn=probe_executor.execute,
     )
 
 
@@ -150,6 +154,7 @@ def _summarize_metric_router(
         "unknown_dim",
         "enum_out_of_range",
         "unsupported_op",
+        "value_out_of_domain",
         "validator_fail",
         "executor_fail",
     ]

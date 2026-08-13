@@ -478,3 +478,123 @@ def test_metric_expr_always_keeps_its_alias():
     spec = MetricSpec(metric_id="customer_count", dims=[], time_window=None)
     sql = render_sql_from_spec(spec, cat)
     assert "AS customer_count" in sql
+
+
+# ---------------------- string filter 值域探针 ----------------------
+
+
+def test_domain_probe_sql_covers_only_string_filters():
+    """探针只针对 string 类型 filter——enum 有 enum_values 兜底，数值/时间窗合法为空。"""
+    from chat_bi_agent.agents.p1.metric_resolver import render_domain_probe_sql
+
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[
+            {"col": "branch_id", "op": "IN", "val": ["BR_CITY_0000"]},
+            {"col": "customer_tier", "op": "=", "val": "MASS"},  # enum，不该进探针
+        ],
+        time_window=None,
+    )
+    sql = render_domain_probe_sql(spec, cat)
+    assert sql is not None
+    assert "dc.branch_id IN ('BR_CITY_0000')" in sql
+    assert "customer_tier" not in sql
+    assert "LIMIT 1" in sql
+
+
+def test_domain_probe_sql_none_when_no_string_filter():
+    from chat_bi_agent.agents.p1.metric_resolver import render_domain_probe_sql
+
+    cat = _get_cat()
+    spec = MetricSpec(metric_id="customer_count", dims=[], filters=[], time_window=None)
+    assert render_domain_probe_sql(spec, cat) is None
+
+
+def test_domain_probe_sql_includes_required_joins():
+    """探针用到 dbr.city 就必须带上 branch join，否则别名不存在。"""
+    from chat_bi_agent.agents.p1.metric_resolver import render_domain_probe_sql
+
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "branch_city", "op": "=", "val": "杭州"}],
+        time_window=None,
+    )
+    sql = render_domain_probe_sql(spec, cat)
+    assert "JOIN dim_branch dbr" in sql
+
+
+def test_router_probe_rejects_out_of_domain_value(tmp_path):
+    """探针查不到行 → value_out_of_domain，回退 NL2SQL 而不是静默返回空结果。"""
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    cat = _get_cat()
+    router = MetricRouter(
+        cat,
+        embed_fn=lambda texts: [[1.0, 0.0] for _ in texts],
+        threshold=0.0,
+        probe_fn=lambda sql: ([], None),  # 探针返回空 = 值域外
+    )
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "branch_id", "op": "=", "val": "不存在的分行"}],
+        time_window=None,
+    )
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("随便问点什么")
+    assert rr.fail_reason == "value_out_of_domain"
+    assert rr.sql is None
+    assert rr.spec is not None  # 保留 spec 供审计
+
+
+def test_router_probe_passes_when_value_exists(tmp_path):
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    cat = _get_cat()
+    router = MetricRouter(
+        cat,
+        embed_fn=lambda texts: [[1.0, 0.0] for _ in texts],
+        threshold=0.0,
+        probe_fn=lambda sql: ([{"probe": 1}], None),
+    )
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "branch_id", "op": "=", "val": "BR_CITY_0000"}],
+        time_window=None,
+    )
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("随便问点什么")
+    assert rr.fail_reason is None
+    assert rr.sql == "SELECT 1"
+
+
+def test_router_without_probe_fn_skips_domain_check(tmp_path):
+    """不注入 probe_fn 时行为与之前完全一致（向后兼容）。"""
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    cat = _get_cat()
+    router = MetricRouter(cat, embed_fn=lambda texts: [[1.0, 0.0] for _ in texts], threshold=0.0)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "branch_id", "op": "=", "val": "无所谓"}],
+        time_window=None,
+    )
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("随便问点什么")
+    assert rr.fail_reason is None
+    assert rr.sql == "SELECT 1"
