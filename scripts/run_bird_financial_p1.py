@@ -371,7 +371,9 @@ def main() -> int:
             "k": args.few_shot_k,
             "min_similarity": args.few_shot_min_sim,
         },
-        "run_date_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "run_date_utc": dt.datetime.now(dt.UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
         "run_metadata": build_run_metadata(extra_paths=extra_hashes),
         "model": CHAT_MODEL,
         "dev_json_md5": _md5(args.questions),

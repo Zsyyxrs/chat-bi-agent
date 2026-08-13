@@ -85,6 +85,42 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
 - **语义层 / Metric Resolver 原型**（2026-07-08）：[`config/metrics.yaml`](config/metrics.yaml) 定义 6 个种子银行业务指标（存款/贷款余额、AUM、客户数、产品数、交易金额），[`src/chat_bi_agent/agents/p1/metric_resolver.py`](src/chat_bi_agent/agents/p1/metric_resolver.py) 用 LLM 抽 `{metric_id, dims, filters, time_window}` → 套模板拼 SQL。enum 严格校验（"高净值"→`HIGH_NET_WORTH`），join 自动去重，未命中优雅抛错回退。4-题 Qwen smoke：3 命中生成正确 SQL + 1 list 查询 fallback；已知限制 `op='='` 不支持 IN（多值筛选）。**未与 SQLGenerator 主路径集成**——原型独立可跑，下次 iteration 加前置路由 + A/B。详见 [DESIGN_DECISIONS.md#adr-013](./DESIGN_DECISIONS.md)。
 
+- **语义层前置路由接线到 P1**（2026-08-12）：`MetricRouter`（[`src/chat_bi_agent/agents/p1/metric_resolver.py`](./src/chat_bi_agent/agents/p1/metric_resolver.py)）在 P1 主路径 SchemaLinker 之前跑 embedding cosine prefilter（默认阈值 0.7，`--metric-prefilter-threshold` 可覆盖）；命中 → `resolve()` 抽 spec → render template SQL → SQLValidator + Executor 跑通即返 `route="metric"`（跳过 Reflect Loop），否则 fallback 回原路径（`route="metric_then_nl2sql"` 或 `"nl2sql"`，`metric_fail_reason` 记录退回原因）。`P1AgentResult` 新增 `route / metric_id / prefilter_cosine / metric_spec / metric_fail_reason` 5 字段；`results/*.json` 顶层新增 `metric_router` 段（含 `metric_hit_rate` / `precision_when_hit` / `precision_when_bypass` / `fallback_rate` / `fail_reason_breakdown`）。同时补 `op='IN'` 多值过滤，消除 smoke Q3（杭州+南京）的已知假阳性。**不传 `--metric-catalog` 时行为与之前完全一致**。跑法：
+
+  ```bash
+  # baseline
+  python -m chat_bi_agent.runners.run_p1_eval \
+      --output results/p1_prod_baseline_YYYY-MM-DD.json
+  # 开启 metric router
+  python -m chat_bi_agent.runners.run_p1_eval \
+      --metric-catalog config/metrics.yaml \
+      --metric-prefilter-threshold 0.7 \
+      --output results/p1_prod_metric_YYYY-MM-DD.json
+  # 守门
+  python scripts/verify_ab.py \
+      results/p1_prod_baseline_YYYY-MM-DD.json \
+      results/p1_prod_metric_YYYY-MM-DD.json \
+      --expected-differ metric_router
+  ```
+
+  两轮必须在**同一个 commit、同一个模型上跑**——`verify_ab.py` 把 `commit_hash` 与 `model` 当 CRITICAL 字段。注意 `precision_when_bypass` **不会**与 baseline 完全相等：那些题两臂走同一条 nl2sql 路径，但 LLM 有跑间噪声，实测单题可达 ±0.4。因此别看 avg_score 上零点几个百分点的差异，要看**逐题、且走 governed 路径**的比较——模板 SQL 是确定性的。对齐 [ADR-013 Update 2026-08-12](./DESIGN_DECISIONS.md#adr-013)。
+
+  **A/B 判定绿灯,默认阈值 0.63**（2026-08-13，34 题指标路由标尺，`qwen3.7-max`）：路由 precision **1.000**（零假阳性）、recall 0.75、F1 0.857、命中率 0.441；走语义层的 15 题里 **2 题更好、13 题持平、0 题更差**。相比 t=0.70（recall 仅 0.45）严格占优。早期那套 6 题 happy path 指标型仅 2 题、命中率天花板 0.333，已判定为不合格标尺并替换。详见 [ADR-013 Update](./DESIGN_DECISIONS.md#adr-013)。
+
+  换 **embedding 模型**后必须重扫阈值（cosine 尺度会变）——只花 embedding 的钱，几十秒，不必跑整轮 eval：
+
+  ```bash
+  python scripts/sweep_prefilter_threshold.py
+  ```
+
+  结果 JSON 里 `result_match` 段是**结果集比对**诊断：它抓的是分数看不见的"语义不忠实"（丢约束、丢 Top-N、值域塞错——SQL 合法、表/过滤/聚合全对，但答的是另一个问题）。`mismatched_ids` 直接点名是哪几题。刻意不计入 `combined_score`，以免废掉历史 baseline 的可比性。
+
+  catalog 改动后请跑一遍全组合回归（18 metric × 全部 dim/filter 真打 PG），模板里的列名只有真正 execute 才会被校验：
+
+  ```bash
+  pytest tests/p1/test_p1_agent_routing_integration.py -m integration  # 需 chatbi-pg up
+  ```
+
 ---
 
 ## 🏗 系统架构

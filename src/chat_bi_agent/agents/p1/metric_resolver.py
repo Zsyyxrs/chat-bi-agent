@@ -17,6 +17,7 @@ NL2SQL 路径。
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,7 +48,7 @@ class MetricDim:
 class MetricFilter:
     id: str
     column: str
-    type: str  # "string" | "enum" | "date_range" | "numeric"
+    type: str  # "string" | "enum" | "date_range" | "numeric" | "boolean"
     enum_values: list[str] = field(default_factory=list)
     requires_join: list[str] = field(default_factory=list)
 
@@ -66,6 +67,8 @@ class Metric:
     joins: dict[str, str]
     dim_catalog: dict[str, MetricDim]
     filter_catalog: dict[str, MetricFilter]
+    # hard_filters 自身依赖的 join，无条件拼进 FROM（dims/filters 为空时也要）
+    hard_filter_joins: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -110,6 +113,7 @@ class MetricCatalog:
                     joins=m.get("joins") or {},
                     dim_catalog=dim_catalog,
                     filter_catalog=filter_catalog,
+                    hard_filter_joins=m.get("hard_filter_joins") or [],
                 )
             )
         return cls(metrics=ms)
@@ -133,13 +137,69 @@ class MetricSpec:
 
 # ---------------------------- SQL 拼装 ----------------------------
 
+# 形如 `tbl.col` 或 `col` 的裸列引用（不含函数/运算/字面量）
+_PLAIN_COLUMN_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?")
+
+
+def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
+    """把一条 filter 渲染成 WHERE 谓词。所有值校验都在这里。
+
+    主渲染与值域探针共用同一份实现——分成两份迟早会漂移。
+    """
+    op = f.get("op", "=")
+    val = f.get("val")
+
+    if op == "IN":
+        if not isinstance(val, list):
+            raise MetricResolverError(
+                f"IN filter {f['col']!r} val 必须是 list，收到 {type(val).__name__}"
+            )
+        if len(val) == 0:
+            raise MetricResolverError(f"unsupported_op: empty IN for filter {f['col']!r}")
+
+        if fdef.type == "enum":
+            for v in val:
+                if v not in fdef.enum_values:
+                    raise MetricResolverError(
+                        f"bad enum value {v!r} for filter {f['col']}; "
+                        f"expected one of {fdef.enum_values}"
+                    )
+            joined = ", ".join(f"'{v}'" for v in val)
+        elif fdef.type == "string":
+            joined = ", ".join(f"'{str(v).replace(chr(39), chr(39) * 2)}'" for v in val)
+        elif fdef.type == "numeric":
+            joined = ", ".join(str(v) for v in val)
+        else:
+            raise MetricResolverError(f"unsupported filter type {fdef.type!r} for IN")
+        return f"{fdef.column} IN ({joined})"
+
+    if fdef.type == "enum":
+        if val not in fdef.enum_values:
+            raise MetricResolverError(
+                f"bad enum value {val!r} for filter {f['col']}; expected one of {fdef.enum_values}"
+            )
+        return f"{fdef.column} {op} '{val}'"
+    if fdef.type == "string":
+        safe = str(val).replace("'", "''")
+        return f"{fdef.column} {op} '{safe}'"
+    if fdef.type == "numeric":
+        return f"{fdef.column} {op} {val}"
+    if fdef.type == "boolean":
+        if isinstance(val, str):
+            truthy = val.strip().lower() in {"true", "t", "1", "yes", "是"}
+        else:
+            truthy = bool(val)
+        return f"{fdef.column} {op} {'TRUE' if truthy else 'FALSE'}"
+    raise MetricResolverError(f"unsupported filter type {fdef.type!r}")
+
 
 def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     """把 MetricSpec 套上 metric 模板生成 SQL。所有验证都在这里做。"""
     metric = catalog.get(spec.metric_id)
 
-    # 1. 收集需要的 join
-    needed_joins: list[str] = []
+    # 1. 收集需要的 join。hard_filters 的 join 先入队：它们无条件需要，
+    #    且排在前面能保证 FROM 后的 join 顺序稳定。
+    needed_joins: list[str] = list(metric.hard_filter_joins)
     for dim_id in spec.dims:
         if dim_id not in metric.dim_catalog:
             raise MetricResolverError(f"unknown dim {dim_id!r} for metric {metric.id}")
@@ -163,31 +223,21 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     group_by_parts: list[str] = []
     for dim_id in spec.dims:
         d = metric.dim_catalog[dim_id]
-        select_parts.append(f"{d.select_expr} AS {d.alias}")
+        # 别名与裸列名相同就别输出 AS：纯冗余，且会干扰按列名比对的下游
+        # （评分器要剥掉带 AS 的列来还原"真实 schema 列"，全别名化会剥成空集）
+        bare_col = d.select_expr.rsplit(".", 1)[-1]
+        is_plain_column = _PLAIN_COLUMN_RE.fullmatch(d.select_expr) is not None
+        if is_plain_column and bare_col == d.alias:
+            select_parts.append(d.select_expr)
+        else:
+            select_parts.append(f"{d.select_expr} AS {d.alias}")
         group_by_parts.append(d.select_expr)
     select_parts.append(f"{metric.metric_expr} AS {metric.metric_alias}")
 
     # 3. WHERE 子句 = hard_filters + user filters + time_window
     where_parts: list[str] = list(metric.hard_filters)
     for f in spec.filters:
-        fdef = metric.filter_catalog[f["col"]]
-        op = f.get("op", "=")
-        val = f.get("val")
-        if fdef.type == "enum":
-            if val not in fdef.enum_values:
-                raise MetricResolverError(
-                    f"bad enum value {val!r} for filter {f['col']}; "
-                    f"expected one of {fdef.enum_values}"
-                )
-            where_parts.append(f"{fdef.column} {op} '{val}'")
-        elif fdef.type == "string":
-            # 简单转义单引号
-            safe = str(val).replace("'", "''")
-            where_parts.append(f"{fdef.column} {op} '{safe}'")
-        elif fdef.type == "numeric":
-            where_parts.append(f"{fdef.column} {op} {val}")
-        else:
-            raise MetricResolverError(f"unsupported filter type {fdef.type!r}")
+        where_parts.append(_render_filter_predicate(f, metric.filter_catalog[f["col"]]))
 
     if spec.time_window and metric.date_column:
         start = spec.time_window.get("start")
@@ -211,6 +261,39 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     return "\n".join(lines)
 
 
+def render_domain_probe_sql(spec: MetricSpec, catalog: MetricCatalog) -> str | None:
+    """给 spec 里的 string 类型 filter 生成一条存在性探针；没有 string filter 返 None。
+
+    为什么只探 string：enum 有 `enum_values` 兜底，numeric/boolean 值域无穷，
+    time_window 合法地可以为空。只有 string filter 完全没有防护——LLM 把
+    branch_id 的值塞进 branch_city 时 SQL 照样合法，只是静默返回 0 行。
+
+    探针刻意**不带** time_window 与 hard_filters：那两者为空是业务事实，
+    不是抽取错误。这里只回答"这个值在这一列里存在吗"。
+    """
+    metric = catalog.get(spec.metric_id)
+
+    string_filters = [f for f in spec.filters if metric.filter_catalog[f["col"]].type == "string"]
+    if not string_filters:
+        return None
+
+    needed_joins: list[str] = []
+    for f in string_filters:
+        for j in metric.filter_catalog[f["col"]].requires_join:
+            if j not in needed_joins:
+                needed_joins.append(j)
+
+    where_parts = [
+        _render_filter_predicate(f, metric.filter_catalog[f["col"]]) for f in string_filters
+    ]
+
+    lines = ["SELECT 1", f"FROM {metric.fact_table} {metric.fact_alias}"]
+    lines += [metric.joins[j] for j in needed_joins]
+    lines.append("WHERE " + "\n  AND ".join(where_parts))
+    lines.append("LIMIT 1")
+    return "\n".join(lines)
+
+
 # ---------------------------- LLM spec 抽取 ----------------------------
 
 
@@ -229,10 +312,28 @@ def _build_extractor_prompt(catalog: MetricCatalog) -> str:
         "time_window（对象或 null）",
         "3. 如果没有任何 metric 匹配问题（例如题目是要列出明细、事件流、单条记录），",
         "   **必须**返回 metric_id=null，其他字段留空——不要硬凑",
-        "4. filters 元素形如 {col, op, val}；op 目前只支持 '='",
-        "5. filter 是 enum 类型时，val **必须**用目录里给的英文枚举代码，禁止用中文",
-        "6. time_window 形如 {start: 'YYYY-MM-DD', end: 'YYYY-MM-DD'}；只有指标支持时间窗才填",
-        "7. dims 只能选目录里列出的",
+        "4. filters 元素形如 {col, op, val}；op 支持 '=' 与 'IN'",
+        "   - 单值用 {col, op: '=', val: 'X'}",
+        "   - **多值必须用** {col, op: 'IN', val: ['X', 'Y']}——val 是数组",
+        "   - 例：「杭州和南京两个分行」→ {col: 'branch_id', op: 'IN', "
+        "val: ['BR_CITY_0000', 'BR_CITY_0002']}",
+        "5. **约束一个都不能丢**：题目里的每个限定条件（分行、层级、时间、类型…）"
+        "都必须落到 filters 或 time_window 里。",
+        "   如果某个约束在本指标的可用 filters 里表达不了，**返回 metric_id=null**——",
+        "   宁可退回 NL2SQL，也不要丢掉约束后拼一个「看起来对」的查询。",
+        "   反例：问「杭州和南京两个分行的客户数」却输出 dims=['branch_city'] 且不带 "
+        "branch 过滤——这是按全部城市分组，答的是另一个问题",
+        "6. **spec 表达不了排序与取顶**（没有 ORDER BY / LIMIT 字段）。题目只要涉及",
+        "   「最高/最低」「前 N 个」「排名」「Top」「哪一个最…」，**一律返回 metric_id=null**。",
+        "   反例：问「存款余额最高的前 5 个分行」却输出 dims=['branch_id'] 不带取顶——",
+        "   那是在返回全部分行，答的是另一个问题",
+        "7. **val 必须落在 col 的值域里**：ID 列传 ID，名称列传名称，不要混。",
+        "   题面常写成「杭州（BR_CITY_0000）」这种「名称（ID）」形式——",
+        "   选 branch_id 就传 'BR_CITY_0000'，选 branch_city 就传 '杭州'。",
+        "   传错不会报错，只会静默返回 0 行，比报错更难查",
+        "8. filter 是 enum 类型时，val **必须**用目录里给的英文枚举代码，禁止用中文",
+        "9. time_window 形如 {start: 'YYYY-MM-DD', end: 'YYYY-MM-DD'}；只有指标支持时间窗才填",
+        "10. dims 只能选目录里列出的",
         "",
         "可用 metric 目录：",
     ]
@@ -289,11 +390,157 @@ def _parse_spec(raw: str) -> MetricSpec:
     )
 
 
-@observe(name="metric_resolve")
-def resolve(question: str, catalog: MetricCatalog) -> str:
-    """端到端：question → SQL；失败抛 MetricResolverError（调用方兜底走 NL2SQL）。"""
+def _resolve_to_spec_and_sql(question: str, catalog: MetricCatalog) -> tuple[MetricSpec, str]:
+    """内部：question → (spec, sql)。失败抛 MetricResolverError。"""
     system_prompt = _build_extractor_prompt(catalog)
     user_prompt = f"用户问题：{question}\n请输出 JSON。"
     chat_result = qwen_client.chat(system_prompt=system_prompt, user_prompt=user_prompt)
     spec = _parse_spec(chat_result.content)
-    return render_sql_from_spec(spec, catalog)
+    sql = render_sql_from_spec(spec, catalog)
+    return spec, sql
+
+
+@observe(name="metric_resolve")
+def resolve(question: str, catalog: MetricCatalog) -> str:
+    """端到端：question → SQL；失败抛 MetricResolverError（调用方兜底走 NL2SQL）。"""
+    _, sql = _resolve_to_spec_and_sql(question, catalog)
+    return sql
+
+
+# ---------------------------- 前置路由 ----------------------------
+
+
+@dataclass
+class RouteResult:
+    """MetricRouter.try_route 的返回值——永远不 raise。"""
+
+    prefilter_hit: bool
+    metric_id: str | None
+    cosine: float
+    sql: str | None
+    spec: MetricSpec | None
+    # "no_metric" | "unknown_dim" | "enum_out_of_range" | "unsupported_op" | None
+    fail_reason: str | None
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _classify_metric_error(msg: str) -> str:
+    """把 MetricResolverError 的 message 映射到 fail_reason 枚举。"""
+    low = msg.lower()
+    if "no metric matched" in low or "metric_id=null" in low:
+        return "no_metric"
+    if "unknown dim" in low:
+        return "unknown_dim"
+    if "bad enum value" in low:
+        return "enum_out_of_range"
+    if "unsupported_op" in low or "unsupported filter type" in low or "in filter" in low:
+        return "unsupported_op"
+    if "unknown filter" in low or "unknown metric_id" in low:
+        return "unknown_dim"  # 归到最相近的
+    return "unknown_dim"  # 兜底：未识别的 metric 结构错
+
+
+class MetricRouter:
+    """catalog embedding prefilter + resolve 的一体化路由层。构造时批量 embed 所有 aliases。"""
+
+    def __init__(
+        self,
+        catalog: MetricCatalog,
+        embed_fn,  # Callable[[list[str]], list[list[float]]]
+        threshold: float = 0.63,
+        probe_fn=None,  # Callable[[str], tuple[list[dict] | None, str | None]] | None
+    ):
+        self.catalog = catalog
+        self.embed_fn = embed_fn
+        self.threshold = threshold
+        # 注入后才做 string filter 值域探针；不注入则行为与之前完全一致
+        self.probe_fn = probe_fn
+
+        # 构建索引：list of (metric_id, alias_vec)
+        all_aliases: list[tuple[str, str]] = []
+        for m in catalog.metrics:
+            for a in m.aliases:
+                all_aliases.append((m.id, a))
+
+        self._alias_index: list[tuple[str, list[float]]] = []
+        if all_aliases:
+            texts = [a for _, a in all_aliases]
+            vecs = embed_fn(texts)
+            self._alias_index = [
+                (mid, vec) for (mid, _), vec in zip(all_aliases, vecs, strict=True)
+            ]
+
+    def try_route(self, question: str) -> RouteResult:
+        """从不抛异常。"""
+        # 1. embed 问题
+        q_vec = self.embed_fn([question])[0]
+
+        # 2. 找 top-1 alias
+        best_mid: str | None = None
+        best_cos: float = -1.0
+        for mid, vec in self._alias_index:
+            cos = _cosine(q_vec, vec)
+            if cos > best_cos:
+                best_cos = cos
+                best_mid = mid
+
+        # 3. 阈值 gate
+        if best_cos < self.threshold or best_mid is None:
+            return RouteResult(
+                prefilter_hit=False,
+                metric_id=None,
+                cosine=best_cos if best_cos > -1.0 else 0.0,
+                sql=None,
+                spec=None,
+                fail_reason=None,
+            )
+
+        # 4. resolve
+        try:
+            spec, sql = _resolve_to_spec_and_sql(question, self.catalog)
+        except MetricResolverError as e:
+            return RouteResult(
+                prefilter_hit=True,
+                metric_id=best_mid,
+                cosine=best_cos,
+                sql=None,
+                spec=None,
+                fail_reason=_classify_metric_error(str(e)),
+            )
+
+        # 5. string filter 值域探针：LLM 把 branch_id 的值塞进 branch_city 时
+        #    SQL 依然合法，只会静默返回 0 行。这里主动探一下值存不存在，
+        #    存疑就退回 NL2SQL——宁可不用语义层，也不要答一个空结果。
+        if self.probe_fn is not None:
+            try:
+                probe_sql = render_domain_probe_sql(spec, self.catalog)
+            except MetricResolverError:
+                probe_sql = None
+            if probe_sql is not None:
+                rows, err = self.probe_fn(probe_sql)
+                if err is None and not rows:
+                    return RouteResult(
+                        prefilter_hit=True,
+                        metric_id=spec.metric_id,
+                        cosine=best_cos,
+                        sql=None,
+                        spec=spec,  # 保留 spec 供审计
+                        fail_reason="value_out_of_domain",
+                    )
+
+        return RouteResult(
+            prefilter_hit=True,
+            metric_id=spec.metric_id,
+            cosine=best_cos,
+            sql=sql,
+            spec=spec,
+            fail_reason=None,
+        )

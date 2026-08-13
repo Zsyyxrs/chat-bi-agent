@@ -235,3 +235,380 @@ def test_resolve_invalid_llm_json_raises():
     ):
         with pytest.raises(MetricResolverError):
             resolve(question="q", catalog=_get_cat())
+
+
+# ---------------------- IN operator tests ----------------------
+
+
+def _mini_catalog(tmp_path):
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(
+        """
+version: 1
+metrics:
+  - id: customer_count
+    display_name: 客户数
+    aliases: [客户数, 客户数量]
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    joins:
+      branch: JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id
+    dim_catalog: {}
+    filter_catalog:
+      customer_tier:
+        column: dc.customer_tier
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+      branch_id:
+        column: dc.branch_id
+        type: string
+      age:
+        column: dc.age
+        type: numeric
+""",
+        encoding="utf-8",
+    )
+    return MetricCatalog.from_yaml(yml)
+
+
+def test_in_op_enum_multi_values(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "customer_tier", "op": "IN", "val": ["HIGH_NET_WORTH", "AFFLUENT"]}],
+    )
+    sql = render_sql_from_spec(spec, catalog)
+    assert "dc.customer_tier IN ('HIGH_NET_WORTH', 'AFFLUENT')" in sql
+
+
+def test_in_op_enum_single_value(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "customer_tier", "op": "IN", "val": ["MASS"]}],
+    )
+    sql = render_sql_from_spec(spec, catalog)
+    assert "dc.customer_tier IN ('MASS')" in sql
+
+
+def test_in_op_enum_bad_value_raises(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "customer_tier", "op": "IN", "val": ["HIGH_NET_WORTH", "无此层级"]}],
+    )
+    with pytest.raises(MetricResolverError, match="bad enum value"):
+        render_sql_from_spec(spec, catalog)
+
+
+def test_in_op_string_type_quotes_and_escapes(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "branch_id", "op": "IN", "val": ["BR_CITY_0000", "BR_CITY_0002"]}],
+    )
+    sql = render_sql_from_spec(spec, catalog)
+    assert "dc.branch_id IN ('BR_CITY_0000', 'BR_CITY_0002')" in sql
+
+
+def test_in_op_numeric_type_no_quotes(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "age", "op": "IN", "val": [60, 65, 70]}],
+    )
+    sql = render_sql_from_spec(spec, catalog)
+    assert "dc.age IN (60, 65, 70)" in sql
+
+
+def test_in_op_empty_list_raises_unsupported(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "customer_tier", "op": "IN", "val": []}],
+    )
+    with pytest.raises(MetricResolverError, match="empty IN"):
+        render_sql_from_spec(spec, catalog)
+
+
+def test_in_op_non_list_val_raises(tmp_path):
+    catalog = _mini_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        filters=[{"col": "branch_id", "op": "IN", "val": "BR_CITY_0000"}],
+    )
+    with pytest.raises(MetricResolverError, match="IN.*list"):
+        render_sql_from_spec(spec, catalog)
+
+
+# ---------------------- hard_filter_joins ----------------------
+
+
+def test_hard_filter_joins_always_rendered():
+    """hard_filters 引用的 join 无条件拼进 FROM，即使 spec 不带 dims/filters。"""
+    cat = _get_cat()
+    spec = MetricSpec(metric_id="deposit_balance", dims=[], filters=[], time_window=None)
+    sql = render_sql_from_spec(spec, cat)
+    assert "JOIN dim_account da" in sql
+    assert "da.account_type IN ('CURRENT','SAVING')" in sql
+
+
+def test_hard_filter_joins_not_duplicated_when_also_required_by_dim():
+    """hard_filter_joins 与 dim 的 requires_join 撞车时只拼一次。"""
+    cat = _get_cat()
+    m = cat.get("deposit_balance")
+    m.dim_catalog["_probe"] = type(m.dim_catalog["branch_id"])(
+        id="_probe",
+        select_expr="da.account_type",
+        alias="acct_type",
+        requires_join=["account"],
+    )
+    spec = MetricSpec(metric_id="deposit_balance", dims=["_probe"], filters=[], time_window=None)
+    sql = render_sql_from_spec(spec, cat)
+    assert sql.count("JOIN dim_account da") == 1
+
+
+def test_catalog_columns_match_real_schema_names():
+    """transaction_amount 的 channel 列名必须是 transaction_channel。"""
+    cat = _get_cat()
+    m = cat.get("transaction_amount")
+    assert m.dim_catalog["channel"].select_expr == "ft.transaction_channel"
+    assert m.filter_catalog["channel"].column == "ft.transaction_channel"
+
+
+def test_is_active_filter_typed_boolean_not_string():
+    """dc.is_active 是 boolean 列，不能声明成 string（会拼出 = 'True'）。"""
+    cat = _get_cat()
+    m = cat.get("customer_count")
+    assert m.filter_catalog["is_active"].type == "boolean"
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "is_active", "op": "=", "val": True}],
+        time_window=None,
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "dc.is_active = TRUE" in sql
+
+
+# ---------------------- extractor prompt 与渲染能力对齐 ----------------------
+
+
+def test_extractor_prompt_advertises_in_operator():
+    """prompt 必须告诉 LLM 可以用 op='IN'。
+
+    渲染层 2026-08-12 就支持 IN 了，但 prompt 一直写着"op 目前只支持 '='"，
+    LLM 遇到"杭州和南京两个分行"这类多值约束会直接把约束丢掉（改成 group by
+    全部城市），拼出的 SQL 合法、validator/executor 全过，但答的是另一个问题。
+    这种语义欠约束是 guardrail 抓不到的，只能靠 prompt 与渲染能力对齐来防。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "'op 目前只支持" not in prompt
+    assert "IN" in prompt
+    # 必须给出 IN 的形状，否则 LLM 不知道 val 要传 list
+    assert "'IN'" in prompt or '"IN"' in prompt
+
+
+def test_extractor_prompt_warns_against_dropping_constraints():
+    """prompt 要明确禁止「约束表达不了就丢掉」——这是 q006 回归的直接成因。"""
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "metric_id=null" in prompt
+    assert "不要" in prompt or "禁止" in prompt
+
+
+def test_extractor_prompt_requires_value_domain_match():
+    """prompt 要求 val 与 col 的值域匹配。
+
+    string 类型 filter 没有 enum_values 可校验，LLM 把 branch_id 的值
+    ('BR_CITY_0000') 塞进 branch_city（dbr.city，值是「杭州」）时，
+    SQL 合法、执行成功、静默返回 0 行——比报错更难发现。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "值域" in prompt
+
+
+# ---------------------- 冗余别名 ----------------------
+
+
+def test_dim_alias_omitted_when_same_as_bare_column():
+    """别名与裸列名相同时不输出 AS——冗余，且会干扰按列名比对的评分器。"""
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=["branch_id"],
+        filters=[],
+        time_window=None,
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "dc.branch_id AS branch_id" not in sql
+    assert "SELECT dc.branch_id," in sql
+
+
+def test_dim_alias_kept_when_it_renames_the_column():
+    """别名与列名不同时必须保留 AS（branch_city 的列是 dbr.city，别名 city）。"""
+    cat = _get_cat()
+    m = cat.get("customer_count")
+    assert m.dim_catalog["branch_city"].select_expr == "dbr.city"
+    assert m.dim_catalog["branch_city"].alias == "city"
+    # 别名 city == 裸列名 city → 应省略
+    spec = MetricSpec(metric_id="customer_count", dims=["branch_city"], time_window=None)
+    assert "dbr.city AS city" not in render_sql_from_spec(spec, cat)
+
+    # 构造一个真正重命名的 dim，AS 必须留着
+    probe = type(m.dim_catalog["branch_id"])(
+        id="_probe", select_expr="dc.branch_id", alias="网点编号"
+    )
+    m.dim_catalog["_probe"] = probe
+    spec2 = MetricSpec(metric_id="customer_count", dims=["_probe"], time_window=None)
+    assert "dc.branch_id AS 网点编号" in render_sql_from_spec(spec2, cat)
+
+
+def test_metric_expr_always_keeps_its_alias():
+    """聚合表达式的别名永远保留——COUNT(...) 没有裸列名可省。"""
+    cat = _get_cat()
+    spec = MetricSpec(metric_id="customer_count", dims=[], time_window=None)
+    sql = render_sql_from_spec(spec, cat)
+    assert "AS customer_count" in sql
+
+
+# ---------------------- string filter 值域探针 ----------------------
+
+
+def test_domain_probe_sql_covers_only_string_filters():
+    """探针只针对 string 类型 filter——enum 有 enum_values 兜底，数值/时间窗合法为空。"""
+    from chat_bi_agent.agents.p1.metric_resolver import render_domain_probe_sql
+
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[
+            {"col": "branch_id", "op": "IN", "val": ["BR_CITY_0000"]},
+            {"col": "customer_tier", "op": "=", "val": "MASS"},  # enum，不该进探针
+        ],
+        time_window=None,
+    )
+    sql = render_domain_probe_sql(spec, cat)
+    assert sql is not None
+    assert "dc.branch_id IN ('BR_CITY_0000')" in sql
+    assert "customer_tier" not in sql
+    assert "LIMIT 1" in sql
+
+
+def test_domain_probe_sql_none_when_no_string_filter():
+    from chat_bi_agent.agents.p1.metric_resolver import render_domain_probe_sql
+
+    cat = _get_cat()
+    spec = MetricSpec(metric_id="customer_count", dims=[], filters=[], time_window=None)
+    assert render_domain_probe_sql(spec, cat) is None
+
+
+def test_domain_probe_sql_includes_required_joins():
+    """探针用到 dbr.city 就必须带上 branch join，否则别名不存在。"""
+    from chat_bi_agent.agents.p1.metric_resolver import render_domain_probe_sql
+
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "branch_city", "op": "=", "val": "杭州"}],
+        time_window=None,
+    )
+    sql = render_domain_probe_sql(spec, cat)
+    assert "JOIN dim_branch dbr" in sql
+
+
+def test_router_probe_rejects_out_of_domain_value(tmp_path):
+    """探针查不到行 → value_out_of_domain，回退 NL2SQL 而不是静默返回空结果。"""
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    cat = _get_cat()
+    router = MetricRouter(
+        cat,
+        embed_fn=lambda texts: [[1.0, 0.0] for _ in texts],
+        threshold=0.0,
+        probe_fn=lambda sql: ([], None),  # 探针返回空 = 值域外
+    )
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "branch_id", "op": "=", "val": "不存在的分行"}],
+        time_window=None,
+    )
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("随便问点什么")
+    assert rr.fail_reason == "value_out_of_domain"
+    assert rr.sql is None
+    assert rr.spec is not None  # 保留 spec 供审计
+
+
+def test_router_probe_passes_when_value_exists(tmp_path):
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    cat = _get_cat()
+    router = MetricRouter(
+        cat,
+        embed_fn=lambda texts: [[1.0, 0.0] for _ in texts],
+        threshold=0.0,
+        probe_fn=lambda sql: ([{"probe": 1}], None),
+    )
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "branch_id", "op": "=", "val": "BR_CITY_0000"}],
+        time_window=None,
+    )
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("随便问点什么")
+    assert rr.fail_reason is None
+    assert rr.sql == "SELECT 1"
+
+
+def test_router_without_probe_fn_skips_domain_check(tmp_path):
+    """不注入 probe_fn 时行为与之前完全一致（向后兼容）。"""
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    cat = _get_cat()
+    router = MetricRouter(cat, embed_fn=lambda texts: [[1.0, 0.0] for _ in texts], threshold=0.0)
+    spec = MetricSpec(
+        metric_id="customer_count",
+        dims=[],
+        filters=[{"col": "branch_id", "op": "=", "val": "无所谓"}],
+        time_window=None,
+    )
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("随便问点什么")
+    assert rr.fail_reason is None
+    assert rr.sql == "SELECT 1"
+
+
+def test_extractor_prompt_rejects_ordering_and_top_n():
+    """spec 结构里没有 ORDER BY / LIMIT，排序取顶类问题必须拒绝而非硬凑。
+
+    A/B 实测：问"存款余额最高的前 5 个分行"，LLM 映射到 deposit_balance 却丢掉
+    Top-5，返回全部分行。SQL 合法、值域也对，只是答的是另一个问题——和当初丢掉
+    IN 约束同一类失败。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "排序" in prompt
+    assert "最高" in prompt or "前 N" in prompt

@@ -5,6 +5,7 @@
 """
 
 import os
+import time
 from dataclasses import dataclass
 
 _DASHSCOPE_NO_PROXY = "dashscope.aliyuncs.com,aliyuncs.com"
@@ -16,6 +17,7 @@ for _key in ("NO_PROXY", "no_proxy"):
         )
 
 import dashscope  # noqa: E402
+import requests  # noqa: E402
 from dashscope import Generation, TextEmbedding  # noqa: E402
 from langfuse import get_client, observe  # noqa: E402
 
@@ -43,6 +45,36 @@ def _ensure_api_key() -> None:
     dashscope.api_key = api_key
 
 
+# DashScope SDK 读的是 `request_timeout`（dashscope.common.constants.REQUEST_TIMEOUT_KEYWORD），
+# 不是 `timeout`——写错名字会被静默忽略，照样按 300s 默认值挂着。
+REQUEST_TIMEOUT_SECONDS = 60
+MAX_TRANSIENT_RETRIES = 2
+_RETRY_BACKOFF_SECONDS = 2
+
+# 只重试网络类瞬时故障；配额/鉴权错误重试没意义，必须快速失败
+_TRANSIENT_EXC = (
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+)
+
+
+def _call_with_retry(fn, **kwargs):
+    """瞬时网络故障重试。
+
+    34 题的 eval 跑 10 分钟，中间一次 read timeout 就把整轮结果全丢——
+    真实代价是两轮跑批报废，所以这里兜一层。
+    """
+    last: Exception | None = None
+    for attempt in range(MAX_TRANSIENT_RETRIES + 1):
+        try:
+            return fn(**kwargs)
+        except _TRANSIENT_EXC as e:
+            last = e
+            if attempt < MAX_TRANSIENT_RETRIES:
+                time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+    raise last
+
+
 @observe(as_type="generation", name="qwen_chat")
 def chat(
     system_prompt: str,
@@ -51,7 +83,8 @@ def chat(
 ) -> ChatResult:
     """单轮聊天调用。低 temperature 适合 NL2SQL。"""
     _ensure_api_key()
-    resp = Generation.call(
+    resp = _call_with_retry(
+        Generation.call,
         model=CHAT_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -59,9 +92,7 @@ def chat(
         ],
         result_format="message",
         temperature=temperature,
-        # DashScope SDK 默认 300s (dashscope.common.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS)，
-        # 太长——被限流/排队时会让 UI 转 5 分钟。60s 覆盖绝大多数 NL2SQL 场景。
-        timeout=60,
+        request_timeout=REQUEST_TIMEOUT_SECONDS,
     )
     # resp = MultiModalConversation.call(
     #     model=CHAT_MODEL,
@@ -100,24 +131,48 @@ def chat(
     )
 
 
+# 超过 10 条会被 DashScope 拒掉：
+#   InternalError.Algo.InvalidParameter: batch size is invalid,
+#   it should not be larger than 10
+EMBED_MAX_BATCH = 10
+
+
 @observe(as_type="embedding", name="qwen_embed")
 def embed(texts: list[str]) -> list[list[float]]:
-    """批量 embedding。返回 list of 1024-dim 向量。"""
+    """批量 embedding。返回 list of 1024-dim 向量，顺序与入参一致。
+
+    DashScope 单次最多收 10 条，这里自动切块，调用方不用关心上限。
+    """
+    if not texts:
+        return []
     _ensure_api_key()
-    resp = TextEmbedding.call(
-        model=EMBED_MODEL,
-        input=texts,
-        dimension=EMBED_DIM,
-    )
-    if resp.status_code != 200:
-        raise RuntimeError(f"qwen embedding 调用失败: {resp.code} {resp.message}")
-    # embedding 的 resp.usage 是 dict，只有 total_tokens；chat 的是对象有 input/output_tokens
-    usage = getattr(resp, "usage", None) or {}
-    input_tokens = usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
+
+    vectors: list[list[float]] = []
+    total_input_tokens = 0
+    for start in range(0, len(texts), EMBED_MAX_BATCH):
+        chunk = texts[start : start + EMBED_MAX_BATCH]
+        resp = _call_with_retry(
+            TextEmbedding.call,
+            model=EMBED_MODEL,
+            input=chunk,
+            dimension=EMBED_DIM,
+            request_timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"qwen embedding 调用失败: {resp.code} {resp.message}")
+        # embedding 的 resp.usage 是 dict，只有 total_tokens；chat 的是对象有 input/output_tokens
+        usage = getattr(resp, "usage", None) or {}
+        total_input_tokens += usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
+        # dashscope 返回的 embeddings 顺序与 input 一致
+        vectors.extend(item["embedding"] for item in resp.output["embeddings"])
+
     get_client().update_current_generation(
         model=EMBED_MODEL,
-        model_parameters={"dimension": EMBED_DIM, "batch_size": len(texts)},
-        usage_details={"input": input_tokens, "output": 0},
+        model_parameters={
+            "dimension": EMBED_DIM,
+            "batch_size": len(texts),
+            "n_api_calls": (len(texts) + EMBED_MAX_BATCH - 1) // EMBED_MAX_BATCH,
+        },
+        usage_details={"input": total_input_tokens, "output": 0},
     )
-    # dashscope 返回的 embeddings 顺序与 input 一致
-    return [item["embedding"] for item in resp.output["embeddings"]]
+    return vectors

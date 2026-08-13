@@ -21,11 +21,14 @@ load_dotenv()
 
 from langfuse import observe  # noqa: E402
 
+from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog, MetricRouter  # noqa: E402
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent  # noqa: E402
 from chat_bi_agent.agents.shared.example_retriever import (  # noqa: E402
     ExamplePool,
     ExampleRetriever,
 )
+from chat_bi_agent.agents.shared.sql_executor import SQLExecutor  # noqa: E402
+from chat_bi_agent.config import CHAT_MODEL, EMBED_MODEL  # noqa: E402
 from chat_bi_agent.eval.precision_retrieval_evaluator import (  # noqa: E402
     PrecisionEvaluation,
     PrecisionRetrievalEvaluator,
@@ -45,8 +48,8 @@ HAPPY_PATH_IDS = [
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "precision_retrieval_evaluation.yaml"
 
 
-def load_questions() -> dict[str, dict]:
-    with open(YAML_PATH, encoding="utf-8") as f:
+def load_questions(path: Path | None = None) -> dict[str, dict]:
+    with open(path or YAML_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return {q["id"]: q for q in data["evaluation_questions"]}
 
@@ -65,6 +68,27 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.7,
         help="同域场景默认 0.7（比 BIRD 跨库的 0.55 严格，宁缺毋滥）",
+    )
+    p.add_argument(
+        "--question-set",
+        type=Path,
+        default=None,
+        help=(
+            "评测集 YAML 路径；不传就跑默认 6 题 happy path。"
+            "传了就跑该文件里的全部题目（如 data/metric_routing_evaluation.yaml）"
+        ),
+    )
+    p.add_argument(
+        "--metric-catalog",
+        type=Path,
+        default=None,
+        help="MetricCatalog YAML 路径（config/metrics.yaml）；不传就 metric router off",
+    )
+    p.add_argument(
+        "--metric-prefilter-threshold",
+        type=float,
+        default=0.63,
+        help="Metric router prefilter cosine 阈值，默认 0.63（34 题标尺实测选出）",
     )
     p.add_argument(
         "--output",
@@ -93,18 +117,188 @@ def _build_retriever(args: argparse.Namespace) -> ExampleRetriever | None:
     )
 
 
+def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
+    if args.metric_catalog is None:
+        return None
+    catalog = MetricCatalog.from_yaml(args.metric_catalog)
+    print(
+        f"[p1-eval] metric router ON catalog={args.metric_catalog} "
+        f"n_metrics={len(catalog.metrics)} threshold={args.metric_prefilter_threshold}",
+        flush=True,
+    )
+    # probe_fn 用只读 executor：给 string filter 做值域存在性探针
+    probe_executor = SQLExecutor()
+    return MetricRouter(
+        catalog=catalog,
+        embed_fn=qwen_client.embed,
+        threshold=args.metric_prefilter_threshold,
+        probe_fn=probe_executor.execute,
+    )
+
+
+def _summarize_result_match(per_question: list[dict]) -> dict:
+    """结果集比对汇总。与 combined_score 无关，专门用来暴露"语义不忠实"。
+
+    分数看不见的那类错误在这里现形：SQL 合法、表/过滤/聚合全对，
+    但答的是另一个问题（丢约束、丢 Top-N、值域塞错），结果集必然对不上。
+    """
+    vals = [r.get("result_match") for r in per_question]
+    matched = sum(1 for v in vals if v is True)
+    mismatched = [r["question_id"] for r in per_question if r.get("result_match") is False]
+    n_eval = matched + len(mismatched)
+    return {
+        "n_evaluated": n_eval,
+        "n_matched": matched,
+        "n_mismatched": len(mismatched),
+        "match_rate": round(matched / n_eval, 4) if n_eval else None,
+        "mismatched_ids": mismatched,
+    }
+
+
+def _model_metadata() -> dict:
+    """落到 payload 顶层，供 verify_ab 做模型漂移守门。
+
+    verify_ab 把 `model` 列为 CRITICAL 字段，但 P1 payload 此前根本没有这个键——
+    检查形同虚设，2026-08-13 换 chat 模型时一声没吭。
+    """
+    return {"model": CHAT_MODEL, "embed_model": EMBED_MODEL}
+
+
+def _routing_accuracy(per_question: list[dict]) -> dict | None:
+    """拿 expected_route ground truth 算路由准确率；没标注就返 None。
+
+    只统计命中率会掩盖一半的问题——"触发了多少次"不等于"触发得对不对"。
+    把 metric_then_nl2sql 记作"没走成"（FN 或 TN）：prefilter 误触但已安全
+    回退，答案质量不受影响，只多花一次 LLM 调用。
+    """
+    labeled = [r for r in per_question if r.get("expected_route") in ("metric", "nl2sql")]
+    if not labeled:
+        return None
+
+    tp = fp = fn = tn = 0
+    prefilter_fp = 0
+    for r in labeled:
+        want_metric = r["expected_route"] == "metric"
+        went_metric = r["route"] == "metric"
+        if want_metric and went_metric:
+            tp += 1
+        elif want_metric and not went_metric:
+            fn += 1
+        elif not want_metric and went_metric:
+            fp += 1
+        else:
+            tn += 1
+        # prefilter 误触：不该走语义层却过了阈值（含已回退的）
+        if not want_metric and r["route"] != "nl2sql":
+            prefilter_fp += 1
+
+    precision = round(tp / (tp + fp), 4) if (tp + fp) else None
+    recall = round(tp / (tp + fn), 4) if (tp + fn) else None
+    f1 = round(2 * precision * recall / (precision + recall), 4) if precision and recall else None
+    return {
+        "n_labeled": len(labeled),
+        "true_positive": tp,
+        "false_positive": fp,
+        "false_negative": fn,
+        "true_negative": tn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "prefilter_false_positive": prefilter_fp,
+    }
+
+
+def _summarize_metric_router(
+    per_question: list[dict],
+    enabled: bool,
+    catalog_path,
+    threshold: float | None,
+) -> dict | None:
+    if not enabled:
+        return None
+    n_total = len(per_question)
+    n_metric = sum(1 for r in per_question if r["route"] == "metric")
+    n_fallback = sum(1 for r in per_question if r["route"] == "metric_then_nl2sql")
+    n_bypass = sum(1 for r in per_question if r["route"] == "nl2sql")
+    n_prefilter_hit = n_metric + n_fallback
+
+    def _avg(scores: list[float]) -> float | None:
+        return round(sum(scores) / len(scores), 4) if scores else None
+
+    hit_scores = [r["score"] for r in per_question if r["route"] == "metric"]
+    fb_scores = [r["score"] for r in per_question if r["route"] == "metric_then_nl2sql"]
+    bp_scores = [r["score"] for r in per_question if r["route"] == "nl2sql"]
+
+    fallback_rate = round(n_fallback / n_prefilter_hit, 4) if n_prefilter_hit > 0 else None
+
+    fail_reasons = [
+        "no_metric",
+        "unknown_dim",
+        "enum_out_of_range",
+        "unsupported_op",
+        "value_out_of_domain",
+        "validator_fail",
+        "executor_fail",
+    ]
+    breakdown = {fr: 0 for fr in fail_reasons}
+    for r in per_question:
+        fr = r.get("metric_fail_reason")
+        if fr in breakdown:
+            breakdown[fr] += 1
+
+    return {
+        "enabled": True,
+        "catalog_path": str(catalog_path) if catalog_path else None,
+        "routing_accuracy": _routing_accuracy(per_question),
+        "prefilter_threshold": threshold,
+        "n_total": n_total,
+        "n_prefilter_hit": n_prefilter_hit,
+        "n_route_metric": n_metric,
+        "n_route_metric_then_nl2sql": n_fallback,
+        "n_route_nl2sql": n_bypass,
+        "metric_hit_rate": round(n_metric / n_total, 4) if n_total else 0.0,
+        "prefilter_hit_rate": round(n_prefilter_hit / n_total, 4) if n_total else 0.0,
+        "precision_when_hit": _avg(hit_scores),
+        "precision_when_fallback": _avg(fb_scores),
+        "precision_when_bypass": _avg(bp_scores),
+        "fallback_rate": fallback_rate,
+        "fail_reason_breakdown": breakdown,
+    }
+
+
 @observe(name="p1_eval_batch")
 def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = parse_args()
     get_client()
-    questions = load_questions()
+    questions = load_questions(args.question_set)
+    if args.question_set is not None:
+        question_ids = list(questions.keys())
+        print(f"[p1-eval] question set={args.question_set} n={len(question_ids)}", flush=True)
+    else:
+        question_ids = list(HAPPY_PATH_IDS)
     retriever = _build_retriever(args)
-    agent = P1NL2SQLAgent(top_k=4, example_retriever=retriever)
-    evaluator = PrecisionRetrievalEvaluator()
+    metric_router = _build_metric_router(args)
+    agent = P1NL2SQLAgent(top_k=4, example_retriever=retriever, metric_router=metric_router)
+    # A/B 实验臂打到 batch trace 的 tags 上。agent._tag_trace 只写 metadata，不碰 tags，
+    # 所以这里不会被逐题覆盖；Langfuse UI 里可直接按臂筛选。
+    try:
+        get_client().update_current_trace(
+            tags=[
+                "arm:metric_router" if metric_router is not None else "arm:baseline",
+                "fewshot:on" if retriever is not None else "fewshot:off",
+            ],
+        )
+    except Exception:
+        pass
+    # 注入只读 executor：跑 gold SQL 做结果集比对（诊断字段，不进总分）
+    evaluator = PrecisionRetrievalEvaluator(gold_executor=SQLExecutor())
+    if args.question_set is not None:
+        # evaluator 默认只读 precision_retrieval_evaluation.yaml，换题集时要一起换
+        evaluator.questions = list(questions.values())
 
     evaluation = PrecisionEvaluation()
-    evaluation.total_questions = len(HAPPY_PATH_IDS)
+    evaluation.total_questions = len(question_ids)
 
     print("=" * 64)
     print("Baseline Eval (Validator + Reflector)")
@@ -112,7 +306,7 @@ def main(args: argparse.Namespace | None = None) -> int:
 
     per_question: list[dict] = []
 
-    for qid in HAPPY_PATH_IDS:
+    for qid in question_ids:
         q = questions[qid]
         question_text = q["question"].strip()
         print(f"\n--- {qid} ---")
@@ -149,6 +343,13 @@ def main(args: argparse.Namespace | None = None) -> int:
                 "error_class": agent_result.error_class.value if agent_result.error_class else None,
                 "reflect_history": agent_result.reflect_history,
                 "sql": agent_result.sql,
+                "route": agent_result.route,
+                "metric_id": agent_result.metric_id,
+                "prefilter_cosine": agent_result.prefilter_cosine,
+                "metric_spec": agent_result.metric_spec,
+                "metric_fail_reason": agent_result.metric_fail_reason,
+                "expected_route": q.get("expected_route"),
+                "result_match": score.result_match,
             }
         )
 
@@ -174,6 +375,7 @@ def main(args: argparse.Namespace | None = None) -> int:
     extra_hashes = {"pool_hash": args.example_pool} if args.example_pool else {}
     payload = {
         "baseline_id": "p1_eval",
+        **_model_metadata(),
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "run_metadata": build_run_metadata(extra_paths=extra_hashes),
         "few_shot": {
@@ -182,10 +384,17 @@ def main(args: argparse.Namespace | None = None) -> int:
             "k": args.few_shot_k,
             "min_similarity": args.few_shot_min_sim,
         },
+        "metric_router": _summarize_metric_router(
+            per_question=per_question,
+            enabled=metric_router is not None,
+            catalog_path=args.metric_catalog,
+            threshold=args.metric_prefilter_threshold if metric_router else None,
+        ),
         "total_questions": evaluation.total_questions,
         "passed_questions": evaluation.passed_questions,
         "pass_rate": round(evaluation.pass_rate, 4),
         "avg_score": round(evaluation.avg_score, 4),
+        "result_match": _summarize_result_match(per_question),
         "latency_ms": lat_stats,
         "per_question": per_question,
     }

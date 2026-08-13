@@ -486,7 +486,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-010](#adr-010-postgresql-双用户隔离-写与读) | PostgreSQL 双用户隔离 | Accepted |
 | [ADR-011](#adr-011-bird-financial-只跑-p1sqlite-直连--独立-nl2sql-prompt) | BIRD-financial 只跑 P1 + SQLite 直连 | Accepted |
 | [ADR-012](#adr-012-q-sql-few-shot-检索注入-bird-验证净效应-0-同域生产未测) | Q-SQL few-shot 检索注入 | Accepted（默认阈值保守） |
-| [ADR-013](#adr-013-语义层-metric-resolver-原型-6-指标模板-llm-抽-spec-fallback-回原-nl2sql) | 语义层 Metric Resolver 原型 | Accepted（原型，未接线到 P1 主路径） |
+| [ADR-013](#adr-013-语义层-metric-resolver-原型-6-指标模板-llm-抽-spec-fallback-回原-nl2sql) | 语义层 Metric Resolver 原型 | Accepted（2026-08-12 已接线到 P1 主路径，见 Update） |
 
 新增 ADR 命名 `ADR-013`、`ADR-014` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
@@ -599,6 +599,264 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 - 数据：`config/metrics.yaml`（6 metrics）+ 17 单元测试全绿 + 4-题真 Qwen smoke（3 命中 + 1 fallback）
 - 讨论：本 ADR 完整覆盖
 
+### Update 2026-08-12：接线完成 + A/B 数字
+
+**变更概览**：
+- 新增 `MetricRouter` 类（`RouteResult` dataclass + `try_route()` never raises）
+- `P1NL2SQLAgent.__init__` 加 `metric_router: MetricRouter | None = None` 参数
+- `run()` 在 SchemaLinker 之前 try_route；命中且模板 SQL 跑通直接返（不进 Reflect Loop）
+- `P1AgentResult` 加 5 字段：`route / metric_id / prefilter_cosine / metric_spec / metric_fail_reason`
+- `render_sql_from_spec` 加 `op='IN'` 支持（enum/string/numeric 三类校验；空 list 与非 list val 抛 `unsupported_op` / 类型错）
+- `run_p1_eval.py` 加 `--metric-catalog` / `--metric-prefilter-threshold`；`results/*.json` 顶层 `metric_router` 汇总段
+- Langfuse trace metadata 加 `route / metric_id / prefilter_cosine / metric_fail_reason`；batch trace 打 `arm:baseline` / `arm:metric_router` tag 区分实验臂
+
+**接线时发现并修掉的 catalog 定义错**（集成 smoke 打真 Postgres 暴露）：
+
+原型阶段的 4-题 smoke 只覆盖了 3 个命中 case，`config/metrics.yaml` 里有 3 处定义
+从未被真实执行过，全是必挂的错：
+
+| 问题 | 影响 | 修法 |
+|---|---|---|
+| `fbd.account_type` 列不存在（在 `dim_account` 上） | `deposit_balance` + `loan_balance` 100% executor_fail | 加 `account` join；因 `hard_filters` 无法声明 `requires_join`，给 `Metric` 新增 `hard_filter_joins` 字段，无条件拼进 FROM |
+| `ft.channel` 列不存在（实际 `transaction_channel`） | `transaction_amount` 的 channel 维度/过滤全废 | 改列名 |
+| `dc.is_active` 是 boolean 却声明成 `string` | 拼出 `= 'True'`，PG 类型错 | 新增 `boolean` filter 类型，渲染 TRUE/FALSE |
+
+`dim_account` 与 `fct_balance_daily` 是多对一，join 不放大行数（实测 449 行 join 后仍 449 行），
+AVG 口径不变。回归验证：6 metric × 全部 dim/filter 共 48 个组合真打 PG，改前 18 broken → 改后 0 broken。
+
+**教训**：原型阶段"单测全绿 + 少量 smoke"不足以证明 catalog 正确——模板里的列名只有真正
+execute 才会被校验。catalog 类改动必须配一个「全组合真打 DB」的回归扫描。
+
+**首轮 A/B 数字**（2026-08-13，**旧的** 6 题 happy path，同 commit `2f60c1d`）：
+
+> 这套题后来被判定为不合格的标尺并已替换，数字保留作为过程记录。
+> 现行结论见下方「第二轮 A/B（34 题新标尺）」。
+
+
+| 指标 | Baseline | Router t=0.70 | Router t=0.57 |
+|---|---:|---:|---:|
+| avg_score | 0.908 | 0.908 | 0.908 |
+| passed | 6/6 | 6/6 | 6/6 |
+| metric_hit_rate | — | 0.000 | 0.333 |
+| prefilter_hit_rate | — | 0.000 | 0.667 |
+| precision_when_hit | — | — | **1.000** |
+| precision_when_fallback | — | — | 0.850 |
+| precision_when_bypass | — | 0.908 | 0.875 |
+| fallback_rate | — | — | 0.500 |
+
+**fail_reason_breakdown**（t=0.57）：2 no_metric，其余全 0
+
+**逐题得分三臂完全相同**（0.850 / 1.000 / 0.850 / 0.850 / 1.000 / 0.900）——
+t=0.57 把 q002、q006 走了 governed 模板路径，答案与 NL2SQL 一字不差。
+
+**判定结果：条件绿灯**
+
+判定表两条硬指标都过了：`precision_when_hit` 1.000 ≥ baseline 同题 1.000，
+`metric_hit_rate` 0.333 ≥ 0.30。但**这把尺子本身不可信**，不足以据此放开默认阈值：
+
+- 0.333 正好是这套题的天花板。用 resolver 逐题验证过，6 题里只有 q002
+  （product_count）和 q006（customer_count）是真指标型问题，另外 4 题 LLM 都
+  正确返回 `metric_id=null`。**即使 prefilter 完美，命中率上限也只有 2/6**——
+  绿灯线 0.30 在这套题上几乎没有区分度
+- n=6，且 baseline 自身有噪声（同一 commit 连跑三次 avg 在 0.908–0.925 之间飘，
+  q007 在 0.900/1.000 之间跳）
+- 命中样本只有 2 个，撑不起"语义层不会答错"的结论
+
+**延迟：不下结论**。三臂 avg 差异（19.1s / 7.6s / 9.4s）几乎全由 baseline 的
+单题离群值撑起（q003 一次 84s）。看命中题本身，governed 路径反而更慢
+（q002 13.6s vs 4.0s，q006 6.9s vs 6.0s）——它省掉了 SchemaLinker + SQLGenerator，
+但换来 prefilter embedding + spec 抽取两次调用，净额并不省。n=6 且方差极大，
+任何延迟结论都不成立。
+
+- **t=0.70（当前默认）：0 命中**。6 题 cosine 全落在 0.48–0.65，最高 0.6475 < 0.70。
+  路由层等于没启用——`precision_when_bypass` 与 baseline 逐题完全相同，
+  向后兼容得到实证，但也没产生任何收益。
+- **t=0.57：命中率 0.333，正好是这套题的天花板**。用 resolver 逐题验证过，
+  6 题里只有 q002（product_count）和 q006（customer_count）是真正的指标型问题，
+  另外 4 题 LLM 都正确返回 `metric_id=null`（明细/事件流查询，或指标不在目录里）。
+  **即使 prefilter 完美，命中率上限也只有 2/6 = 0.333**——绿灯线定的 0.30 在这套
+  题上几乎没有区分度，说明**这 6 题不是衡量语义层的合适标尺**。
+
+**已修掉的评分器伪影**（首轮 A/B 曾让 `precision_when_hit` 假跌到 0.925）：
+
+首轮 q006 的 metric 路径得分 0.850 vs baseline 1.000，但两条 SQL 返回的结果集
+完全相同（`BR_CITY_0000: 58` / `BR_CITY_0002: 59`，仅行序不同）。拆开评分维度，
+六项里五项一模一样，只有 `column_score` 是 0.0 vs 1.0。
+
+成因：`render_sql_from_spec` 对每个 dim 都无条件输出 `dc.branch_id AS branch_id`，
+而 `PrecisionRetrievalEvaluator` 会剥掉带 `AS` 的列以还原"真实 schema 列"——
+模板把所有列都别名化，剥完是空集，Jaccard 归零。
+**gold SQL 里 `branch_id` 恰好不带别名**，NL2SQL 因此天然占优。
+
+修法选了改模板而非改评分器：冗余别名本身就是噪音，而动尺子有"改评分标准让自家
+指标好看"的嫌疑。现在只在「是裸列引用」且「别名 == 裸列名」时省略 `AS`，
+聚合表达式与真正重命名的 dim 一律保留。修完 q006 回到 1.000，返回行不变。
+
+**教训**：跨路径比较前先确认尺子对两条路径中立。这个伪影差点把一个无回归的
+特性判成回归——真去"优化"语义层反而会走错方向。
+
+**接线过程中修掉的两个必挂 bug**（都是单测全绿、真跑才暴露的）：
+
+1. `qwen_client.embed` 未分批 → DashScope 单次上限 10 条，MetricRouter 要 embed
+   32 条 alias，treatment 轮**起步即崩**。修在客户端而非调用方：
+   `SchemaLoader.build_index()` 正好卡在 10 条表文档上，再加一张表主路径同样会炸。
+2. 抽取 prompt 与渲染能力脱节 → Task 1 加了 `op='IN'` 的**渲染**，但 prompt 仍写着
+   "op 目前只支持 '='"。LLM 被明确告知不能用 IN，遇到"杭州和南京两个分行"
+   直接把约束丢掉，改成按全部城市分组。q006 因此掉到 0.433。
+   **这类失败最危险：SQL 合法、validator 过、executor 过、返回一堆行，只是答的是
+   另一个问题**——现有 guardrail 一个都拦不住。修完 q006 回到 0.850（差额即上述伪影）。
+
+**教训**：语义层的 guardrail 只覆盖"结构合法性"（enum 值域、列存在、join 完整），
+覆盖不了"语义忠实度"（约束有没有被悄悄丢掉、值有没有塞错列）。string 类型 filter
+尤其危险——没有 `enum_values` 可校验，值传错不报错，只静默返回 0 行。
+
+### Update 2026-08-13：跟进项四项落地 + 第二轮 A/B
+
+首轮 A/B 的四条「下一步」全部执行完毕。
+
+**1. 指标目录 6 → 18**（原 P2 项）
+
+补齐四个此前完全未覆盖的域：持仓（`fct_holding`）、风险（`fct_risk_event`）、
+营销（`fct_campaign_response`）、交易笔数/笔均。enum 值域全部从真库
+`SELECT DISTINCT` 取，不是手写猜的。全组合回归从 48 涨到 145 个组合，真打 PG 全绿。
+
+**2. string filter 值域探针**——补上语义层最后一个无防护失败面
+
+`enum` 有 `enum_values` 兜底，`numeric`/`boolean` 值域无穷，`time_window` 为空是
+业务事实——只有 `string` filter 完全没防护。做法：`MetricRouter` 加可选 `probe_fn`
+（与 `embed_fn` 同样的注入风格），resolve 成功后对 string filter 跑一条
+`SELECT 1 FROM ... WHERE <谓词> LIMIT 1`，查不到行就判 `value_out_of_domain` 退回 NL2SQL。
+
+探针刻意不带 `time_window` 与 `hard_filters`：那两者为空是业务事实不是抽取错误，
+只回答"这个值在这一列里存在吗"。
+
+**这个守门在第二轮 A/B 里真的救了一次**：题目问"理财产品推荐**活动**"，库里真实
+`campaign_name` 是"理财产品推荐"（无"活动"二字），LLM 抽出了不存在的值。没有探针
+它会静默返回 `SUM(...)` 空集 = NULL。代价是损失一次召回——这正是设计意图。
+
+**3. 排序/取顶类问题一律拒绝**
+
+第二轮 A/B 暴露的新漏洞：问"存款余额最高的前 5 个分行"，LLM 映射到
+`deposit_balance` 却丢掉 Top-5，返回全部分行。SQL 合法、值域也对、
+validator/executor 全过，只是答的是另一个问题——与当初丢掉 IN 约束同一类失败。
+
+`MetricSpec` 结构里根本没有 ORDER BY / LIMIT 字段，这类问题必须拒绝而非硬凑。
+prompt 加规则：涉及「最高/最低」「前 N 个」「排名」「Top」一律返回 `metric_id=null`。
+
+**注意评分器同样看不全这类错误**：mr_n12 被误路由后只扣了 0.075（表/过滤/聚合都对），
+分数根本不足以把它暴露出来——是逐题看 SQL 才发现的。
+
+**4. 换标尺**：新建 `src/chat_bi_agent/data/metric_routing_evaluation.yaml`
+
+34 题，指标型 20 题（58.8%），非指标对照 14 题。相比旧的 6 题（指标型仅 2 题、
+命中率天花板 0.333），这套题才有区分度。
+
+关键设计——**`expected_route` 作为 ground truth**。只统计命中率会掩盖一半的问题：
+"触发了多少次"不等于"触发得对不对"。有了标注才能算 precision/recall，
+`payload.metric_router.routing_accuracy` 给出 TP/FP/FN/TN。
+
+防"照着目录写题"的自证陷阱：题面按业务提问方式写，尽量不逐字复用 catalog alias；
+非指标题分三类且都不是凑数——明细查询 5 题、目录表达不了的聚合 5 题（占比/argmax/
+Top-N/未建模的列）、多步分析 4 题（跨时间窗、跨事实表、开放式）。
+`expected_result_count` 由 gold SQL 真打 PG 回填。
+
+**阈值不能取 argmax——那是过拟合**
+
+在 34 题上扫阈值，最优 F1 出现在 0.5919（F1 0.783）。但做 200 次随机半分交叉验证：
+
+| | 值 |
+|---|---:|
+| 选出的阈值中位数 | 0.5919 |
+| 阈值选择范围 | 0.5512 – 0.7140（σ=0.034） |
+| 样本内 F1 | 0.804 |
+| **样本外 F1** | **0.708** |
+
+样本外掉 0.096，且阈值本身在半个区间内飘——**取 argmax 就是在拟合这 34 题**。
+F1 在 0.59–0.63 之间是平的（0.766–0.783），故取 **0.63**：在平台区内、比中位数保守、
+且不是精确 argmax。
+
+（离线算的 cosine 与实跑记录最大偏差 0.000218，验证了"只 embed 问题选阈值"这条
+省钱路径可信——不必为调阈值跑整轮 eval。）
+
+**第二轮 A/B 结果**（34 题新标尺，同 commit `5da64da`，模型 `qwen3.7-max`，
+verify_ab 两组均退 0）：
+
+| 指标 | Baseline | Router t=0.70 | Router t=0.63 |
+|---|---:|---:|---:|
+| avg_score | 0.9346 | 0.9370 | **0.9539** |
+| passed | 31/34 | 31/34 | **32/34** |
+| metric_hit_rate | — | 0.2647 | **0.4412** |
+| precision_when_hit | — | 1.000 | **1.000** |
+| 路由 precision | — | 1.000 | **1.000** |
+| 路由 recall | — | 0.45 | **0.75** |
+| 路由 F1 | — | 0.6207 | **0.8571** |
+| 路由 false_positive | — | 0 | **0** |
+| fallback_rate | — | 0.10 | 0.2857 |
+
+**判定：绿灯，默认阈值改为 0.63**（`5da64da` → 本次提交）
+
+t=0.63 相对 t=0.70 严格占优：precision 同为满分（零假阳性路由），recall 从 0.45
+提到 0.75。**走语义层的 15 题里 2 题更好、13 题持平、0 题更差**——
+更好的两题是 mr_m03（+0.217）与 mr_m15（+0.250），governed 模板赢过 LLM 手写 SQL。
+
+这也实测确认了 Top-N 拒绝规则（`a9c3b83`）的价值：修复前 t=0.63 有 1 个假阳性
+（mr_n12 那道 Top-5 题），precision 0.9375 / F1 0.8333；修复后假阳性归零，
+precision 1.000 / F1 0.8571——与修复时的推算数字分毫不差。
+
+`value_out_of_domain` 探针在本轮再次触发（仍是"理财产品推荐活动"那个不存在的
+`campaign_name`）。两轮都命中，说明这类失败稳定存在，不是偶发。
+
+**订正一个此前写错的判定标准**
+
+早前 README 写过「`precision_when_bypass` ≠ baseline 是不回归的硬底线」。
+**这个等式在非确定性 LLM 下不可能成立**：本轮 t=0.63 的 13 道 bypass 题里有 3 道
+得分与 baseline 不同（-0.250 / +0.067 / +0.400），而这些题两臂走的是**完全相同的
+nl2sql 代码路径**——纯粹是跑间噪声。
+
+真正该看的是：
+1. **单题 LLM 噪声可达 ±0.4**，所以 avg_score 上零点几个百分点的差异（如 0.9346
+   vs 0.9370）没有意义，不能据此下结论
+2. bypass 题只应有**无系统性偏向的随机漂移**；若出现单向系统性变化才是红旗
+3. 结论要建立在**逐题、且走 governed 路径**的比较上——模板 SQL 是确定性的
+   （同 spec → 同 SQL → 同分），本身就消除了这部分方差。这也是语义层的一项
+   附带收益：把一部分查询从"每次跑分都在抖"变成可复现
+
+**模型口径提醒**：本轮用 `qwen3.7-max`，与 2026-08-13 更早那轮（另一模型）
+**不可跨表比较**。此前 P1 payload 根本没落 `model` 字段，verify_ab 的模型漂移
+守门形同虚设，换模型时一声没吭——已在 `5da64da` 修好。
+
+**下一步**（按优先级）：
+1. **换标尺**：6 题里只有 2 题是指标型，无法衡量语义层。需要一套指标型问题占比
+   ≥ 50% 的评测集，否则命中率这个指标没有意义
+2. ~~默认阈值~~ ✅ 已改为 0.63（见上方第二轮 A/B）
+3. ~~扩指标目录到 15-20 个~~ ✅ 已扩到 18
+4. ~~补语义忠实度守门~~ ✅ string filter 值域探针已上线，两轮 A/B 各触发一次
+
+**新的下一步**：
+1. ~~评分器看不见语义不忠实~~ ✅ 已加 `result_match` 结果集比对维度。
+   刻意**不计入 combined_score**——现有权重和为 1.0，加进去会改变所有历史分数、
+   废掉 baseline 可比性，而重建基线要花钱重跑。它作为诊断字段存在，
+   `payload.result_match.mismatched_ids` 直接点名哪几题"答的是另一个问题"。
+   实测回放 mr_n12：combined_score 0.708（看不出问题），result_match=False（判假）。
+   **是否并入总分是一个需要重建基线的独立决定**，留待将来。
+2. ~~阈值随模型漂移~~ ✅ 已固化为 `scripts/sweep_prefilter_threshold.py`。
+   换 embedding 模型后必须重跑；只花 embedding 的钱（几十秒），不必跑整轮 eval
+   （离线 cosine 与实跑记录偏差 0.000218）。脚本同时输出交叉验证的过拟合幅度，
+   并提示"表里的 FP 是 prefilter 误触，不等于错误路由"——实测 t=0.63 下
+   prefilter FP=5 但真正的路由 FP=0，误触会被 resolve 与值域探针拦下。
+3. **扩题量（暂缓，成本考虑）**：34 题里指标型 20 题，`routing_accuracy` 的分母偏小
+   （recall 0.75 = 15/20，少一题就跳 5 个点）。目标 60+ 题，待预算允许再做
+
+**跟进项闭环**：
+- P1 ✅ `op='IN'` 支持完成
+- P1 ✅ 接线到 P1 主路径完成（前置路由而非 SQLGenerator 内部 try/except）
+- P2 保留：指标目录扩容至 15-20 个（loan/campaign/risk 相关，独立 PR）
+- P3 保留：Streamlit "识别到 metric=X 确认" UX
+- P3 保留：Langfuse 看板 `metric_hit_rate` 图
+
+**Trace**：本次代码见 branch `feat/metric-router-p1-integration`；spec 与 plan 在
+`docs/superpowers/`（gitignored，本地保留）
+
 ---
 
-**最后更新**：2026-07-08
+**最后更新**：2026-08-12

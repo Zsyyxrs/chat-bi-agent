@@ -213,7 +213,9 @@ def main() -> int:
 
     result_doc: dict = {
         "benchmark": "bird_financial",
-        "run_date_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "run_date_utc": dt.datetime.now(dt.UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
         "run_metadata": build_run_metadata(),
         "model": CHAT_MODEL,
         "dev_json_md5": _md5(args.questions),
