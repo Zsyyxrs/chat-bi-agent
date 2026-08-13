@@ -129,3 +129,19 @@ def test_routing_accuracy_absent_when_no_labels():
         per_question=[_mk("metric", 1.0)], enabled=True, catalog_path="x", threshold=0.7
     )
     assert r["routing_accuracy"] is None
+
+
+# ---------------------- 模型漂移守门 ----------------------
+
+
+def test_payload_records_models_for_ab_attribution():
+    """payload 必须落 model —— verify_ab 把它当 CRITICAL 字段。
+
+    此前 P1 的 payload 根本没有这个键，verify_ab 的模型漂移检查形同虚设：
+    2026-08-13 换 chat 模型时守门一声没吭。缺字段 = 守门静默失效。
+    """
+    from chat_bi_agent.runners.run_p1_eval import _model_metadata
+
+    meta = _model_metadata()
+    assert "model" in meta and meta["model"]
+    assert "embed_model" in meta and meta["embed_model"]

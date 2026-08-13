@@ -28,6 +28,7 @@ from chat_bi_agent.agents.shared.example_retriever import (  # noqa: E402
     ExampleRetriever,
 )
 from chat_bi_agent.agents.shared.sql_executor import SQLExecutor  # noqa: E402
+from chat_bi_agent.config import CHAT_MODEL, EMBED_MODEL  # noqa: E402
 from chat_bi_agent.eval.precision_retrieval_evaluator import (  # noqa: E402
     PrecisionEvaluation,
     PrecisionRetrievalEvaluator,
@@ -133,6 +134,15 @@ def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
         threshold=args.metric_prefilter_threshold,
         probe_fn=probe_executor.execute,
     )
+
+
+def _model_metadata() -> dict:
+    """落到 payload 顶层，供 verify_ab 做模型漂移守门。
+
+    verify_ab 把 `model` 列为 CRITICAL 字段，但 P1 payload 此前根本没有这个键——
+    检查形同虚设，2026-08-13 换 chat 模型时一声没吭。
+    """
+    return {"model": CHAT_MODEL, "embed_model": EMBED_MODEL}
 
 
 def _routing_accuracy(per_question: list[dict]) -> dict | None:
@@ -344,6 +354,7 @@ def main(args: argparse.Namespace | None = None) -> int:
     extra_hashes = {"pool_hash": args.example_pool} if args.example_pool else {}
     payload = {
         "baseline_id": "p1_eval",
+        **_model_metadata(),
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "run_metadata": build_run_metadata(extra_paths=extra_hashes),
         "few_shot": {
