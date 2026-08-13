@@ -136,6 +136,25 @@ def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
     )
 
 
+def _summarize_result_match(per_question: list[dict]) -> dict:
+    """结果集比对汇总。与 combined_score 无关，专门用来暴露"语义不忠实"。
+
+    分数看不见的那类错误在这里现形：SQL 合法、表/过滤/聚合全对，
+    但答的是另一个问题（丢约束、丢 Top-N、值域塞错），结果集必然对不上。
+    """
+    vals = [r.get("result_match") for r in per_question]
+    matched = sum(1 for v in vals if v is True)
+    mismatched = [r["question_id"] for r in per_question if r.get("result_match") is False]
+    n_eval = matched + len(mismatched)
+    return {
+        "n_evaluated": n_eval,
+        "n_matched": matched,
+        "n_mismatched": len(mismatched),
+        "match_rate": round(matched / n_eval, 4) if n_eval else None,
+        "mismatched_ids": mismatched,
+    }
+
+
 def _model_metadata() -> dict:
     """落到 payload 顶层，供 verify_ab 做模型漂移守门。
 
@@ -272,7 +291,8 @@ def main(args: argparse.Namespace | None = None) -> int:
         )
     except Exception:
         pass
-    evaluator = PrecisionRetrievalEvaluator()
+    # 注入只读 executor：跑 gold SQL 做结果集比对（诊断字段，不进总分）
+    evaluator = PrecisionRetrievalEvaluator(gold_executor=SQLExecutor())
     if args.question_set is not None:
         # evaluator 默认只读 precision_retrieval_evaluation.yaml，换题集时要一起换
         evaluator.questions = list(questions.values())
@@ -329,6 +349,7 @@ def main(args: argparse.Namespace | None = None) -> int:
                 "metric_spec": agent_result.metric_spec,
                 "metric_fail_reason": agent_result.metric_fail_reason,
                 "expected_route": q.get("expected_route"),
+                "result_match": score.result_match,
             }
         )
 
@@ -373,6 +394,7 @@ def main(args: argparse.Namespace | None = None) -> int:
         "passed_questions": evaluation.passed_questions,
         "pass_rate": round(evaluation.pass_rate, 4),
         "avg_score": round(evaluation.avg_score, 4),
+        "result_match": _summarize_result_match(per_question),
         "latency_ms": lat_stats,
         "per_question": per_question,
     }

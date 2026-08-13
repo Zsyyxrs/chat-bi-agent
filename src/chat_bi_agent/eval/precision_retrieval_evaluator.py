@@ -30,6 +30,11 @@ class PrecisionScore:
     aggregation_correct: bool = False  # 聚合函数是否正确（如适用）
     result_count_correct: bool = False  # 返回行数是否在预期范围内
     response_time_seconds: float = 0.0
+    # 诊断字段：与 gold SQL 的结果集是否一致。None = 未评估（没注入 executor / gold 跑不通）。
+    # **刻意不计入 combined_score**——现有权重和为 1.0，加进去会改变所有历史分数、
+    # 废掉 baseline 可比性。它的作用是让"语义不忠实"可见：mr_n12 丢掉 Top-5 时
+    # 表/过滤/聚合全对，总分只扣 0.075，靠分数根本发现不了。
+    result_match: bool | None = None
 
     @property
     def combined_score(self) -> float:
@@ -92,6 +97,30 @@ class PrecisionEvaluation:
         """)
 
 
+def _normalize_row(row: dict) -> tuple:
+    """把一行归一成可比较的值元组：忽略列名与列序，浮点抹掉末位噪声。
+
+    忽略列名是必要的——gold 与生成 SQL 的别名经常不同
+    （branch_id vs bid、avg_balance vs avg_deposit_balance）。
+    """
+    vals = []
+    for v in row.values():
+        if isinstance(v, float):
+            vals.append(f"{round(v, 4):.4f}")
+        elif isinstance(v, int) and not isinstance(v, bool):
+            vals.append(f"{float(v):.4f}")
+        else:
+            vals.append(str(v))
+    return tuple(sorted(vals))
+
+
+def _result_sets_equal(gold: list[dict], actual: list[dict]) -> bool:
+    """行序无关的多重集比较。"""
+    from collections import Counter
+
+    return Counter(_normalize_row(r) for r in gold) == Counter(_normalize_row(r) for r in actual)
+
+
 class PrecisionRetrievalEvaluator:
     """
     P1 (Precision Data Retrieval) NL2SQL Agent 评估器。
@@ -110,9 +139,11 @@ class PrecisionRetrievalEvaluator:
     5. 聚合为最终评分
     """
 
-    def __init__(self):
+    def __init__(self, gold_executor=None):
         self.eval_dir = Path(__file__).parent.parent / "data"
         self.questions = self._load_evaluation_questions()
+        # 注入后才跑 gold SQL 做结果集比对；不注入则 result_match 恒为 None
+        self.gold_executor = gold_executor
 
     def _load_evaluation_questions(self) -> list[dict]:
         """从 YAML 加载评估问题。"""
@@ -214,7 +245,24 @@ class PrecisionRetrievalEvaluator:
             max_count = expected_count_range.get("max", float("inf"))
             score.result_count_correct = min_count <= actual_count <= max_count
 
+        # 7. 结果集比对（诊断，不进总分）
+        score.result_match = self._compare_with_gold(question, actual_results, execution_error)
+
         return score
+
+    def _compare_with_gold(
+        self, question: dict, actual_results: list[dict] | None, execution_error
+    ) -> bool | None:
+        """跑 gold SQL 与实际结果比对。任何一端不可用就返 None，不下结论。"""
+        if self.gold_executor is None or execution_error or actual_results is None:
+            return None
+        gold_sql = question.get("expected_sql")
+        if not gold_sql:
+            return None
+        gold_rows, gold_err = self.gold_executor.execute(gold_sql)
+        if gold_err is not None or gold_rows is None:
+            return None  # gold 自己跑不通，不能据此判 agent
+        return _result_sets_equal(gold_rows, actual_results)
 
     def _extract_tables_from_expected_sql(self, sql: str) -> set[str]:
         """从期望的 SQL 中提取表名。"""
