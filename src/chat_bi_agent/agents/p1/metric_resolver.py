@@ -265,10 +265,24 @@ def _build_extractor_prompt(catalog: MetricCatalog) -> str:
         "time_window（对象或 null）",
         "3. 如果没有任何 metric 匹配问题（例如题目是要列出明细、事件流、单条记录），",
         "   **必须**返回 metric_id=null，其他字段留空——不要硬凑",
-        "4. filters 元素形如 {col, op, val}；op 目前只支持 '='",
-        "5. filter 是 enum 类型时，val **必须**用目录里给的英文枚举代码，禁止用中文",
-        "6. time_window 形如 {start: 'YYYY-MM-DD', end: 'YYYY-MM-DD'}；只有指标支持时间窗才填",
-        "7. dims 只能选目录里列出的",
+        "4. filters 元素形如 {col, op, val}；op 支持 '=' 与 'IN'",
+        "   - 单值用 {col, op: '=', val: 'X'}",
+        "   - **多值必须用** {col, op: 'IN', val: ['X', 'Y']}——val 是数组",
+        "   - 例：「杭州和南京两个分行」→ {col: 'branch_id', op: 'IN', "
+        "val: ['BR_CITY_0000', 'BR_CITY_0002']}",
+        "5. **约束一个都不能丢**：题目里的每个限定条件（分行、层级、时间、类型…）"
+        "都必须落到 filters 或 time_window 里。",
+        "   如果某个约束在本指标的可用 filters 里表达不了，**返回 metric_id=null**——",
+        "   宁可退回 NL2SQL，也不要丢掉约束后拼一个「看起来对」的查询。",
+        "   反例：问「杭州和南京两个分行的客户数」却输出 dims=['branch_city'] 且不带 "
+        "branch 过滤——这是按全部城市分组，答的是另一个问题",
+        "6. **val 必须落在 col 的值域里**：ID 列传 ID，名称列传名称，不要混。",
+        "   题面常写成「杭州（BR_CITY_0000）」这种「名称（ID）」形式——",
+        "   选 branch_id 就传 'BR_CITY_0000'，选 branch_city 就传 '杭州'。",
+        "   传错不会报错，只会静默返回 0 行，比报错更难查",
+        "7. filter 是 enum 类型时，val **必须**用目录里给的英文枚举代码，禁止用中文",
+        "8. time_window 形如 {start: 'YYYY-MM-DD', end: 'YYYY-MM-DD'}；只有指标支持时间窗才填",
+        "9. dims 只能选目录里列出的",
         "",
         "可用 metric 目录：",
     ]

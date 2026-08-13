@@ -392,3 +392,45 @@ def test_is_active_filter_typed_boolean_not_string():
     )
     sql = render_sql_from_spec(spec, cat)
     assert "dc.is_active = TRUE" in sql
+
+
+# ---------------------- extractor prompt 与渲染能力对齐 ----------------------
+
+
+def test_extractor_prompt_advertises_in_operator():
+    """prompt 必须告诉 LLM 可以用 op='IN'。
+
+    渲染层 2026-08-12 就支持 IN 了，但 prompt 一直写着"op 目前只支持 '='"，
+    LLM 遇到"杭州和南京两个分行"这类多值约束会直接把约束丢掉（改成 group by
+    全部城市），拼出的 SQL 合法、validator/executor 全过，但答的是另一个问题。
+    这种语义欠约束是 guardrail 抓不到的，只能靠 prompt 与渲染能力对齐来防。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "'op 目前只支持" not in prompt
+    assert "IN" in prompt
+    # 必须给出 IN 的形状，否则 LLM 不知道 val 要传 list
+    assert "'IN'" in prompt or '"IN"' in prompt
+
+
+def test_extractor_prompt_warns_against_dropping_constraints():
+    """prompt 要明确禁止「约束表达不了就丢掉」——这是 q006 回归的直接成因。"""
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "metric_id=null" in prompt
+    assert "不要" in prompt or "禁止" in prompt
+
+
+def test_extractor_prompt_requires_value_domain_match():
+    """prompt 要求 val 与 col 的值域匹配。
+
+    string 类型 filter 没有 enum_values 可校验，LLM 把 branch_id 的值
+    ('BR_CITY_0000') 塞进 branch_city（dbr.city，值是「杭州」）时，
+    SQL 合法、执行成功、静默返回 0 行——比报错更难发现。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "值域" in prompt
