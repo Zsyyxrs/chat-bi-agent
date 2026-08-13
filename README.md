@@ -105,6 +105,8 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
   两轮必须在**同一个 commit 上跑**——`verify_ab.py` 把 `commit_hash` 当 CRITICAL 字段，中途改代码会直接判定归因失效。`precision_when_bypass` ≠ baseline 是不回归的硬底线（prefilter 没命中的题走的是原路径，分数不该动）。对齐 [ADR-013 Update 2026-08-12](./DESIGN_DECISIONS.md#adr-013)。
 
+  **首次 A/B（2026-08-13）判定「暖机」**：默认阈值 0.70 下 6 题全部未命中（cosine 最高 0.6475），路由层等同未启用，`precision_when_bypass` 与 baseline 逐题相同；降到 0.57 命中率 0.333，但那正是这套题的天花板——6 题里只有 2 题是真正的指标型问题。**在换用指标型占比更高的评测集之前，默认阈值维持 0.70**（0 命中 = 0 风险），不要为了拉命中率降阈值。详见 [ADR-013 Update](./DESIGN_DECISIONS.md#adr-013)。
+
   catalog 改动后请跑一遍全组合回归（6 metric × 全部 dim/filter 真打 PG），模板里的列名只有真正 execute 才会被校验：
 
   ```bash

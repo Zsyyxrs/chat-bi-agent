@@ -627,9 +627,75 @@ AVG 口径不变。回归验证：6 metric × 全部 dim/filter 共 48 个组合
 **教训**：原型阶段"单测全绿 + 少量 smoke"不足以证明 catalog 正确——模板里的列名只有真正
 execute 才会被校验。catalog 类改动必须配一个「全组合真打 DB」的回归扫描。
 
-**A/B 数字**（首次跑，2026-08-12）：
+**A/B 数字**（首次跑，2026-08-13，6 题 happy path，同 commit `ff7ab28`，verify_ab 退 0）：
 
-TODO_AFTER_AB_RUN
+| 指标 | Baseline | Router t=0.70 | Router t=0.57 |
+|---|---:|---:|---:|
+| avg_score | 0.908 | 0.925 | 0.900 |
+| passed | 6/6 | 6/6 | 6/6 |
+| metric_hit_rate | — | 0.000 | 0.333 |
+| prefilter_hit_rate | — | 0.000 | 0.667 |
+| precision_when_hit | — | — | 0.925 |
+| precision_when_fallback | — | — | 0.850 |
+| precision_when_bypass | 0.908 | 0.925 | 0.925 |
+| fallback_rate | — | — | 0.500 |
+| latency avg / p50 (ms) | 17527 / 5384 | 5327 / 5487 | 6532 / 6823 |
+
+**fail_reason_breakdown**（t=0.57）：2 no_metric，其余全 0
+
+**判定结果：暖机**（未达绿灯，但无真实回归）
+
+- **t=0.70（当前默认）：0 命中**。6 题 cosine 全落在 0.48–0.65，最高 0.6475 < 0.70。
+  路由层等于没启用——`precision_when_bypass` 与 baseline 逐题完全相同，
+  向后兼容得到实证，但也没产生任何收益。
+- **t=0.57：命中率 0.333，正好是这套题的天花板**。用 resolver 逐题验证过，
+  6 题里只有 q002（product_count）和 q006（customer_count）是真正的指标型问题，
+  另外 4 题 LLM 都正确返回 `metric_id=null`（明细/事件流查询，或指标不在目录里）。
+  **即使 prefilter 完美，命中率上限也只有 2/6 = 0.333**——绿灯线定的 0.30 在这套
+  题上几乎没有区分度，说明**这 6 题不是衡量语义层的合适标尺**。
+
+**关于 `precision_when_hit` 0.925 < baseline 同题 1.000 的 0.075 缺口**：
+
+这是**评分器伪影，不是真实回归**。q006 两条路径返回的结果集完全相同
+（`BR_CITY_0000: 58` / `BR_CITY_0002: 59`，仅行序不同），但拆开评分维度：
+
+| 维度 | metric 路径 | baseline |
+|---|---|---|
+| table_score / filter_accuracy / aggregation_correct / result_count_correct | 1.0 / 1.0 / True / True | 完全相同 |
+| **column_score** | **0.0** | **1.0** |
+
+成因：`render_sql_from_spec` 对每个 dim 都无条件输出 `dc.branch_id AS branch_id`，
+而 `PrecisionRetrievalEvaluator` 会剥掉带 `AS` 的列以还原"真实 schema 列"——
+模板把所有列都别名化了，剥完就是空集，Jaccard 归零。
+**gold SQL 里 `branch_id` 恰好是不带别名的**，所以 NL2SQL 天然占优。
+
+结论：这个缺口衡量的是 SQL 写法差异，不是答案质量。修法二选一（未做，留决策）：
+(a) 模板在别名与裸列名相同时不输出 `AS`（去掉冗余别名）；
+(b) 评分器只剥"表达式列"的别名，保留裸列的。
+**注意 (b) 有"改评分器让自家指标好看"的嫌疑，倾向 (a)。**
+
+**接线过程中修掉的两个必挂 bug**（都是单测全绿、真跑才暴露的）：
+
+1. `qwen_client.embed` 未分批 → DashScope 单次上限 10 条，MetricRouter 要 embed
+   32 条 alias，treatment 轮**起步即崩**。修在客户端而非调用方：
+   `SchemaLoader.build_index()` 正好卡在 10 条表文档上，再加一张表主路径同样会炸。
+2. 抽取 prompt 与渲染能力脱节 → Task 1 加了 `op='IN'` 的**渲染**，但 prompt 仍写着
+   "op 目前只支持 '='"。LLM 被明确告知不能用 IN，遇到"杭州和南京两个分行"
+   直接把约束丢掉，改成按全部城市分组。q006 因此掉到 0.433。
+   **这类失败最危险：SQL 合法、validator 过、executor 过、返回一堆行，只是答的是
+   另一个问题**——现有 guardrail 一个都拦不住。修完 q006 回到 0.850（差额即上述伪影）。
+
+**教训**：语义层的 guardrail 只覆盖"结构合法性"（enum 值域、列存在、join 完整），
+覆盖不了"语义忠实度"（约束有没有被悄悄丢掉、值有没有塞错列）。string 类型 filter
+尤其危险——没有 `enum_values` 可校验，值传错不报错，只静默返回 0 行。
+
+**下一步**（按优先级）：
+1. **换标尺**：6 题里只有 2 题是指标型，无法衡量语义层。需要一套指标型问题占比
+   ≥ 50% 的评测集，否则命中率这个指标没有意义
+2. **消除评分伪影**：走上面的 (a)，让 `precision_when_hit` 可信
+3. **默认阈值维持 0.70**：0 命中 = 0 风险，在标尺换掉之前不要为了拉命中率而降阈值
+4. 扩指标目录到 15-20 个（原 P2 项）——目录只有 6 个指标是命中率低的根因之一
+5. 补"语义忠实度"守门：string filter 的值域校验（比对真实列的 distinct 值）
 
 **跟进项闭环**：
 - P1 ✅ `op='IN'` 支持完成
