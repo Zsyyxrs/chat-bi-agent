@@ -107,7 +107,15 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
   **A/B 判定绿灯,默认阈值 0.63**（2026-08-13，34 题指标路由标尺，`qwen3.7-max`）：路由 precision **1.000**（零假阳性）、recall 0.75、F1 0.857、命中率 0.441；走语义层的 15 题里 **2 题更好、13 题持平、0 题更差**。相比 t=0.70（recall 仅 0.45）严格占优。早期那套 6 题 happy path 指标型仅 2 题、命中率天花板 0.333，已判定为不合格标尺并替换。详见 [ADR-013 Update](./DESIGN_DECISIONS.md#adr-013)。
 
-  catalog 改动后请跑一遍全组合回归（6 metric × 全部 dim/filter 真打 PG），模板里的列名只有真正 execute 才会被校验：
+  换 **embedding 模型**后必须重扫阈值（cosine 尺度会变）——只花 embedding 的钱，几十秒，不必跑整轮 eval：
+
+  ```bash
+  python scripts/sweep_prefilter_threshold.py
+  ```
+
+  结果 JSON 里 `result_match` 段是**结果集比对**诊断：它抓的是分数看不见的"语义不忠实"（丢约束、丢 Top-N、值域塞错——SQL 合法、表/过滤/聚合全对，但答的是另一个问题）。`mismatched_ids` 直接点名是哪几题。刻意不计入 `combined_score`，以免废掉历史 baseline 的可比性。
+
+  catalog 改动后请跑一遍全组合回归（18 metric × 全部 dim/filter 真打 PG），模板里的列名只有真正 execute 才会被校验：
 
   ```bash
   pytest tests/p1/test_p1_agent_routing_integration.py -m integration  # 需 chatbi-pg up
