@@ -47,8 +47,8 @@ HAPPY_PATH_IDS = [
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "precision_retrieval_evaluation.yaml"
 
 
-def load_questions() -> dict[str, dict]:
-    with open(YAML_PATH, encoding="utf-8") as f:
+def load_questions(path: Path | None = None) -> dict[str, dict]:
+    with open(path or YAML_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return {q["id"]: q for q in data["evaluation_questions"]}
 
@@ -67,6 +67,15 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.7,
         help="同域场景默认 0.7（比 BIRD 跨库的 0.55 严格，宁缺毋滥）",
+    )
+    p.add_argument(
+        "--question-set",
+        type=Path,
+        default=None,
+        help=(
+            "评测集 YAML 路径；不传就跑默认 6 题 happy path。"
+            "传了就跑该文件里的全部题目（如 data/metric_routing_evaluation.yaml）"
+        ),
     )
     p.add_argument(
         "--metric-catalog",
@@ -126,6 +135,50 @@ def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
     )
 
 
+def _routing_accuracy(per_question: list[dict]) -> dict | None:
+    """拿 expected_route ground truth 算路由准确率；没标注就返 None。
+
+    只统计命中率会掩盖一半的问题——"触发了多少次"不等于"触发得对不对"。
+    把 metric_then_nl2sql 记作"没走成"（FN 或 TN）：prefilter 误触但已安全
+    回退，答案质量不受影响，只多花一次 LLM 调用。
+    """
+    labeled = [r for r in per_question if r.get("expected_route") in ("metric", "nl2sql")]
+    if not labeled:
+        return None
+
+    tp = fp = fn = tn = 0
+    prefilter_fp = 0
+    for r in labeled:
+        want_metric = r["expected_route"] == "metric"
+        went_metric = r["route"] == "metric"
+        if want_metric and went_metric:
+            tp += 1
+        elif want_metric and not went_metric:
+            fn += 1
+        elif not want_metric and went_metric:
+            fp += 1
+        else:
+            tn += 1
+        # prefilter 误触：不该走语义层却过了阈值（含已回退的）
+        if not want_metric and r["route"] != "nl2sql":
+            prefilter_fp += 1
+
+    precision = round(tp / (tp + fp), 4) if (tp + fp) else None
+    recall = round(tp / (tp + fn), 4) if (tp + fn) else None
+    f1 = round(2 * precision * recall / (precision + recall), 4) if precision and recall else None
+    return {
+        "n_labeled": len(labeled),
+        "true_positive": tp,
+        "false_positive": fp,
+        "false_negative": fn,
+        "true_negative": tn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "prefilter_false_positive": prefilter_fp,
+    }
+
+
 def _summarize_metric_router(
     per_question: list[dict],
     enabled: bool,
@@ -167,6 +220,7 @@ def _summarize_metric_router(
     return {
         "enabled": True,
         "catalog_path": str(catalog_path) if catalog_path else None,
+        "routing_accuracy": _routing_accuracy(per_question),
         "prefilter_threshold": threshold,
         "n_total": n_total,
         "n_prefilter_hit": n_prefilter_hit,
@@ -188,7 +242,12 @@ def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = parse_args()
     get_client()
-    questions = load_questions()
+    questions = load_questions(args.question_set)
+    if args.question_set is not None:
+        question_ids = list(questions.keys())
+        print(f"[p1-eval] question set={args.question_set} n={len(question_ids)}", flush=True)
+    else:
+        question_ids = list(HAPPY_PATH_IDS)
     retriever = _build_retriever(args)
     metric_router = _build_metric_router(args)
     agent = P1NL2SQLAgent(top_k=4, example_retriever=retriever, metric_router=metric_router)
@@ -204,9 +263,12 @@ def main(args: argparse.Namespace | None = None) -> int:
     except Exception:
         pass
     evaluator = PrecisionRetrievalEvaluator()
+    if args.question_set is not None:
+        # evaluator 默认只读 precision_retrieval_evaluation.yaml，换题集时要一起换
+        evaluator.questions = list(questions.values())
 
     evaluation = PrecisionEvaluation()
-    evaluation.total_questions = len(HAPPY_PATH_IDS)
+    evaluation.total_questions = len(question_ids)
 
     print("=" * 64)
     print("Baseline Eval (Validator + Reflector)")
@@ -214,7 +276,7 @@ def main(args: argparse.Namespace | None = None) -> int:
 
     per_question: list[dict] = []
 
-    for qid in HAPPY_PATH_IDS:
+    for qid in question_ids:
         q = questions[qid]
         question_text = q["question"].strip()
         print(f"\n--- {qid} ---")
@@ -256,6 +318,7 @@ def main(args: argparse.Namespace | None = None) -> int:
                 "prefilter_cosine": agent_result.prefilter_cosine,
                 "metric_spec": agent_result.metric_spec,
                 "metric_fail_reason": agent_result.metric_fail_reason,
+                "expected_route": q.get("expected_route"),
             }
         )
 
