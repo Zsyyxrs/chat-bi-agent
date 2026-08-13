@@ -214,3 +214,17 @@ def test_router_resolve_unsupported_op_classifies(tmp_path):
     )
     result = router.try_route("ZZZ")
     assert result.fail_reason == "unsupported_op"
+
+
+def test_default_threshold_is_tuned_value(tmp_path):
+    """默认阈值 0.63 是 34 题标尺上实测选出来的，不是拍脑袋的 0.7。
+
+    实测（qwen3.7-max，commit 5da64da）：t=0.63 路由 precision 1.000、recall 0.75、
+    F1 0.857，走语义层的 15 题里 2 题更好 13 题持平 0 题更差；
+    t=0.70 recall 只有 0.45。改这个默认值前先重跑 A/B。
+    """
+    import inspect
+
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    assert inspect.signature(MetricRouter.__init__).parameters["threshold"].default == 0.63

@@ -103,9 +103,9 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
       --expected-differ metric_router
   ```
 
-  两轮必须在**同一个 commit 上跑**——`verify_ab.py` 把 `commit_hash` 当 CRITICAL 字段，中途改代码会直接判定归因失效。`precision_when_bypass` ≠ baseline 是不回归的硬底线（prefilter 没命中的题走的是原路径，分数不该动）。对齐 [ADR-013 Update 2026-08-12](./DESIGN_DECISIONS.md#adr-013)。
+  两轮必须在**同一个 commit、同一个模型上跑**——`verify_ab.py` 把 `commit_hash` 与 `model` 当 CRITICAL 字段。注意 `precision_when_bypass` **不会**与 baseline 完全相等：那些题两臂走同一条 nl2sql 路径，但 LLM 有跑间噪声，实测单题可达 ±0.4。因此别看 avg_score 上零点几个百分点的差异，要看**逐题、且走 governed 路径**的比较——模板 SQL 是确定性的。对齐 [ADR-013 Update 2026-08-12](./DESIGN_DECISIONS.md#adr-013)。
 
-  **首次 A/B（2026-08-13）判定「条件绿灯」**：默认阈值 0.70 下 6 题全部未命中（cosine 最高 0.6475），路由层等同未启用；降到 0.57 命中率 0.333、`precision_when_hit` 1.000，**逐题得分三臂完全相同**——命中的两题走 governed 模板路径，答案与 NL2SQL 一字不差。但 0.333 正是这套题的天花板（6 题里只有 2 题是真指标型问题），命中样本只有 2 个，**在换用指标型占比 ≥ 50%、规模 ≥ 30 题的评测集之前，默认阈值维持 0.70**。详见 [ADR-013 Update](./DESIGN_DECISIONS.md#adr-013)。
+  **A/B 判定绿灯,默认阈值 0.63**（2026-08-13，34 题指标路由标尺，`qwen3.7-max`）：路由 precision **1.000**（零假阳性）、recall 0.75、F1 0.857、命中率 0.441；走语义层的 15 题里 **2 题更好、13 题持平、0 题更差**。相比 t=0.70（recall 仅 0.45）严格占优。早期那套 6 题 happy path 指标型仅 2 题、命中率天花板 0.333，已判定为不合格标尺并替换。详见 [ADR-013 Update](./DESIGN_DECISIONS.md#adr-013)。
 
   catalog 改动后请跑一遍全组合回归（6 metric × 全部 dim/filter 真打 PG），模板里的列名只有真正 execute 才会被校验：
 

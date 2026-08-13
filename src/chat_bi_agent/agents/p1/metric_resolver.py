@@ -455,7 +455,7 @@ class MetricRouter:
         self,
         catalog: MetricCatalog,
         embed_fn,  # Callable[[list[str]], list[list[float]]]
-        threshold: float = 0.7,
+        threshold: float = 0.63,
         probe_fn=None,  # Callable[[str], tuple[list[dict] | None, str | None]] | None
     ):
         self.catalog = catalog

@@ -87,8 +87,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--metric-prefilter-threshold",
         type=float,
-        default=0.7,
-        help="Metric router prefilter cosine 阈值，默认 0.7",
+        default=0.63,
+        help="Metric router prefilter cosine 阈值，默认 0.63（34 题标尺实测选出）",
     )
     p.add_argument(
         "--output",
