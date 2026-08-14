@@ -108,28 +108,29 @@ evaluation_questions:
   # ============================================================
 
   - id: precision_q005
+    # 余额是 stock 指标，跨日求和无意义（原 gold 把 2 月 28 天日快照相加得
+    # 137,120,000 ≈ 月末值 5,000,000 的 27.4 倍）。「总和」指跨账户求和，
+    # 因此把时点钉在月末快照上。
     question: |
-      杭州分行（BR_CITY_0000）在 2026 年 2 月的定期存款余额总和是多少？
+      杭州分行（BR_CITY_0000）在 2026 年 2 月末（2 月 28 日）的定期存款余额总和是多少？
     expected_sql: |
-      SELECT COALESCE(SUM(balance), 0) as total_balance
+      SELECT COALESCE(SUM(fbd.balance), 0) as total_balance
       FROM fct_balance_daily fbd
       JOIN dim_account da ON fbd.account_id = da.account_id
       WHERE da.branch_id = 'BR_CITY_0000'
-        AND EXTRACT(YEAR FROM fbd.dt) = 2026
-        AND EXTRACT(MONTH FROM fbd.dt) = 2
+        AND fbd.dt = DATE '2026-02-28'
         AND da.account_type = 'SAVING'
     expected_result_columns: []
     expected_filters:
       - branch_id: BR_CITY_0000
-      - year: 2026
-      - month: 2
+      - dt: "2026-02-28"
       - account_type: SAVING
     expected_result_count:
       min: 1
       max: 1
     evaluation_criteria:
       - join_correctness: "Agent 是否正确 JOIN dim_account 表"
-      - time_extraction: "Agent 是否正确提取年月"
+      - point_in_time: "Agent 是否把余额取在单一时点而非跨日累加"
       - aggregation: "Agent 是否使用了 SUM 函数并处理 NULL"
       - account_type_filter: "Agent 是否按账户类型过滤"
 
@@ -185,31 +186,37 @@ evaluation_questions:
       - null_handling: "Agent 是否过滤了 NULL 值"
 
   - id: precision_q008
+    # 题面明写「定期存款」但原 gold 没有 account_type 过滤（446 个账户全进，
+    # 加 SAVING 后 111 个）——agent 反而过滤对了却被判错。Top-N 条数原本也只在
+    # gold 里硬编码 LIMIT 10，题面读作单数同样成立，故在题面里写死「前 10 个」。
     question: |
-      列出 2026 年 4 月 14 日前后（前 7 天、后 7 天）定期存款余额变化最大的账户，
+      列出 2026 年 4 月 14 日前后（前 7 天、后 7 天）定期存款余额变化最大的前 10 个账户，
       返回账户 ID、初始余额、末日余额和变化百分比。
     expected_sql: |
       SELECT *
       FROM (
         SELECT
-          account_id,
-          MIN(CASE WHEN dt < '2026-04-14' THEN balance END) AS start_balance,
-          MAX(CASE WHEN dt >= '2026-04-14' THEN balance END) AS end_balance,
+          fbd.account_id,
+          MIN(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END) AS start_balance,
+          MAX(CASE WHEN fbd.dt >= '2026-04-14' THEN fbd.balance END) AS end_balance,
           ROUND(
-            (MAX(CASE WHEN dt >= '2026-04-14' THEN balance END) -
-            MIN(CASE WHEN dt < '2026-04-14' THEN balance END)) /
-            NULLIF(MIN(CASE WHEN dt < '2026-04-14' THEN balance END), 0) * 100, 2
+            (MAX(CASE WHEN fbd.dt >= '2026-04-14' THEN fbd.balance END) -
+            MIN(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END)) /
+            NULLIF(MIN(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END), 0) * 100, 2
           ) AS change_pct
-        FROM fct_balance_daily
-        WHERE dt >= DATE '2026-04-07'
-          AND dt <= DATE '2026-04-21'
-        GROUP BY account_id
+        FROM fct_balance_daily fbd
+        JOIN dim_account da ON fbd.account_id = da.account_id
+        WHERE fbd.dt >= DATE '2026-04-07'
+          AND fbd.dt <= DATE '2026-04-21'
+          AND da.account_type = 'SAVING'
+        GROUP BY fbd.account_id
       ) t
       ORDER BY ABS(change_pct) DESC
       LIMIT 10
     expected_result_columns: [account_id]
     expected_filters:
       - dt_range: ["2026-04-07", "2026-04-21"]
+      - account_type: SAVING
     expected_result_count:
       min: 10
       max: 10
