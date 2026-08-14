@@ -111,6 +111,7 @@ class ExampleRetriever:
         max_k: int = 3,
         allowed_tags: list[str] | None = None,
         blocked_tags: list[str] | None = None,
+        leak_guard_similarity: float | None = None,
     ):
         self.pool = pool
         self.dialect = dialect
@@ -119,6 +120,9 @@ class ExampleRetriever:
         self.max_k = max_k
         self.allowed_tags = set(allowed_tags) if allowed_tags else None
         self.blocked_tags = set(blocked_tags) if blocked_tags else set()
+        # 评测专用：剔除与当前问题过于相似的池内条目，防近似泄题。
+        # 默认关——生产环境里"历史相似问题的 Q-SQL"正是 few-shot 的价值所在。
+        self.leak_guard_similarity = leak_guard_similarity
 
     def _passes_static_filters(self, ex: QAExample) -> bool:
         if ex.dialect != self.dialect:
@@ -154,6 +158,9 @@ class ExampleRetriever:
             score = _cosine(q_vec, ex.embedding or [])
             if score >= self.min_similarity:
                 scored.append((ex, score))
+        if self.leak_guard_similarity is not None:
+            # 与当前问题相似度过高 = 近似副本，喂回去等于开卷考试
+            scored = [t for t in scored if t[1] < self.leak_guard_similarity]
         scored.sort(key=lambda t: t[1], reverse=True)
         limit = k if k is not None else self.max_k
         return scored[:limit]
