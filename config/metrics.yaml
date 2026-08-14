@@ -30,6 +30,16 @@
 
 version: 1
 
+# 全局 join 注册表（join_id → JOIN 子句）。`{fact}` 在加载时替换成该 metric 的
+# fact_alias，所以一条模板可以被所有 fact 表复用；metric 里同名的 joins 会覆盖
+# 这里的定义（不规则 join 的逃生舱）。被 join 表的别名与 fact_alias 撞车时该条
+# 自动失效——那是自连自己。
+joins:
+  account: "JOIN dim_account da ON {fact}.account_id = da.account_id"
+  branch: "JOIN dim_branch dbr ON {fact}.branch_id = dbr.branch_id"
+  customer: "JOIN dim_customer dc ON {fact}.customer_id = dc.customer_id"
+  product: "JOIN dim_product dp ON {fact}.product_id = dp.product_id"
+
 metrics:
 
   # -------------------- 存款余额（活期/储蓄） --------------------
@@ -51,11 +61,6 @@ metrics:
       - "da.account_type IN ('CURRENT','SAVING')"
     hard_filter_joins: [account]
     date_column: fbd.dt
-    joins:
-      account: "JOIN dim_account da ON fbd.account_id = da.account_id"
-      branch: "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id"
-      customer: "JOIN dim_customer dc ON fbd.customer_id = dc.customer_id"
-      product: "JOIN dim_product dp ON fbd.product_id = dp.product_id"
     dim_catalog:
       branch_id:      {select_expr: "fbd.branch_id",      alias: "branch_id"}
       branch_name:    {select_expr: "dbr.branch_name",    alias: "branch_name",    requires_join: [branch]}
@@ -89,10 +94,6 @@ metrics:
       - "da.account_type = 'LOAN'"
     hard_filter_joins: [account]
     date_column: fbd.dt
-    joins:
-      account: "JOIN dim_account da ON fbd.account_id = da.account_id"
-      branch: "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id"
-      customer: "JOIN dim_customer dc ON fbd.customer_id = dc.customer_id"
     dim_catalog:
       branch_id:      {select_expr: "fbd.branch_id",    alias: "branch_id"}
       branch_city:    {select_expr: "dbr.city",         alias: "city",          requires_join: [branch]}
@@ -122,8 +123,6 @@ metrics:
     hard_filters:
       - "dc.is_active = TRUE"
     date_column: null  # AUM 是快照，不吃时间窗
-    joins:
-      branch: "JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id"
     dim_catalog:
       branch_id:    {select_expr: "dc.branch_id",   alias: "branch_id"}
       branch_city:  {select_expr: "dbr.city",       alias: "city",           requires_join: [branch]}
@@ -150,8 +149,6 @@ metrics:
     metric_alias: customer_count
     hard_filters: []
     date_column: null
-    joins:
-      branch: "JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id"
     dim_catalog:
       branch_id:    {select_expr: "dc.branch_id", alias: "branch_id"}
       branch_city:  {select_expr: "dbr.city",     alias: "city",           requires_join: [branch]}
@@ -180,7 +177,6 @@ metrics:
     metric_alias: product_count
     hard_filters: []
     date_column: null
-    joins: {}
     dim_catalog:
       product_category: {select_expr: "dp.product_category", alias: "product_category"}
       risk_level:       {select_expr: "dp.risk_level",       alias: "risk_level"}
@@ -212,8 +208,6 @@ metrics:
     metric_alias: total_amount
     hard_filters: []
     date_column: ft.dt
-    joins:
-      branch: "JOIN dim_branch dbr ON ft.branch_id = dbr.branch_id"
     dim_catalog:
       branch_id:        {select_expr: "ft.branch_id",       alias: "branch_id"}
       branch_city:      {select_expr: "dbr.city",           alias: "city",            requires_join: [branch]}
@@ -248,10 +242,6 @@ metrics:
     metric_alias: transaction_count
     hard_filters: []
     date_column: ft.dt
-    joins:
-      branch: "JOIN dim_branch dbr ON ft.branch_id = dbr.branch_id"
-      customer: "JOIN dim_customer dc ON ft.customer_id = dc.customer_id"
-      product: "JOIN dim_product dp ON ft.product_id = dp.product_id"
     dim_catalog:
       branch_id:        {select_expr: "ft.branch_id",           alias: "branch_id"}
       transaction_type: {select_expr: "ft.transaction_type",    alias: "transaction_type"}
@@ -289,8 +279,6 @@ metrics:
     metric_alias: avg_transaction_amount
     hard_filters: []
     date_column: ft.dt
-    joins:
-      branch: "JOIN dim_branch dbr ON ft.branch_id = dbr.branch_id"
     dim_catalog:
       branch_id:        {select_expr: "ft.branch_id",           alias: "branch_id"}
       transaction_type: {select_expr: "ft.transaction_type",    alias: "transaction_type"}
@@ -322,10 +310,6 @@ metrics:
     metric_alias: total_market_value
     hard_filters: []
     date_column: fh.snapshot_dt
-    joins:
-      branch: "JOIN dim_branch dbr ON fh.branch_id = dbr.branch_id"
-      customer: "JOIN dim_customer dc ON fh.customer_id = dc.customer_id"
-      product: "JOIN dim_product dp ON fh.product_id = dp.product_id"
     dim_catalog:
       branch_id:        {select_expr: "fh.branch_id",           alias: "branch_id"}
       branch_city:      {select_expr: "dbr.city",               alias: "city",              requires_join: [branch]}
@@ -359,9 +343,6 @@ metrics:
     metric_alias: total_pnl
     hard_filters: []
     date_column: fh.snapshot_dt
-    joins:
-      customer: "JOIN dim_customer dc ON fh.customer_id = dc.customer_id"
-      product: "JOIN dim_product dp ON fh.product_id = dp.product_id"
     dim_catalog:
       branch_id:        {select_expr: "fh.branch_id",        alias: "branch_id"}
       customer_tier:    {select_expr: "dc.customer_tier",    alias: "customer_tier",    requires_join: [customer]}
@@ -389,9 +370,6 @@ metrics:
     metric_alias: risk_event_count
     hard_filters: []
     date_column: fre.dt
-    joins:
-      branch: "JOIN dim_branch dbr ON fre.branch_id = dbr.branch_id"
-      customer: "JOIN dim_customer dc ON fre.customer_id = dc.customer_id"
     dim_catalog:
       branch_id:  {select_expr: "fre.branch_id", alias: "branch_id"}
       event_type: {select_expr: "fre.event_type", alias: "event_type"}
@@ -432,7 +410,6 @@ metrics:
     metric_alias: total_risk_amount
     hard_filters: []
     date_column: fre.dt
-    joins: {}
     dim_catalog:
       branch_id:  {select_expr: "fre.branch_id",  alias: "branch_id"}
       event_type: {select_expr: "fre.event_type", alias: "event_type"}
@@ -463,8 +440,6 @@ metrics:
     metric_alias: response_count
     hard_filters: []
     date_column: fcr.dt
-    joins:
-      customer: "JOIN dim_customer dc ON fcr.customer_id = dc.customer_id"
     dim_catalog:
       campaign_name: {select_expr: "fcr.campaign_name", alias: "campaign_name"}
       channel:       {select_expr: "fcr.channel",       alias: "channel"}
@@ -501,7 +476,6 @@ metrics:
     metric_alias: total_conversion_amount
     hard_filters: []
     date_column: fcr.dt
-    joins: {}
     dim_catalog:
       campaign_name: {select_expr: "fcr.campaign_name", alias: "campaign_name"}
       channel:       {select_expr: "fcr.channel",       alias: "channel"}
@@ -528,8 +502,6 @@ metrics:
     metric_alias: account_count
     hard_filters: []
     date_column: null
-    joins:
-      branch: "JOIN dim_branch dbr ON da.branch_id = dbr.branch_id"
     dim_catalog:
       branch_id:    {select_expr: "da.branch_id",   alias: "branch_id"}
       account_type: {select_expr: "da.account_type", alias: "account_type"}
@@ -561,8 +533,6 @@ metrics:
     hard_filters:
       - "dc.is_active = TRUE"
     date_column: null
-    joins:
-      branch: "JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id"
     dim_catalog:
       branch_id:     {select_expr: "dc.branch_id",    alias: "branch_id"}
       customer_tier: {select_expr: "dc.customer_tier", alias: "customer_tier"}
@@ -594,7 +564,6 @@ metrics:
     metric_alias: branch_count
     hard_filters: []
     date_column: null
-    joins: {}
     dim_catalog:
       region:       {select_expr: "dbr.region",       alias: "region"}
       province:     {select_expr: "dbr.province",     alias: "province"}
@@ -621,9 +590,6 @@ metrics:
     metric_alias: avg_total_balance
     hard_filters: []
     date_column: fbd.dt
-    joins:
-      account: "JOIN dim_account da ON fbd.account_id = da.account_id"
-      branch: "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id"
     dim_catalog:
       branch_id:    {select_expr: "fbd.branch_id",   alias: "branch_id"}
       account_type: {select_expr: "da.account_type", alias: "account_type", requires_join: [account]}

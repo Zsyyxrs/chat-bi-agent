@@ -9,6 +9,7 @@ few-shot 用 leave-one-out 语义：retriever 传 exclude_question_texts 排除�
 """
 
 import argparse
+import inspect
 import json
 import sys
 from datetime import UTC, datetime
@@ -101,6 +102,15 @@ def parse_args() -> argparse.Namespace:
         help="Metric router prefilter cosine 阈值，默认 0.63（34 题标尺实测选出）",
     )
     p.add_argument(
+        "--metric-top-k",
+        type=int,
+        default=inspect.signature(MetricRouter.__init__).parameters["top_k"].default,
+        help=(
+            "只把 cosine 最高的 k 个指标写进抽取 prompt（prompt 大小与目录规模解耦）。"
+            "传一个 >= 目录条数的值等价于旧的全量行为"
+        ),
+    )
+    p.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -137,7 +147,8 @@ def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
     catalog = MetricCatalog.from_yaml(args.metric_catalog)
     print(
         f"[p1-eval] metric router ON catalog={args.metric_catalog} "
-        f"n_metrics={len(catalog.metrics)} threshold={args.metric_prefilter_threshold}",
+        f"n_metrics={len(catalog.metrics)} threshold={args.metric_prefilter_threshold} "
+        f"top_k={args.metric_top_k}",
         flush=True,
     )
     # probe_fn 用只读 executor：给 string filter 做值域存在性探针
@@ -147,6 +158,7 @@ def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
         embed_fn=qwen_client.embed,
         threshold=args.metric_prefilter_threshold,
         probe_fn=probe_executor.execute,
+        top_k=args.metric_top_k,
     )
 
 
@@ -227,6 +239,7 @@ def _summarize_metric_router(
     enabled: bool,
     catalog_path,
     threshold: float | None,
+    top_k: int | None = None,
 ) -> dict | None:
     if not enabled:
         return None
@@ -265,6 +278,7 @@ def _summarize_metric_router(
         "catalog_path": str(catalog_path) if catalog_path else None,
         "routing_accuracy": _routing_accuracy(per_question),
         "prefilter_threshold": threshold,
+        "top_k": top_k,
         "n_total": n_total,
         "n_prefilter_hit": n_prefilter_hit,
         "n_route_metric": n_metric,
@@ -411,6 +425,7 @@ def main(args: argparse.Namespace | None = None) -> int:
             enabled=metric_router is not None,
             catalog_path=args.metric_catalog,
             threshold=args.metric_prefilter_threshold if metric_router else None,
+            top_k=args.metric_top_k if metric_router else None,
         ),
         "total_questions": evaluation.total_questions,
         "passed_questions": evaluation.passed_questions,

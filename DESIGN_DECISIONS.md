@@ -901,6 +901,133 @@ nl2sql 代码路径**——纯粹是跑间噪声。
 **Trace**：代码见 PR #6（已合入 main）+ 后续 Streamlit 接线；spec 与 plan 在
 `docs/superpowers/`（gitignored，本地保留）
 
+### Update 2026-08-14：两项扩展性改造（全局 join 注册表 + 候选裁剪）
+
+前两轮 A/B 都在问"语义层准不准"。这次问的是另一个问题：**这套 YAML 扩到生产规模
+还成立吗**。18 个指标是原型规模，真实银行的指标目录是几百条量级。审视下来有两处
+会先撞墙，都不是准确率问题，是结构问题。
+
+**1. join 定义重复 → 全局 join 注册表**
+
+改前 18 个 metric 里内联了 26 条 join 子句，而它们**反解后只有 4 个模板**——
+`dim_account` / `dim_branch` / `dim_customer` / `dim_product` 各一条，零不规则。
+`deposit_balance` 与 `loan_balance` 的 joins 块几乎逐字相同。改一次 `dim_branch`
+的 join 条件要扫全库，这在 300 条指标时是维护灾难。
+
+做法是把 join 提到 metric 之上，`{fact}` 占位该 metric 的 fact_alias：
+
+```yaml
+joins:
+  branch: "JOIN dim_branch dbr ON {fact}.branch_id = dbr.branch_id"
+```
+
+`MetricCatalog.from_yaml` 加载时替换占位符，写进各 metric 的有效 join 表；
+`render_sql_from_spec` 一行没动。YAML 净减 34 行，26 条 join 收敛成 4 条。
+
+两个设计要点：
+
+- **本地覆盖全局**：metric 里同名 `joins` 优先级最高。当前生产 YAML 用不上，
+  但真实银行一定有不规则 join（历史遗留外键、桥接表），没有逃生舱这个抽象会在
+  第一个反例上崩掉，逼人退回全内联。
+- **自连保护**：被 join 表的别名撞上 fact_alias 时该条自动失效。这不是假想问题——
+  `customer_aum` 的 fact 表就是 `dim_customer`（别名 `dc`），不挡的话全局 customer
+  join 会拼出 `ON dc.customer_id = dc.customer_id`。`account_count`、`branch_count`
+  同理。这三个 metric 实测都正确跳过。
+
+**迁移是无损的，且验证过**：迁移前先反解确认 26 条 join 收敛到 4 个模板（有任何
+一条不规则就不该做全局化）；迁移后逐条比对，**26 条先前声明的 join 全部逐字符渲染
+一致**。全局化后每个 metric "可用" 的 join 变多了，但 join 只有被 dim/filter 的
+`requires_join` 点名才会进 SQL，那些声明一行没改——所以输出 SQL 完全不变。
+
+**2. prompt 随目录线性膨胀 → top-k 候选裁剪**
+
+更硬的瓶颈。`_build_extractor_prompt` 原本把**整个 catalog** 枚举进 system prompt，
+每个指标约 272 字符。18 个指标 6,380 字符还能接受，300 个就是 ~83,000 字符，
+每次查询都付一遍。而且候选越多、语义相近的指标互相干扰越强。
+
+讽刺的是**解药早就算出来了却扔掉了**：`MetricRouter.try_route` 用 embedding 算出
+最相似的 metric，但只拿它当阈值 gate，随后仍把完整 catalog 传给 resolver。
+现在改成按 metric 聚合 cosine（一个指标多条 alias 只占一个候选位）、取 top-k
+写进 prompt：
+
+| | 18 个指标 | 扩到 300 个 |
+|---|---:|---:|
+| 全量 prompt | 6,380 chars | ~83,000 chars |
+| top-8 prompt | 3,713 chars | **3,713 chars** |
+
+**prompt 大小从此与目录规模解耦**——这才是重点，58% 那个眼前收益是次要的。
+阈值 gate 语义不变，仍是 top-1 cosine vs 0.63；裁剪只影响 prompt 里描述哪些指标，
+SQL 仍按完整 catalog 渲染。`k=8` 为默认值，`--metric-top-k` 可覆盖。
+
+**为什么这需要一轮 A/B 而不是直接合**：裁剪改变了喂给 LLM 的上下文，18 个指标下
+有 10 个被裁掉，不是空操作。两个方向都可能：候选变少减少干扰（提分），或召回不足
+把正确指标裁出去（掉分）。这是实证问题。
+
+**A/B 结果**（34 题标尺，few-shot off，t=0.63，唯一变量 `--metric-top-k`）：
+
+| 指标 | top_k=99（旧全量） | top_k=8（新默认） |
+|---|---:|---:|
+| avg_score | 0.9564 | 0.9436 |
+| passed | 32/34 | 32/34 |
+| metric_hit_rate | 0.4412 | **0.4412** |
+| n_route_metric | 15 | **15** |
+| 路由 TP/FP/FN/TN | 15/0/5/14 | **15/0/5/14** |
+| 路由 precision / recall / F1 | 1.000 / 0.75 / 0.8571 | **1.000 / 0.75 / 0.8571** |
+| precision_when_hit | 1.000 | 0.9833 |
+| precision_when_bypass | 0.9628 | 0.9500 |
+| latency avg | 20,917 ms | 23,554 ms |
+
+`verify_ab.py --expected-differ metric_router` 退 0（同 commit、同 config_hash、
+同 model，可归因）。
+
+**结论：裁剪对路由行为零影响，合入。**
+
+**路由层完全没动**：同样 15 题走 governed 路径、`metric_id` 抽取逐题相同、
+TP/FP/FN/TN 与 `fail_reason_breakdown`（5 个 no_metric + 1 个 value_out_of_domain）
+分毫不差。被裁掉的 10 个指标里没有一个是本该被选中的。
+
+avg_score 差的 −0.0128 是噪声，不是回归。全部 34 题里只有 4 题分数变了，其中
+3 题（mr_n11 +0.133、mr_n13 −0.017、mr_n14 −0.300）根本不走 governed 路径——
+两臂跑的是完全相同的 nl2sql 代码，纯跑间抖动。这与上一轮记录的现象一致
+（`precision_when_bypass` 两臂也不同，同理）。
+
+**唯一走 governed 路径却变了的 mr_m06，经重复采样证伪**。它的 `metric_id` 两臂
+相同（`customer_count`），差异只在 dims：`branch_id`（对，−0）vs `branch_city`
+（行数同为 2 但列不符，−0.25）。governed 路径 spec→SQL 是确定性的，但
+question→spec 仍是 LLM 调用，所以这里有噪声空间。同题各跑 6 次：
+
+| | dims 分布 |
+|---|---|
+| full(k=99) | `branch_id` × 6 |
+| k=8 | `branch_id` × 6 |
+
+**12/12 全部产出正确的 `branch_id`，那次 `branch_city` 一次都没复现**——是单次
+LLM 抖动，与裁剪无关。
+
+**k=8 的安全余量比预想大得多**。对 15 道成功路由的题算正确指标在 embedding
+召回里的排名：
+
+| 排名 | 题数 |
+|---:|---:|
+| 1 | 13 |
+| 2 | 2 |
+
+**最深只到第 2 名**，连 k=3 都能全覆盖 15/15。这也解释了为什么裁剪毫无影响：
+k=8 相对实际需要有 4 倍余量。真实语义相近的指标（`deposit_balance` vs
+`total_balance`、`transaction_count` vs `transaction_amount`）靠 alias 就已经把
+正确项顶到前两名，不需要靠"多塞候选"来兜底。
+
+**延迟不下结论**：+2.6s 的差异落在 p95 60s→70s 这种量级的方差里，n=34 撑不起
+结论。理论上裁剪应当略微更快（prompt 短 42%），但抽取调用只是端到端的一小段。
+
+**这一轮暴露并已修的产物缺陷**：`results/*.json` 的 `metric_router` 段原本不记录
+`top_k`，只看产物无法判断某份结果属于哪一臂——与 `e7784a5` 修掉的 few-shot 用量
+记录是同一类问题（配置不落盘 = 结果不可归因）。已补 `top_k` 字段；
+**上面这两份结果文件早于该字段，靠文件名区分**。
+
+**Trace**：代码见本次提交；测试 `tests/p1/test_metric_resolver.py`（全局 join 6 例）
++ `tests/p1/test_metric_router.py`（候选裁剪 6 例）+ `tests/eval/`（CLI 透传 2 例）
+
 ---
 
-**最后更新**：2026-08-12
+**最后更新**：2026-08-14

@@ -71,13 +71,50 @@ class Metric:
     hard_filter_joins: list[str] = field(default_factory=list)
 
 
+# 形如 `JOIN dim_branch dbr ON ...`（可带 LEFT/INNER 等前缀）里抓表别名
+_JOIN_ALIAS_RE = re.compile(
+    r"^\s*(?:(?:LEFT|RIGHT|INNER|FULL|OUTER|CROSS)\s+)*JOIN\s+\S+\s+(\S+)\s+ON\b",
+    re.IGNORECASE,
+)
+
+
+def _join_alias(clause: str) -> str | None:
+    """从 JOIN 子句里取被 join 表的别名；取不到返回 None。"""
+    m = _JOIN_ALIAS_RE.match(clause)
+    return m.group(1) if m else None
+
+
+def _resolve_joins(
+    global_joins: dict[str, str], local_joins: dict[str, str], fact_alias: str
+) -> dict[str, str]:
+    """全局 join 模板（{fact} 占位）+ metric 本地 joins → 该 metric 的有效 join 表。
+
+    - 全局模板里的 `{fact}` 替换成本 metric 的 fact_alias
+    - 别名与 fact_alias 撞车的全局 join 直接丢弃：那是自连自己（例如 fact 表本身
+      就是 dim_customer 时的 customer join），拼出来的 SQL 语义是错的。真需要时
+      metric 可以自己写一条本地 join 覆盖。
+    - 本地 joins 优先级最高，是不规则 join 的逃生舱
+    """
+    effective: dict[str, str] = {}
+    for name, template in global_joins.items():
+        clause = template.replace("{fact}", fact_alias)
+        if _join_alias(clause) == fact_alias:
+            continue
+        effective[name] = clause
+    effective.update(local_joins)
+    return effective
+
+
 @dataclass
 class MetricCatalog:
     metrics: list[Metric]
+    # 顶层可复用 join 模板：join_id → 带 {fact} 占位的 JOIN 子句
+    joins: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_yaml(cls, path: Path) -> MetricCatalog:
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        global_joins: dict[str, str] = raw.get("joins") or {}
         ms: list[Metric] = []
         for m in raw.get("metrics", []) or []:
             dim_catalog = {
@@ -110,13 +147,13 @@ class MetricCatalog:
                     metric_alias=m.get("metric_alias", "metric_value"),
                     hard_filters=m.get("hard_filters") or [],
                     date_column=m.get("date_column"),
-                    joins=m.get("joins") or {},
+                    joins=_resolve_joins(global_joins, m.get("joins") or {}, m["fact_alias"]),
                     dim_catalog=dim_catalog,
                     filter_catalog=filter_catalog,
                     hard_filter_joins=m.get("hard_filter_joins") or [],
                 )
             )
-        return cls(metrics=ms)
+        return cls(metrics=ms, joins=global_joins)
 
     def get(self, metric_id: str) -> Metric:
         for m in self.metrics:
@@ -300,8 +337,13 @@ def render_domain_probe_sql(spec: MetricSpec, catalog: MetricCatalog) -> str | N
 _JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
 
-def _build_extractor_prompt(catalog: MetricCatalog) -> str:
-    """让 LLM 从 NL 抽 {metric_id, dims, filters, time_window} 的 system prompt。"""
+def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | None = None) -> str:
+    """让 LLM 从 NL 抽 {metric_id, dims, filters, time_window} 的 system prompt。
+
+    candidate_ids 给定时只描述这几个指标（MetricRouter 的 embedding 召回结果）。
+    prompt 大小从 O(全部指标) 降到 O(k)，指标目录扩到几百条也不会撑爆上下文；
+    候选变少同时也减少语义相近指标之间的互相干扰。不传则整个目录都进 prompt。
+    """
     lines = [
         "你是一个银行业务语义层指标抽取器。任务：读用户中文问题，从给定 metric 目录里",
         "选出**唯一**匹配的指标，抽出它需要的维度、过滤、时间窗口。**只输出 JSON**。",
@@ -337,7 +379,12 @@ def _build_extractor_prompt(catalog: MetricCatalog) -> str:
         "",
         "可用 metric 目录：",
     ]
-    for m in catalog.metrics:
+    if candidate_ids is None:
+        shortlist = catalog.metrics
+    else:
+        by_id = {m.id: m for m in catalog.metrics}
+        shortlist = [by_id[mid] for mid in candidate_ids if mid in by_id]
+    for m in shortlist:
         lines.append("")
         lines.append(f"- **{m.id}**：{m.display_name}")
         if m.aliases:
@@ -390,9 +437,14 @@ def _parse_spec(raw: str) -> MetricSpec:
     )
 
 
-def _resolve_to_spec_and_sql(question: str, catalog: MetricCatalog) -> tuple[MetricSpec, str]:
-    """内部：question → (spec, sql)。失败抛 MetricResolverError。"""
-    system_prompt = _build_extractor_prompt(catalog)
+def _resolve_to_spec_and_sql(
+    question: str, catalog: MetricCatalog, candidate_ids: list[str] | None = None
+) -> tuple[MetricSpec, str]:
+    """内部：question → (spec, sql)。失败抛 MetricResolverError。
+
+    candidate_ids 只裁剪 prompt 里描述的指标；SQL 仍按完整 catalog 渲染。
+    """
+    system_prompt = _build_extractor_prompt(catalog, candidate_ids=candidate_ids)
     user_prompt = f"用户问题：{question}\n请输出 JSON。"
     chat_result = qwen_client.chat(system_prompt=system_prompt, user_prompt=user_prompt)
     spec = _parse_spec(chat_result.content)
@@ -457,10 +509,13 @@ class MetricRouter:
         embed_fn,  # Callable[[list[str]], list[list[float]]]
         threshold: float = 0.63,
         probe_fn=None,  # Callable[[str], tuple[list[dict] | None, str | None]] | None
+        top_k: int = 8,
     ):
         self.catalog = catalog
         self.embed_fn = embed_fn
         self.threshold = threshold
+        # 只把 cosine 最高的 k 个指标写进抽取 prompt，见 _build_extractor_prompt
+        self.top_k = top_k
         # 注入后才做 string filter 值域探针；不注入则行为与之前完全一致
         self.probe_fn = probe_fn
 
@@ -483,14 +538,18 @@ class MetricRouter:
         # 1. embed 问题
         q_vec = self.embed_fn([question])[0]
 
-        # 2. 找 top-1 alias
-        best_mid: str | None = None
-        best_cos: float = -1.0
+        # 2. 每个 metric 取它最像的那条 alias 的 cosine，再按相似度排名
+        #    （一个 metric 多条 alias 只占一个候选位）
+        best_by_metric: dict[str, float] = {}
         for mid, vec in self._alias_index:
             cos = _cosine(q_vec, vec)
-            if cos > best_cos:
-                best_cos = cos
-                best_mid = mid
+            if cos > best_by_metric.get(mid, -1.0):
+                best_by_metric[mid] = cos
+        ranked = sorted(best_by_metric.items(), key=lambda kv: kv[1], reverse=True)
+
+        best_mid: str | None = ranked[0][0] if ranked else None
+        best_cos: float = ranked[0][1] if ranked else -1.0
+        candidate_ids = [mid for mid, _ in ranked[: self.top_k]]
 
         # 3. 阈值 gate
         if best_cos < self.threshold or best_mid is None:
@@ -505,7 +564,9 @@ class MetricRouter:
 
         # 4. resolve
         try:
-            spec, sql = _resolve_to_spec_and_sql(question, self.catalog)
+            spec, sql = _resolve_to_spec_and_sql(
+                question, self.catalog, candidate_ids=candidate_ids
+            )
         except MetricResolverError as e:
             return RouteResult(
                 prefilter_hit=True,

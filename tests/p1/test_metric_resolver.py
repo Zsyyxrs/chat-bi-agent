@@ -612,3 +612,133 @@ def test_extractor_prompt_rejects_ordering_and_top_n():
     prompt = _build_extractor_prompt(_get_cat())
     assert "排序" in prompt
     assert "最高" in prompt or "前 N" in prompt
+
+
+# ---------------------- 全局 joins 复用 ----------------------
+
+
+def _global_joins_catalog(tmp_path, extra_metric_yaml: str = "") -> MetricCatalog:
+    """带顶层 joins 注册表的 catalog：join 子句用 {fact} 占位 fact_alias。"""
+    yml = tmp_path / "gj.yaml"
+    yml.write_text(
+        """
+version: 1
+
+joins:
+  branch: "JOIN dim_branch dbr ON {fact}.branch_id = dbr.branch_id"
+  customer: "JOIN dim_customer dc ON {fact}.customer_id = dc.customer_id"
+
+metrics:
+  - id: deposit_balance
+    display_name: 存款余额
+    aliases: [存款余额]
+    fact_table: fct_balance_daily
+    fact_alias: fbd
+    metric_expr: AVG(fbd.balance)
+    metric_alias: avg_bal
+    hard_filters: []
+    date_column: fbd.dt
+    dim_catalog:
+      branch_city: {select_expr: "dbr.city", alias: "city", requires_join: [branch]}
+    filter_catalog: {}
+"""
+        + extra_metric_yaml,
+        encoding="utf-8",
+    )
+    return MetricCatalog.from_yaml(yml)
+
+
+def test_global_join_substitutes_metric_fact_alias(tmp_path):
+    """顶层 joins 里的 {fact} 要换成该 metric 自己的 fact_alias。"""
+    cat = _global_joins_catalog(tmp_path)
+    sql = render_sql_from_spec(MetricSpec(metric_id="deposit_balance", dims=["branch_city"]), cat)
+    assert "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id" in sql
+    assert "{fact}" not in sql
+
+
+def test_same_global_join_reused_across_different_fact_aliases(tmp_path):
+    """同一条全局 join 被两个 fact_alias 不同的 metric 复用，各自替换成自己的别名。"""
+    cat = _global_joins_catalog(
+        tmp_path,
+        """
+  - id: transaction_amount
+    display_name: 交易金额
+    aliases: [交易金额]
+    fact_table: fct_transaction
+    fact_alias: ft
+    metric_expr: SUM(ft.amount)
+    metric_alias: total_amt
+    hard_filters: []
+    dim_catalog:
+      branch_city: {select_expr: "dbr.city", alias: "city", requires_join: [branch]}
+    filter_catalog: {}
+""",
+    )
+    sql = render_sql_from_spec(
+        MetricSpec(metric_id="transaction_amount", dims=["branch_city"]), cat
+    )
+    assert "JOIN dim_branch dbr ON ft.branch_id = dbr.branch_id" in sql
+
+
+def test_metric_local_join_overrides_global_one(tmp_path):
+    """metric 自己写的 joins 是逃生舱，同名时压过全局注册表。"""
+    cat = _global_joins_catalog(
+        tmp_path,
+        """
+  - id: odd_metric
+    display_name: 不规则指标
+    aliases: [不规则]
+    fact_table: fct_odd
+    fact_alias: fo
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    joins:
+      branch: "JOIN dim_branch dbr ON fo.legacy_branch_code = dbr.branch_id"
+    dim_catalog:
+      branch_city: {select_expr: "dbr.city", alias: "city", requires_join: [branch]}
+    filter_catalog: {}
+""",
+    )
+    sql = render_sql_from_spec(MetricSpec(metric_id="odd_metric", dims=["branch_city"]), cat)
+    assert "JOIN dim_branch dbr ON fo.legacy_branch_code = dbr.branch_id" in sql
+    assert "fo.branch_id" not in sql
+
+
+def test_global_join_skipped_when_its_alias_collides_with_fact_alias(tmp_path):
+    """fact 表本身就是 dim_customer（别名 dc）时，全局 customer join 会自连自己——必须不生效。"""
+    cat = _global_joins_catalog(
+        tmp_path,
+        """
+  - id: customer_aum
+    display_name: 客户 AUM
+    aliases: [AUM]
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: SUM(dc.aum)
+    metric_alias: total_aum
+    hard_filters: []
+    dim_catalog:
+      branch_city: {select_expr: "dbr.city", alias: "city", requires_join: [branch]}
+    filter_catalog: {}
+""",
+    )
+    metric = cat.get("customer_aum")
+    assert "customer" not in metric.joins
+    # branch 不冲突，照常可用
+    assert "JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id" == metric.joins["branch"]
+
+
+def test_catalog_exposes_global_joins_registry(tmp_path):
+    cat = _global_joins_catalog(tmp_path)
+    assert cat.joins["branch"] == "JOIN dim_branch dbr ON {fact}.branch_id = dbr.branch_id"
+
+
+def test_production_yaml_uses_global_joins_registry():
+    """生产 YAML 迁移守门：join 子句集中定义，不再每个 metric 复制一份。"""
+    cat = MetricCatalog.from_yaml(METRICS_YAML)
+    assert set(cat.joins) >= {"account", "branch", "customer", "product"}
+    # 迁移后仍要能拼出正确的 join
+    sql = render_sql_from_spec(MetricSpec(metric_id="deposit_balance", dims=["branch_city"]), cat)
+    assert "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id" in sql
+    assert "JOIN dim_account da ON fbd.account_id = da.account_id" in sql

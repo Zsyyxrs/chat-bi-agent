@@ -228,3 +228,111 @@ def test_default_threshold_is_tuned_value(tmp_path):
     from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
 
     assert inspect.signature(MetricRouter.__init__).parameters["threshold"].default == 0.63
+
+
+# ---------------------- top-k 候选裁剪 ----------------------
+
+
+def _k_catalog(tmp_path, n: int) -> MetricCatalog:
+    """n 个指标，每个一条 alias（alias_i / metric_i），方便按 cosine 排序断言。"""
+    body = "\n".join(
+        f"""  - id: metric_{i}
+    display_name: 指标{i}
+    aliases: [alias_{i}]
+    fact_table: t{i}
+    fact_alias: a{i}
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    dim_catalog: {{}}
+    filter_catalog: {{}}"""
+        for i in range(n)
+    )
+    yml = tmp_path / f"k{n}.yaml"
+    yml.write_text(f"version: 1\nmetrics:\n{body}\n", encoding="utf-8")
+    return MetricCatalog.from_yaml(yml)
+
+
+def _graded_embed(n: int):
+    """alias_i 的 cosine 随 i 递减：alias_0 最像问题，alias_{n-1} 最不像。"""
+
+    def _embed(texts):
+        out = []
+        for t in texts:
+            if t.startswith("alias_"):
+                i = int(t.split("_")[1])
+                angle = (i / n) * (math.pi / 2)
+                out.append([math.cos(angle), math.sin(angle)])
+            else:
+                out.append([1.0, 0.0])  # 问题向量
+        return out
+
+    return _embed
+
+
+def test_prompt_lists_only_candidate_metrics(tmp_path):
+    """candidate_ids 给定时，prompt 只描述这几个指标——其余不进上下文。"""
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    catalog = _tiny_catalog(tmp_path)
+    prompt = _build_extractor_prompt(catalog, candidate_ids=["deposit_balance"])
+    assert "deposit_balance" in prompt
+    assert "customer_count" not in prompt
+
+
+def test_prompt_lists_all_metrics_when_no_candidates_given(tmp_path):
+    """不传 candidate_ids 时行为不变：整个目录都进 prompt。"""
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    catalog = _tiny_catalog(tmp_path)
+    prompt = _build_extractor_prompt(catalog)
+    assert "deposit_balance" in prompt
+    assert "customer_count" in prompt
+
+
+def test_router_passes_top_k_candidates_ranked_by_cosine(tmp_path):
+    """router 只把 cosine 最高的 k 个指标交给 resolver，按相似度降序。"""
+    n = 10
+    catalog = _k_catalog(tmp_path, n)
+    spy = MagicMock(return_value=(MetricSpec(metric_id="metric_0"), "SELECT 1"))
+    router = MetricRouter(catalog=catalog, embed_fn=_graded_embed(n), threshold=0.5, top_k=3)
+    _mr_module._resolve_to_spec_and_sql = spy
+    router.try_route("问题")
+
+    assert spy.call_args.kwargs["candidate_ids"] == ["metric_0", "metric_1", "metric_2"]
+
+
+def test_router_top_k_larger_than_catalog_passes_every_metric(tmp_path):
+    catalog = _k_catalog(tmp_path, 3)
+    spy = MagicMock(return_value=(MetricSpec(metric_id="metric_0"), "SELECT 1"))
+    router = MetricRouter(catalog=catalog, embed_fn=_graded_embed(3), threshold=0.5, top_k=99)
+    _mr_module._resolve_to_spec_and_sql = spy
+    router.try_route("问题")
+
+    assert set(spy.call_args.kwargs["candidate_ids"]) == {"metric_0", "metric_1", "metric_2"}
+
+
+def test_router_candidate_dedupes_metric_with_multiple_aliases(tmp_path):
+    """一个指标多条 alias 时只应占一个候选位，不能挤掉别的指标。"""
+    catalog = _tiny_catalog(tmp_path)  # 两个指标，各 2 条 alias
+    spy = MagicMock(return_value=(MetricSpec(metric_id="deposit_balance"), "SELECT 1"))
+    embed = _fake_embed(
+        [1.0, 0.0],
+        {
+            "存款余额": [1.0, 0.0],
+            "日均存款": [0.99, 0.14],
+            "客户数": [0.7, 0.71],
+            "客户数量": [0.69, 0.72],
+        },
+    )
+    router = MetricRouter(catalog=catalog, embed_fn=embed, threshold=0.5, top_k=2)
+    _mr_module._resolve_to_spec_and_sql = spy
+    router.try_route("存款余额多少")
+
+    assert spy.call_args.kwargs["candidate_ids"] == ["deposit_balance", "customer_count"]
+
+
+def test_router_default_top_k_is_set(tmp_path):
+    catalog = _k_catalog(tmp_path, 3)
+    router = MetricRouter(catalog=catalog, embed_fn=_graded_embed(3))
+    assert router.top_k == 8

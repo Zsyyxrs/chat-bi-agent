@@ -145,3 +145,71 @@ def test_payload_records_models_for_ab_attribution():
     meta = _model_metadata()
     assert "model" in meta and meta["model"]
     assert "embed_model" in meta and meta["embed_model"]
+
+
+# ---------------------- --metric-top-k 透传 ----------------------
+
+
+def test_metric_top_k_flag_defaults_to_router_default():
+    """CLI 默认值不硬编码，跟着 MetricRouter 的默认走。"""
+    import inspect
+    import sys
+    from unittest.mock import patch
+
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+    from chat_bi_agent.runners.run_p1_eval import parse_args
+
+    with patch.object(sys, "argv", ["run_p1_eval"]):
+        args = parse_args()
+    assert args.metric_top_k == inspect.signature(MetricRouter.__init__).parameters["top_k"].default
+
+
+def test_build_metric_router_forwards_top_k(tmp_path):
+    """--metric-top-k 要真的传到 MetricRouter，否则 A/B 两臂其实跑的是同一个配置。"""
+    import argparse
+    from unittest.mock import patch
+
+    from chat_bi_agent.runners.run_p1_eval import _build_metric_router
+
+    yml = tmp_path / "m.yaml"
+    yml.write_text(
+        """
+version: 1
+metrics:
+  - id: m0
+    display_name: 指标0
+    aliases: [别名0]
+    fact_table: t0
+    fact_alias: a0
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    dim_catalog: {}
+    filter_catalog: {}
+""",
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(metric_catalog=yml, metric_prefilter_threshold=0.63, metric_top_k=3)
+    with (
+        patch("chat_bi_agent.runners.run_p1_eval.SQLExecutor"),
+        patch(
+            "chat_bi_agent.llm.qwen_client.embed", side_effect=lambda texts: [[1.0] for _ in texts]
+        ),
+    ):
+        router = _build_metric_router(args)
+    assert router.top_k == 3
+
+
+def test_summary_records_top_k_so_arm_is_identifiable_from_artifact():
+    """产物里必须能看出这一轮用的 top_k，否则事后无法判断某份 result 属于哪一臂。
+
+    与 e7784a5 修的 few-shot 用量记录同一类问题：配置不落盘 = 结果不可归因。
+    """
+    result = _summarize_metric_router(
+        per_question=[_mk("metric", 1.0)],
+        enabled=True,
+        catalog_path="config/metrics.yaml",
+        threshold=0.63,
+        top_k=8,
+    )
+    assert result["top_k"] == 8
