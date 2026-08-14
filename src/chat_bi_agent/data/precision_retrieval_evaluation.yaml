@@ -7,6 +7,11 @@
 #   - expected_result_count: 期望返回的行数范围
 #   - expected_filters: 期望应用的过滤条件
 #   - evaluation_criteria: 评估标准
+#
+# expected_result_count 由 gold SQL 真打 PG 回填（2026-08-14），不是手写估的。
+# 此前 q001/q003/q004 三题仍是初版种子数据的行数，reseed 后已失真——SQL 逐字符
+# 正确也会因行数断言失败被扣 0.15（result_count 权重），静默压低分数。
+# 改 dimension_generator 或重新 seed 后必须重跑回填，否则同样的静默扣分会复发。
 
 evaluation_questions:
   # ============================================================
@@ -26,8 +31,8 @@ evaluation_questions:
       - branch_id: BR_CITY_0006
       - customer_tier: HIGH_NET_WORTH
     expected_result_count:
-      min: 2
-      max: 2
+      min: 29
+      max: 29
     evaluation_criteria:
       - table_selection: "Agent 是否正确选择 dim_customer 表"
       - filter_accuracy: "Agent 是否正确应用两个过滤条件"
@@ -67,8 +72,8 @@ evaluation_questions:
     expected_filters:
       - dt: "2026-04-28"
     expected_result_count:
-      min: 49
-      max: 49
+      min: 674
+      max: 674
     evaluation_criteria:
       - date_filter: "Agent 是否正确理解日期过滤条件"
       - exact_match: "Agent 是否使用了等号（=）而非范围"
@@ -91,8 +96,8 @@ evaluation_questions:
       - transaction_type: WITHDRAW
       - transaction_channel: [ATM, COUNTER]
     expected_result_count:
-      min: 1
-      max: 1
+      min: 88
+      max: 88
     evaluation_criteria:
       - date_range: "Agent 是否正确处理了日期范围（BETWEEN 或 >= AND <=）"
       - multi_value_filter: "Agent 是否使用了 IN 或 OR 处理多个渠道"
