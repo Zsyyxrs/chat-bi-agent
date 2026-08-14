@@ -11,7 +11,11 @@ Usage:
     results/eval_report_<YYYY-MM-DD>.md
 
 注意：
-    - P1 runner 历史遗留，输出文件名是 baseline_p2_validator_reflector_*.json（pattern 兼容）。
+    - P1 的 pattern 必须跟住 run_p1_eval 的默认输出名（baseline_p1_eval_<date>[_fewshot].json）。
+      2026-08-14 之前这里写的是 baseline_p2_validator_reflector_*.json——那是更早的历史文件名，
+      runner 改名后 pattern 没跟着改。后果是跑完 P1 却报出 2026-06-03 那份旧 baseline 的数字，
+      新结果写完即被静默丢弃，「P1 6 题 1.000」因此在一键报告里活了两个月。
+      改名时请一并改 tests/eval/test_run_all_evals_patterns.py 里的守门。
     - 任一 phase 失败不会阻断后续 phase；最终报告标注 missing。
 """
 
@@ -29,7 +33,7 @@ RESULTS_DIR = REPO_ROOT / "results"
 PHASES: dict[str, dict[str, Any]] = {
     "p1": {
         "module": "chat_bi_agent.runners.run_p1_eval",
-        "pattern": "baseline_p2_validator_reflector_*.json",
+        "pattern": "baseline_p1_eval_*.json",
         "label": "P1 NL2SQL",
     },
     "p2": {
