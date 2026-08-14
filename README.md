@@ -23,15 +23,47 @@
 
 ## 📊 评估成绩
 
-### 自家三路径评测（2026-06-30 baseline）
+### 自家三路径评测
 
-| 路径 | 题量 | 通过 | 平均分 | 备注 |
-|---|---:|---:|---:|---|
-| **P1 NL2SQL** | 6 | 6 | **1.000** | 多表 JOIN、时间窗、聚合、分行筛选全过 |
-| **P2 多步分析** | 3 | 3 | **0.740** | 5 维 rubric（步骤完整 + 多指标 + 洞察 + 推理 + 业务相关） |
-| **P3 RCA 归因** | 7 | 7 | **0.900** · event_hit **7/7** | 4 维 rubric，全部命中埋雷事件、零幻觉 |
+| 路径 | 题量 | 通过 | 平均分 | baseline | 备注 |
+|---|---:|---:|---:|---|---|
+| **P1 NL2SQL** | 8 / 8 | 8 | **0.946** | 2026-08-14 | 全量题集；多表 JOIN、时间窗、聚合、分行筛选全过 |
+| **P2 多步分析** | 3 / 8 | 3 | **0.740** | 2026-06-07 | 5 维 rubric（步骤完整 + 多指标 + 洞察 + 推理 + 业务相关） |
+| **P3 RCA 归因** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4 维 rubric，全部命中埋雷事件、零幻觉 |
 
-详细评估方法见 [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md)；原始 baseline JSON 在 [`results/`](./results/) 目录；最新 markdown 报告 [`results/eval_report_2026-06-30.md`](./results/eval_report_2026-06-30.md)。
+「题量」列的分母是评测集里的总题数。**P2 只跑了 8 题里的前 3 题**（2026-06-07 那次带
+`--limit 3`），q004–q008 从未评过分——单题 300–500s，补齐要 40–70 分钟，按成本暂缓。
+
+<details>
+<summary>P1 从「6 题 1.000」改成「8 题 0.946」的原因</summary>
+
+此前公布的 **6 题 / 1.000** 有两处需要更正，2026-08-14 一并修完：
+
+1. **只跑了 8 题里的 6 题**。`run_p1_eval` 的 `HAPPY_PATH_IDS` 是硬编码白名单，
+   排除了 q005、q008。跑开来发现这两题**是 gold 有缺陷，不是 agent 弱**：q005 把余额
+   这个 stock 指标跨 28 天日快照相加（得月末真值的 27.4 倍）；q008 题面明写「定期存款」
+   而 gold 没有 `account_type` 过滤。两题的 gold 已修（`46cc2ab`）。
+2. **gold 行数与种子数据脱节**。q001/q003/q004 的 `expected_result_count` 仍是初版
+   种子数据的值，reseed 后失真，导致 SQL 逐字符正确也被扣 `result_count` 那档的 0.15
+   —— 静默压分而非报错。已按实测回填（`9183f29`）。
+
+修完后**6 题口径回到 1.000**（可复现），8 题全量 0.946，8/8 全部及格。差额来自
+q005（agent 漏了「定期存款」约束，真扣）与 q008（`result_match` 仍为 False，是
+gold 的 MIN/MAX 与题面「初始/末日」的口径分歧，留作 open item）。
+
+改 gold 有「对着 agent 拟合」的风险，故只修了两类明确缺陷：违反业务语义的
+（stock 跨日求和）、以及题面写了但 gold 没实现的（缺失过滤）。解释分歧不改。
+
+</details>
+
+详细评估方法见 [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md)；原始 baseline JSON 在 [`results/`](./results/) 目录（P1 最新为 [`p1_full8_baseline_v2_2026-08-14.json`](results/p1_full8_baseline_v2_2026-08-14.json)）；三路径 markdown 报告 [`results/eval_report_2026-06-30.md`](./results/eval_report_2026-06-30.md)（P1 一节早于本次修正）。
+
+复跑 P1 全量 8 题（默认命令只跑 6 题白名单）：
+
+```bash
+python -m chat_bi_agent.runners.run_p1_eval \
+    --question-set src/chat_bi_agent/data/precision_retrieval_evaluation.yaml
+```
 
 一键复跑：
 

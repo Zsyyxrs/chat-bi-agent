@@ -52,7 +52,7 @@ score = evaluator.evaluate_response(
 ### 示例问题
 1. **precision_q001：** 查询上海分行的高净值客户（含过滤条件）
 2. **precision_q003：** 按特定日期过滤交易
-3. **precision_q005：** 多分行存款余额聚合与时间提取
+3. **precision_q005：** 单时点存款余额聚合（余额是 stock 指标，不可跨日累加）
 4. **precision_q008：** 时间窗口分析与百分比变化计算
 
 ---
