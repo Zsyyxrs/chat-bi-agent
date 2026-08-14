@@ -307,8 +307,17 @@ def main(args: argparse.Namespace | None = None) -> int:
         question_ids = list(HAPPY_PATH_IDS)
     retriever = _build_retriever(args)
     metric_router = _build_metric_router(args)
-    agent = P1NL2SQLAgent(top_k=4, example_retriever=retriever, metric_router=metric_router)
-    # A/B 实验臂打到 batch trace 的 tags 上。agent._tag_trace 只写 metadata，不碰 tags，
+    agent = P1NL2SQLAgent(
+        top_k=4,
+        example_retriever=retriever,
+        metric_router=metric_router,
+        # 关键：逐题的 p1_nl2sql_run 是嵌套在下面这条 p1_eval_batch trace 里的
+        # （实测一条 batch trace 有 274 个 observation），不是独立 root trace。
+        # 生产默认会把 route 打成 tag，但在这里打就会覆盖掉紧接着设的 arm:* 标签，
+        # A/B 直接失去按臂筛选的能力——所以必须显式关掉。
+        tag_route_on_trace=False,
+    )
+    # A/B 实验臂打到 batch trace 的 tags 上。逐题 _tag_trace 已关掉 tag 写入（见上），
     # 所以这里不会被逐题覆盖；Langfuse UI 里可直接按臂筛选。
     try:
         get_client().update_current_trace(

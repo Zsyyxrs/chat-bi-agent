@@ -892,9 +892,27 @@ nl2sql 代码路径**——纯粹是跑间噪声。
 - P2 ✅ 指标目录扩容完成——已到 18 个，覆盖 holding/risk/campaign/transaction 四个新域
 - P3 ✅ Streamlit "识别到 metric=X" UX 完成——P1 tab 命中时显示业务名 +
   expander 摊开语义层的理解（指标/维度/过滤/时间窗），让"识别错了"能当场被发现
-- P3 保留：Langfuse 看板 `metric_hit_rate` 图——**数据已就绪**
-  （trace metadata 已落 `route` / `metric_id` / `prefilter_cosine` / `metric_fail_reason`，
-  batch trace 还打了 `arm:*` tag），只差在 Langfuse 侧建图
+- P3 保留：Langfuse 看板 `metric_hit_rate` 图。**注意："数据已就绪、只差建图"是错的**
+  （2026-08-14 实测纠正）：Langfuse 的 metrics 聚合层**不支持按 metadata 分组**，
+  按 `metadata.route` 查直接 400——合法维度只有
+  `id / name / tags / userId / sessionId / release / version / environment / timestampMonth`。
+  `route` 存在 metadata 里，所以以原埋点方式**根本画不出来**。
+  已修：生产 P1 tab 额外把 route 打成 tag（`route:metric` 等），tags 是可聚合维度。
+  埋点必须现在补——**看板和告警什么时候建成本都一样，但今天没打 tag 的 trace
+  永远补不回可聚合性**，这是唯一有时间不对称的部分。
+  建图本身仍保留：`metric_hit_rate` 早已在 eval payload 的 `payload.metric_router` 里，
+  看板的增量价值是"看生产流量上的表现"，而目前生产流量为零
+  （428 条 P1 trace 全部来自开发/评测），故不急。
+- **不做（2026-08-14 判定）**：Langfuse 侧的"P1 通过率跌破 90%"告警。两个原因：
+  ①**生产环境没有通过率**——通过率的定义是 `combined_score ≥ 0.7` 对着 gold SQL 打分，
+  生产没有 gold；Langfuse 里现存 score 仅 26 条且全是 `user_feedback`（👍/👎，
+  n 小且有自选择偏差）。剩下能算的只有执行失败率 / `give_up` 率 / 回退率，
+  它们测的是"跑通了没有"而不是"答得对不对"——**语法正确、能执行、答非所问，
+  在这类指标里跟成功长得一模一样**，装了比不装更危险。
+  ②**本项目真实发生过的失效全是静默回归**（`op='IN'` prompt 与 renderer 不一致、
+  `request_timeout` 参数名写错、payload 缺 `model` 导致 verify_ab 的 CRITICAL 检查空转），
+  没有一条会被观测告警抓到——它们归属 CI/runner 门禁，而那个门禁已经有了（`verify_ab`）。
+  等有真实流量再重新评估。
 - **新增保留**：P2/P3 tab 尚未接语义层。它们内部调 P1，接了各自的 eval 基线要重建，
   按成本考虑暂缓——目前只有 P1 tab 享受到语义层
 

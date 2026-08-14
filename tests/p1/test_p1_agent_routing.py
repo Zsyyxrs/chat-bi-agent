@@ -213,3 +213,73 @@ def test_tag_trace_includes_route_metadata_when_metric_hit():
         assert md["metric_id"] == "deposit_balance"
         assert md["prefilter_cosine"] == pytest.approx(0.85)
         assert md["metric_fail_reason"] is None
+
+
+# ---- route 打 tag：让 Langfuse 能按 route 聚合 ----
+# 背景：Langfuse metrics 层不支持按 metadata 分组（实测 `metadata.route` 返回 400，
+# 合法维度只有 id/name/tags/userId/sessionId/release/version/environment/timestampMonth）。
+# 所以要画 metric_hit_rate，route 必须同时以 tag 形式落到 trace 上。
+
+
+def test_tag_trace_writes_route_tag_when_enabled():
+    with patch("chat_bi_agent.agents.p1.nl2sql_agent.get_client") as mock_gc:
+        mock_client = MagicMock()
+        mock_gc.return_value = mock_client
+        P1NL2SQLAgent._tag_trace(
+            reflect_history=[],
+            error_class=None,
+            retrieved_example_ids=[],
+            route="metric",
+            metric_id="deposit_balance",
+            prefilter_cosine=0.85,
+            metric_fail_reason=None,
+            tag_route=True,
+        )
+        tags = mock_client.update_current_trace.call_args.kwargs["tags"]
+        assert "route:metric" in tags
+
+
+def test_tag_trace_omits_tags_when_disabled():
+    """评测批次里 p1_nl2sql_run 嵌套在 p1_eval_batch 这条 trace 下（实测 274 个
+    observation）。此时写 tags 会覆盖掉批次的 arm:* 标签，A/B 就没法按臂筛选了——
+    而且一条 trace 装 34 道题的 34 个不同 route，打上去本身也无意义。"""
+    with patch("chat_bi_agent.agents.p1.nl2sql_agent.get_client") as mock_gc:
+        mock_client = MagicMock()
+        mock_gc.return_value = mock_client
+        P1NL2SQLAgent._tag_trace(
+            reflect_history=[],
+            error_class=None,
+            retrieved_example_ids=[],
+            route="metric",
+            metric_id="deposit_balance",
+            prefilter_cosine=0.85,
+            metric_fail_reason=None,
+            tag_route=False,
+        )
+        assert "tags" not in mock_client.update_current_trace.call_args.kwargs
+
+
+def test_agent_defaults_to_not_tagging_route():
+    """默认关。写 tags 是覆盖语义，6 个调用点里只有 1 个是独立 root trace，
+    嵌套场景打上去会冲掉父 trace 的标签——破坏性操作必须 opt-in。"""
+    agent = _make_agent()
+    assert agent.tag_route_on_trace is False
+
+
+def test_p1_streamlit_tab_enables_route_tagging():
+    """契约测试：P1 tab 是唯一确定为 root trace 的调用点，必须显式打开，
+    否则生产流量依旧画不出 metric_hit_rate。"""
+    from pathlib import Path
+
+    src = Path("streamlit_app/tabs/p1_nl2sql.py").read_text(encoding="utf-8")
+    assert "tag_route_on_trace=True" in src
+
+
+def test_eval_runner_disables_route_tagging():
+    """契约测试：runner 必须显式关掉，否则会冲掉自己刚打的 arm tag。"""
+    import inspect
+
+    from chat_bi_agent.runners import run_p1_eval
+
+    src = inspect.getsource(run_p1_eval)
+    assert "tag_route_on_trace=False" in src

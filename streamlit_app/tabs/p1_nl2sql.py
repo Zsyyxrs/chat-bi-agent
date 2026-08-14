@@ -91,7 +91,13 @@ def _get_agent() -> P1NL2SQLAgent:
         retriever = _build_retriever_if_available()
         router = _build_metric_router_if_available()
         st.session_state[_AGENT_KEY] = P1NL2SQLAgent(
-            top_k=4, example_retriever=retriever, metric_router=router
+            top_k=4,
+            example_retriever=retriever,
+            metric_router=router,
+            # 这里每次 run 自成一条 root trace（不像评测批次那样嵌套在 p1_eval_batch 下），
+            # 打 route tag 是安全的。必须打：Langfuse 的 metrics 聚合层不认 metadata
+            # （按 metadata.route 分组返回 400），不打 tag 就画不出 metric_hit_rate。
+            tag_route_on_trace=True,
         )
         st.session_state["p1_pool_size"] = len(retriever.pool) if retriever is not None else 0
         # 缓存 catalog 供展示层把 metric_id 翻成业务名

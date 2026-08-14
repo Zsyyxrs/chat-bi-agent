@@ -52,6 +52,7 @@ class P1NL2SQLAgent:
         dialect: str = "postgres",
         example_retriever: ExampleRetriever | None = None,
         metric_router: MetricRouter | None = None,
+        tag_route_on_trace: bool = False,
     ):
         self.dialect = dialect
         self.loader = SchemaLoader()
@@ -64,6 +65,17 @@ class P1NL2SQLAgent:
         self.reflector = Reflector(max_attempts=MAX_ATTEMPTS, dialect=dialect)
         self.example_retriever = example_retriever
         self.metric_router = metric_router
+        # 把 route 以 tag 形式落到 trace 上——Langfuse 的 metrics 聚合层不认 metadata
+        # （按 `metadata.route` 分组实测返回 400，合法维度只有 id/name/tags/userId/
+        # sessionId/release/version/environment/timestampMonth），不打 tag 就画不出
+        # metric_hit_rate。
+        # 默认关：写 tags 是**覆盖**语义，只有当这次 run 自成一条 root trace 时才安全。
+        # 6 个调用点里只有 P1 Streamlit tab 满足；run_p1_eval 里逐题 run 是嵌套在
+        # p1_eval_batch 下的（实测一条 batch trace 274 个 observation），打上去会冲掉
+        # 批次的 arm:* 标签，A/B 就失去按臂筛选的能力。P2/P3 内部调 P1 同理，
+        # 而且一条 trace 里 P1 被调多次，route 只会剩最后一次，读数是错的。
+        # 破坏性操作让调用方显式开，不靠默认值兜。
+        self.tag_route_on_trace = tag_route_on_trace
 
     @observe(name="p1_nl2sql_run")
     def run(self, question_id: str, question: str) -> P1AgentResult:
@@ -108,6 +120,7 @@ class P1NL2SQLAgent:
                                 metric_id=rr.metric_id,
                                 prefilter_cosine=rr.cosine,
                                 metric_fail_reason=None,
+                                tag_route=self.tag_route_on_trace,
                             )
                             return P1AgentResult(
                                 question_id=question_id,
@@ -202,6 +215,7 @@ class P1NL2SQLAgent:
                             metric_id=r_metric_id,
                             prefilter_cosine=r_prefilter_cosine,
                             metric_fail_reason=r_metric_fail_reason,
+                            tag_route=self.tag_route_on_trace,
                         )
                         return P1AgentResult(
                             question_id=question_id,
@@ -261,6 +275,7 @@ class P1NL2SQLAgent:
             metric_id=r_metric_id,
             prefilter_cosine=r_prefilter_cosine,
             metric_fail_reason=r_metric_fail_reason,
+            tag_route=self.tag_route_on_trace,
         )
 
         return P1AgentResult(
@@ -293,12 +308,17 @@ class P1NL2SQLAgent:
         metric_id: str | None = None,
         prefilter_cosine: float | None = None,
         metric_fail_reason: str | None = None,
+        tag_route: bool = False,
     ) -> None:
-        """把 reflect_history / error_class / metric router 字段写到 langfuse trace。"""
+        """把 reflect_history / error_class / metric router 字段写到 langfuse trace。
+
+        `tag_route=True` 时额外把 route 打成 tag，让 Langfuse 能按它聚合出
+        metric_hit_rate。默认 False：覆盖 tags 是破坏性的（见 __init__ 注释）。
+        """
         try:
             client = get_client()
-            client.update_current_trace(
-                metadata={
+            kwargs: dict = {
+                "metadata": {
                     "reflect_history": reflect_history,
                     "error_class": error_class.value if error_class else None,
                     "retrieved_example_ids": retrieved_example_ids or [],
@@ -307,7 +327,10 @@ class P1NL2SQLAgent:
                     "prefilter_cosine": prefilter_cosine,
                     "metric_fail_reason": metric_fail_reason,
                 },
-            )
+            }
+            if tag_route:
+                kwargs["tags"] = [f"route:{route}"]
+            client.update_current_trace(**kwargs)
         except Exception:
             # Langfuse 未配置或 client 失败不应阻塞 agent
             pass
