@@ -27,12 +27,17 @@
 
 | 路径 | 题量 | 通过 | 平均分 | baseline | 备注 |
 |---|---:|---:|---:|---|---|
-| **P1 NL2SQL** | 8 / 8 | 8 | **0.965** | 2026-08-14 | 全量题集；多表 JOIN、时间窗、聚合、分行筛选全过 |
+| **P1 NL2SQL** | 8 / 8 | 8 | **0.977** | 2026-08-14 | 全量题集；多表 JOIN、时间窗、聚合、分行筛选全过 |
 | **P2 多步分析** | 3 / 8 | 3 | **0.740** | 2026-06-07 | 5 维 rubric（步骤完整 + 多指标 + 洞察 + 推理 + 业务相关） |
 | **P3 RCA 归因** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4 维 rubric，全部命中埋雷事件、零幻觉 |
 
 「题量」列的分母是评测集里的总题数。**P2 只跑了 8 题里的前 3 题**（2026-06-07 那次带
 `--limit 3`），q004–q008 从未评过分——单题 300–500s，补齐要 40–70 分钟，按成本暂缓。
+
+**P1 的 0.977 别当精确值读**：同一配置连跑三次得 0.965 / 0.969 / 0.977，差异**全部**
+来自 q008 一题（0.90 / 0.93 / 1.00），其余七题逐次完全相同。表里取的是最新一次可复现的
+跑（`commit_dirty=false`）。这个量级的跑间抖动在本项目是常态，判断优劣要看逐题比较而非
+avg 上的零点几个百分点——详见 [ADR-013](./DESIGN_DECISIONS.md#adr-013)。
 
 <details>
 <summary>P1 从「6 题 1.000」改成「8 题 0.946」的原因</summary>
@@ -47,8 +52,8 @@
    种子数据的值，reseed 后失真，导致 SQL 逐字符正确也被扣 `result_count` 那档的 0.15
    —— 静默压分而非报错。已按实测回填。
 
-修完后**6 题口径回到 1.000**（可复现），8 题全量 0.965，8/8 全部及格。差额来自
-q005（agent 漏了「定期存款」约束，真扣）与 q008（边界日归属与 gold 不同）。
+修完后**6 题口径回到 1.000**（可复现），8 题全量 0.977，8/8 全部及格。差额来自
+q005（agent 漏了「定期存款」约束，真扣）。
 
 改 gold 有「对着 agent 拟合」的风险，故划了一条边界：只修违反业务语义的、以及
 题面写了但 gold 没实现的；解释分歧不改。同时加了
@@ -58,7 +63,7 @@ q005（agent 漏了「定期存款」约束，真扣）与 q008（边界日归�
 
 </details>
 
-详细评估方法见 [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md)；原始 baseline JSON 在 [`results/`](./results/) 目录（P1 最新为 [`p1_full8_baseline_v3_2026-08-14.json`](results/p1_full8_baseline_v3_2026-08-14.json)）；三路径 markdown 报告 [`results/eval_report_2026-06-30.md`](./results/eval_report_2026-06-30.md)（P1 一节早于本次修正）。
+详细评估方法见 [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md)；原始 baseline JSON 在 [`results/`](./results/) 目录（P1 最新为 [`baseline_p1_eval_2026-08-14.json`](results/baseline_p1_eval_2026-08-14.json)）；三路径 markdown 报告 [`results/eval_report_2026-08-14.md`](./results/eval_report_2026-08-14.md)。
 
 P1 默认即跑全量 8 题（`python -m chat_bi_agent.runners.run_p1_eval`）。2026-08-14 之前
 这里有一份 `HAPPY_PATH_IDS` 白名单只跑 6 题，随 gold 修复一并删除。
