@@ -1,4 +1,8 @@
-"""Phase 5: 跑 6 题 happy path → P1Agent → PrecisionRetrievalEvaluator → 汇总。
+"""Phase 5: 跑 P1 精准取数评测集 → P1Agent → PrecisionRetrievalEvaluator → 汇总。
+
+默认跑 precision_retrieval_evaluation.yaml 的全部题目。此前这里有一份
+HAPPY_PATH_IDS 白名单只跑 6/8 题，排除 q005/q008——2026-08-14 查明这两题是 gold
+有缺陷（stock 指标跨日求和、题面写了却没实现的过滤），修好后白名单已无理由，删除。
 
 运行：
     python -m chat_bi_agent.runners.run_p1_eval                                    # 无 few-shot
@@ -36,15 +40,6 @@ from chat_bi_agent.eval.precision_retrieval_evaluator import (  # noqa: E402
 )
 from chat_bi_agent.llm import qwen_client  # noqa: E402
 from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
-
-HAPPY_PATH_IDS = [
-    "precision_q001",
-    "precision_q002",
-    "precision_q003",
-    "precision_q004",
-    "precision_q006",
-    "precision_q007",
-]
 
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "precision_retrieval_evaluation.yaml"
 
@@ -85,8 +80,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "评测集 YAML 路径；不传就跑默认 6 题 happy path。"
-            "传了就跑该文件里的全部题目（如 data/metric_routing_evaluation.yaml）"
+            "评测集 YAML 路径；不传就跑 precision_retrieval_evaluation.yaml。"
+            "无论传不传，都跑该文件里的全部题目（如 data/metric_routing_evaluation.yaml）"
         ),
     )
     p.add_argument(
@@ -300,11 +295,11 @@ def main(args: argparse.Namespace | None = None) -> int:
         args = parse_args()
     get_client()
     questions = load_questions(args.question_set)
-    if args.question_set is not None:
-        question_ids = list(questions.keys())
-        print(f"[p1-eval] question set={args.question_set} n={len(question_ids)}", flush=True)
-    else:
-        question_ids = list(HAPPY_PATH_IDS)
+    question_ids = list(questions.keys())
+    print(
+        f"[p1-eval] question set={args.question_set or YAML_PATH.name} n={len(question_ids)}",
+        flush=True,
+    )
     retriever = _build_retriever(args)
     metric_router = _build_metric_router(args)
     agent = P1NL2SQLAgent(

@@ -58,12 +58,8 @@ gold 的 MIN/MAX 与题面「初始/末日」的口径分歧，留作 open item�
 
 详细评估方法见 [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md)；原始 baseline JSON 在 [`results/`](./results/) 目录（P1 最新为 [`p1_full8_baseline_v2_2026-08-14.json`](results/p1_full8_baseline_v2_2026-08-14.json)）；三路径 markdown 报告 [`results/eval_report_2026-06-30.md`](./results/eval_report_2026-06-30.md)（P1 一节早于本次修正）。
 
-复跑 P1 全量 8 题（默认命令只跑 6 题白名单）：
-
-```bash
-python -m chat_bi_agent.runners.run_p1_eval \
-    --question-set src/chat_bi_agent/data/precision_retrieval_evaluation.yaml
-```
+P1 默认即跑全量 8 题（`python -m chat_bi_agent.runners.run_p1_eval`）。2026-08-14 之前
+这里有一份 `HAPPY_PATH_IDS` 白名单只跑 6 题，随 gold 修复一并删除。
 
 一键复跑：
 
