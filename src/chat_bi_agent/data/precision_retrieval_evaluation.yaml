@@ -186,23 +186,30 @@ evaluation_questions:
       - null_handling: "Agent 是否过滤了 NULL 值"
 
   - id: precision_q008
-    # 题面明写「定期存款」但原 gold 没有 account_type 过滤（446 个账户全进，
-    # 加 SAVING 后 111 个）——agent 反而过滤对了却被判错。Top-N 条数原本也只在
-    # gold 里硬编码 LIMIT 10，题面读作单数同样成立，故在题面里写死「前 10 个」。
+    # 三处修正（2026-08-14）：
+    # 1. 题面明写「定期存款」但原 gold 没有 account_type 过滤（446 个账户全进，
+    #    加 SAVING 后 111 个）——agent 反而过滤对了却被判错。
+    # 2. Top-N 条数原本只在 gold 里硬编码 LIMIT 10，题面读作单数同样成立，
+    #    故在题面里写死「前 10 个」。
+    # 3. 原 gold 取「前段 MIN、后段 MAX」，那是最低值/最高值，不是题面说的
+    #    「初始/末日」，且会系统性放大变化幅度；端点取法则在账户于窗口内开户/
+    #    销户时静默丢行。改为前后两段日均对比——与 config/metrics.yaml 里
+    #    deposit_balance 的 AVG(balance)「日均」口径一致，保留 CASE WHEN 条件
+    #    聚合这一考点，且对缺失日期健壮。
     question: |
-      列出 2026 年 4 月 14 日前后（前 7 天、后 7 天）定期存款余额变化最大的前 10 个账户，
-      返回账户 ID、初始余额、末日余额和变化百分比。
+      列出 2026 年 4 月 14 日前后（前 7 天、后 7 天）定期存款日均余额变化最大的前 10 个账户，
+      返回账户 ID、前段日均余额、后段日均余额和变化百分比。
     expected_sql: |
       SELECT *
       FROM (
         SELECT
           fbd.account_id,
-          MIN(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END) AS start_balance,
-          MAX(CASE WHEN fbd.dt >= '2026-04-14' THEN fbd.balance END) AS end_balance,
+          AVG(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END) AS pre_avg_balance,
+          AVG(CASE WHEN fbd.dt >= '2026-04-14' THEN fbd.balance END) AS post_avg_balance,
           ROUND(
-            (MAX(CASE WHEN fbd.dt >= '2026-04-14' THEN fbd.balance END) -
-            MIN(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END)) /
-            NULLIF(MIN(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END), 0) * 100, 2
+            (AVG(CASE WHEN fbd.dt >= '2026-04-14' THEN fbd.balance END) -
+            AVG(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END)) /
+            NULLIF(AVG(CASE WHEN fbd.dt < '2026-04-14' THEN fbd.balance END), 0) * 100, 2
           ) AS change_pct
         FROM fct_balance_daily fbd
         JOIN dim_account da ON fbd.account_id = da.account_id
@@ -221,7 +228,7 @@ evaluation_questions:
       min: 10
       max: 10
     evaluation_criteria:
-      - window_analysis: "Agent 是否正确定义了时间窗口"
+      - window_analysis: "Agent 是否正确定义了前后两段时间窗口"
       - calculated_fields: "Agent 是否计算了百分比变化"
-      - complex_aggregation: "Agent 是否使用了条件聚合（CASE WHEN）"
+      - complex_aggregation: "Agent 是否使用了条件聚合（CASE WHEN + AVG）而非取端点"
       - ordering_and_limit: "Agent 是否按变化幅度排序并限制行数"
