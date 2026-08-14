@@ -22,7 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RESULTS_DIR = REPO_ROOT / "results"
 
 PHASE_PATTERNS = {
-    "p1": "baseline_p2_validator_reflector_*.json",
+    # 必须跟住各 runner 的默认输出名，见 tests/eval/test_run_all_evals_patterns.py。
+    # 2026-08-14 之前 p1 写的是 baseline_p2_validator_reflector_*.json（历史文件名），
+    # 与 run_all_evals.py 同样的失配——只匹配到 2026-06-03 那一份，导致本命令直接
+    # 报「至少需要两份 baseline」而不是 diff 出真实变化。
+    "p1": "baseline_p1_eval_*.json",
     "p2": "baseline_p2_analysis_*.json",
     "p3": "baseline_p3_rca_*.json",
 }

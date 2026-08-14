@@ -19,10 +19,18 @@ from pathlib import Path
 
 import pytest
 
+from scripts.eval_diff import PHASE_PATTERNS as DIFF_PATTERNS
 from scripts.run_all_evals import PHASES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNERS_DIR = REPO_ROOT / "src" / "chat_bi_agent" / "runners"
+
+# 同一份耦合在两个脚本里各写了一遍。首轮只修/只测了 run_all_evals，eval_diff 里
+# 一模一样的失配就没被抓到——守门必须覆盖全部副本，否则等于只锁了一扇门。
+SOURCES = {
+    "run_all_evals": {p: cfg["pattern"] for p, cfg in PHASES.items()},
+    "eval_diff": dict(DIFF_PATTERNS),
+}
 
 # runner 源码里默认输出名的 f-string，形如 f"baseline_p1_eval_{date_str}{suffix}.json"
 _FSTRING = re.compile(r'f"(baseline_[a-z0-9_]*\{[^"]*)\.json"')
@@ -45,13 +53,23 @@ def _default_output_names(module: str) -> list[str]:
     return names
 
 
-@pytest.mark.parametrize("phase", sorted(PHASES))
-def test_report_pattern_matches_runner_output(phase):
-    pattern = PHASES[phase]["pattern"]
+@pytest.mark.parametrize(
+    "source,phase",
+    [(s, p) for s, pats in sorted(SOURCES.items()) for p in sorted(pats)],
+)
+def test_report_pattern_matches_runner_output(source, phase):
+    pattern = SOURCES[source][phase]
     candidates = _default_output_names(PHASES[phase]["module"])
 
     assert candidates, f"没能从 {phase} 的 runner 源码里抽出默认输出名，正则可能过期了"
     assert any(fnmatch.fnmatch(name, pattern) for name in candidates), (
-        f"{phase}: run_all_evals 的 pattern `{pattern}` 匹配不上 runner 的默认输出名 "
+        f"{source}/{phase}: pattern `{pattern}` 匹配不上 runner 的默认输出名 "
         f"{candidates}。后果是跑完该 phase 却报出旧 baseline 的数字，新结果被静默丢弃。"
     )
+
+
+def test_both_scripts_agree_on_patterns():
+    """两个脚本对同一 phase 的 pattern 必须一致，否则报告与 diff 会看向不同文件。"""
+    for phase in sorted(set(SOURCES["run_all_evals"]) & set(SOURCES["eval_diff"])):
+        a, b = SOURCES["run_all_evals"][phase], SOURCES["eval_diff"][phase]
+        assert a == b, f"{phase}: run_all_evals 用 `{a}`，eval_diff 用 `{b}`，两者不一致"
