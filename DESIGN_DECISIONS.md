@@ -532,11 +532,50 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | **做 few-shot 但只在同域生产用，BIRD 不做** | 否 | 需要 BIRD 校验实现正确性 + 建立方法学 |
 | **做 few-shot 且以 BIRD 提分为目标** | **否**（本次结论） | 跨库场景先验就低，不适合当收益证明；工程做完但不改 default 阈值 |
 
-**默认配置**：`--few-shot-min-sim = 0.55`（保守，覆盖率仅 33% 但不制造负例）；`--example-pool` 默认 None（off）。生产 P1 目前不挂 retriever。
+**默认配置**：`--few-shot-min-sim = 0.55`（保守，覆盖率仅 33% 但不制造负例）；`--example-pool` 默认 None（off）。**生产 P1 已 hot-load `data/example_pool_prod.jsonl`**（`min_sim=0.7` 更严，池空时零成本 fallback）——2026-08-13 核对：池内 31 条，retriever 实际生效。
 
 **跟进项**：
-- **待做**：给中文银行域构建生产 pool（历史 judge=1 的 Q-SQL 对），量测同域场景下 few-shot 是否真加分——这才是 few-shot 应该证明价值的地方
-- **待做**：结果 JSON schema 加 `commit_hash` + `config_hash` 字段，防止未来跨代码/跨配置比较
+- ~~**待做**：给中文银行域构建生产 pool~~ ✅ pool 已建成并接入生产（夜间 cron 从 👍 反馈追加）
+- ~~**待做**：结果 JSON schema 加 `commit_hash` + `config_hash` 字段~~ ✅ 已完成，
+  见 `run_metadata`。2026-08-13 又补了 `model` / `embed_model`——此前 verify_ab 把
+  `model` 列为 CRITICAL 但 payload 根本没这个键，模型漂移守门形同虚设（换模型时一声没吭）
+### Update 2026-08-14：同域 few-shot A/B 跑完——**无收益，表面收益全来自泄题**
+
+ADR-012 悬了一个多月的核心问题终于有答案了。34 题同域标尺，三臂同 commit
+`43935f0`、同模型 `qwen3.7-max`，verify_ab 两组均退 0：
+
+| 臂 | avg_score | 相对基线 |
+|---|---:|---:|
+| 无 few-shot | 0.9395 | — |
+| few-shot **+ 近似泄题守门** | 0.9348 | **−0.005** |
+| few-shot 无守门 | 0.9446 | +0.005 |
+
+**34 题里 29 题三臂完全相同**，只有 5 题有差异且方向不一。
+
+**关键在于「无守门」那 +0.010 的来源**：逐题看只有 mr_n06（+0.100）与
+mr_n14（+0.300）在无守门时变好，合计 +0.400/34 ≈ +0.012，几乎等于观测到的差值。
+而这两题正是池内有近似副本的题。**泄题贡献了全部"收益"；守门一开，
+few-shot 净效应归零（−0.005，在噪声内）。**
+
+**先修守门再跑是必要的**：不修的话会拿着 +0.005 得出"同域 few-shot 有效"的
+错误结论，而这正是 ADR-012 要回答的问题。
+
+**泄题为什么必然发生**：pool 从早期 P1 gold 样例 bootstrap，而评测集覆盖同样的
+业务面——两边同源，重合是结构性的，不是谁写错了。原 leave-one-out 只挡精确文本，
+34 题里 8 道有 cosine>0.85 的近似副本，只有 1 道逐字相同能被挡住。
+守门做成**可选、默认关**：生产环境里"历史相似问题的 Q-SQL"正是 few-shot 的
+价值所在，只有评测时它才是泄题。
+
+**结论与决策**：
+- 池 31 条规模下，同域 few-shot **没有可测量的收益**
+- 生产 P1 仍挂着 retriever（`min_sim=0.7`）。**不建议据此关闭**——负结果是
+  "在 31 条池 + 这 34 题上测不出收益"，不是"有害"；成本也极低（池空即零成本 fallback）
+- 真正该做的是**让池长大**：31 条里能匹配上评测题的本就不多，
+  再攒一批真实使用样本后重测
+
+**顺带修掉的基础设施缺口**：per_question 此前根本没记 `retrieved_example_ids`，
+导致我一度误判"few-shot 完全没生效"。产物里看不到一个特性有没有真的启用，
+结论就无从复核——现在落 `n_few_shot_used` 与 `n_questions_with_examples`。
 - **不做**：不在 BIRD 上继续调阈值——BIRD pool 是跨库先天劣势，再调也是在 noise floor 里打转
 
 **Trace**：
@@ -850,11 +889,16 @@ nl2sql 代码路径**——纯粹是跑间噪声。
 **跟进项闭环**：
 - P1 ✅ `op='IN'` 支持完成
 - P1 ✅ 接线到 P1 主路径完成（前置路由而非 SQLGenerator 内部 try/except）
-- P2 保留：指标目录扩容至 15-20 个（loan/campaign/risk 相关，独立 PR）
-- P3 保留：Streamlit "识别到 metric=X 确认" UX
-- P3 保留：Langfuse 看板 `metric_hit_rate` 图
+- P2 ✅ 指标目录扩容完成——已到 18 个，覆盖 holding/risk/campaign/transaction 四个新域
+- P3 ✅ Streamlit "识别到 metric=X" UX 完成——P1 tab 命中时显示业务名 +
+  expander 摊开语义层的理解（指标/维度/过滤/时间窗），让"识别错了"能当场被发现
+- P3 保留：Langfuse 看板 `metric_hit_rate` 图——**数据已就绪**
+  （trace metadata 已落 `route` / `metric_id` / `prefilter_cosine` / `metric_fail_reason`，
+  batch trace 还打了 `arm:*` tag），只差在 Langfuse 侧建图
+- **新增保留**：P2/P3 tab 尚未接语义层。它们内部调 P1，接了各自的 eval 基线要重建，
+  按成本考虑暂缓——目前只有 P1 tab 享受到语义层
 
-**Trace**：本次代码见 branch `feat/metric-router-p1-integration`；spec 与 plan 在
+**Trace**：代码见 PR #6（已合入 main）+ 后续 Streamlit 接线；spec 与 plan 在
 `docs/superpowers/`（gitignored，本地保留）
 
 ---

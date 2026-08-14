@@ -70,6 +70,16 @@ def parse_args() -> argparse.Namespace:
         help="同域场景默认 0.7（比 BIRD 跨库的 0.55 严格，宁缺毋滥）",
     )
     p.add_argument(
+        "--few-shot-leak-guard",
+        type=float,
+        default=0.9,
+        help=(
+            "剔除与当前问题 cosine >= 此值的池内条目，防近似泄题。"
+            "默认 0.9；传 0 关闭。原 leave-one-out 只挡精确文本，"
+            "改写版会漏（实测 34 题里 8 道在池内有 >0.85 的近似副本）"
+        ),
+    )
+    p.add_argument(
         "--question-set",
         type=Path,
         default=None,
@@ -108,12 +118,16 @@ def _build_retriever(args: argparse.Namespace) -> ExampleRetriever | None:
         f"k={args.few_shot_k} min_sim={args.few_shot_min_sim}",
         flush=True,
     )
+    guard = args.few_shot_leak_guard if args.few_shot_leak_guard > 0 else None
+    if guard:
+        print(f"[p1-eval] few-shot 近似泄题守门 ON: 剔除 cosine >= {guard} 的池内条目", flush=True)
     return ExampleRetriever(
         pool=pool,
         dialect="postgres",
         embed_fn=qwen_client.embed,
         min_similarity=args.few_shot_min_sim,
         max_k=args.few_shot_k,
+        leak_guard_similarity=guard,
     )
 
 
@@ -348,6 +362,9 @@ def main(args: argparse.Namespace | None = None) -> int:
                 "prefilter_cosine": agent_result.prefilter_cosine,
                 "metric_spec": agent_result.metric_spec,
                 "metric_fail_reason": agent_result.metric_fail_reason,
+                # few-shot 审计：没有这两个字段就无法从产物判断 few-shot 到底喂进去没有
+                "retrieved_example_ids": agent_result.retrieved_example_ids,
+                "n_few_shot_used": len(agent_result.retrieved_example_ids or []),
                 "expected_route": q.get("expected_route"),
                 "result_match": score.result_match,
             }
@@ -380,6 +397,11 @@ def main(args: argparse.Namespace | None = None) -> int:
         "run_metadata": build_run_metadata(extra_paths=extra_hashes),
         "few_shot": {
             "enabled": retriever is not None,
+            "leak_guard_similarity": args.few_shot_leak_guard or None,
+            "n_questions_with_examples": sum(
+                1 for r in per_question if r.get("n_few_shot_used", 0) > 0
+            ),
+            "n_examples_used_total": sum(r.get("n_few_shot_used", 0) for r in per_question),
             "pool_path": str(args.example_pool) if args.example_pool else None,
             "k": args.few_shot_k,
             "min_similarity": args.few_shot_min_sim,
