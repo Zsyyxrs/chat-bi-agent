@@ -487,6 +487,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-011](#adr-011-bird-financial-只跑-p1sqlite-直连--独立-nl2sql-prompt) | BIRD-financial 只跑 P1 + SQLite 直连 | Accepted |
 | [ADR-012](#adr-012-q-sql-few-shot-检索注入-bird-验证净效应-0-同域生产未测) | Q-SQL few-shot 检索注入 | Accepted（默认阈值保守） |
 | [ADR-013](#adr-013-语义层-metric-resolver-原型-6-指标模板-llm-抽-spec-fallback-回原-nl2sql) | 语义层 Metric Resolver 原型 | Accepted（2026-08-12 已接线到 P1 主路径，见 Update） |
+| [ADR-014](#adr-014-评测集-gold-的可信度修哪些不修哪些以及行数守门) | 评测集 gold 的可信度守门 | Accepted |
 
 新增 ADR 命名 `ADR-013`、`ADR-014` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
@@ -1045,6 +1046,129 @@ k=8 相对实际需要有 4 倍余量。真实语义相近的指标（`deposit_b
 
 **Trace**：代码见本次提交；测试 `tests/p1/test_metric_resolver.py`（全局 join 6 例）
 + `tests/p1/test_metric_router.py`（候选裁剪 6 例）+ `tests/eval/`（CLI 透传 2 例）
+
+---
+
+### ADR-014: 评测集 gold 的可信度——修哪些、不修哪些，以及行数守门
+
+**Status**：Accepted（2026-08-14）
+
+#### Context
+
+起因是一个简单的问题：README 头条的「P1 6 题 / 1.000」还成立吗。查下来不成立，
+而且失效方式全都是**静默的**——不报错、不告警，只是分数悄悄变低或题目悄悄不跑。
+
+**失效一：gold 行数与种子数据脱节。** q001/q003/q004 的 `expected_result_count`
+还是初版种子数据的值（2/49/1），reseed 后真实行数是 29/674/88。`result_count` 在
+`combined_score` 里占 0.15 权重，于是**生成的 SQL 逐字符正确也被扣 0.15**。对比
+2026-06-06 baseline 与 08-13 重跑可以确认：这三题的 SQL 完全相同，分数 1.0 → 0.85。
+漂移本身是 06-06 至 06-18 之间 `dimension_generator` 改了 7 次（`35a1007` 等）
+改变 RNG 消费顺序、随后 reseed 造成的，一次性历史事件，但没有任何东西会报出来。
+
+**失效二：两道题的 gold 比 agent 更错。** `run_p1_eval` 里有一份硬编码白名单
+`HAPPY_PATH_IDS` 只跑 8 题里的 6 题，排除 q005/q008。跑开来才发现：
+
+- **q005**：余额是 stock 指标，原 gold 用 `EXTRACT(MONTH)=2` 不钉时点，把 2 月
+  28 天的日快照相加得 137,120,000——是月末真值 5,000,000 的 **27.4 倍**，算出来的
+  是「账户·天」而不是余额。
+- **q008**：题面明写「定期存款」，原 gold 却没有 `account_type` 过滤（446 个账户
+  全进，加 SAVING 后 111 个）。agent 过滤对了反被判 `result_match=False`。
+
+**失效三是前两条的成因。** 白名单把这两道题藏起来，于是默认口径与公布口径长期
+不一致，没人有机会去跑它们。这与本项目此前修过的几处是同一模式（`op='IN'` prompt
+与 renderer 不一致、`request_timeout` 参数名写错、payload 缺 `model` 导致 verify_ab
+的 CRITICAL 检查空转）——**失败信号被吃掉**。本轮跑批中途又演了一遍：
+`python ... | tail -8` 的退出码取自 `tail`（恒为 0），一个崩掉的 A/B 臂报了 exit 0。
+
+#### Decision
+
+**1. 划一条修 gold 的边界线。**
+
+改 gold 是危险操作：在已知 agent 答案的前提下调整 gold，任何系统都能刷到 1.000。
+因此只修两类，其余一律不修：
+
+| | 修 | 理由 |
+|---|---|---|
+| 违反业务语义 | ✅ | stock 指标跨日求和。不修等于让评测持续说谎 |
+| 题面写了但 gold 没实现 | ✅ | 题面有「定期存款」而 gold 无 `account_type` 过滤。gold 与自己的题面矛盾 |
+| 解释分歧 | ❌ | 两种读法都站得住时不动。这里是拟合 agent 的入口 |
+
+**q008 是边界案例，值得单独记。** 它的第三处问题——gold 取「前段 MIN、后段 MAX」，
+而题面说「初始/末日」——两边都不干净：MIN/MAX 是最低值/最高值且会系统性放大变化
+幅度；agent 的端点取法虽贴字面，但账户在窗口内开户/销户时会静默丢行。
+
+判据是**选一个既不等于旧 gold、也不等于 agent 答案的第三方案**：改为前后两段
+日均对比（`AVG(CASE WHEN ...)`）。这样改动无法被指为拟合 agent。同时它与
+`config/metrics.yaml` 里 `deposit_balance` 的 `AVG(balance)`「日均」口径一致，
+并保住了题目 `evaluation_criteria` 明写的 `complex_aggregation: CASE WHEN` 考点
+——若改成端点取法，这题唯一的复杂度就没了，退化成两个定日子查询 JOIN。
+
+**2. 加行数守门测试。** `tests/eval/test_gold_sql_row_counts.py`，逐题真打 PG，
+断言 gold SQL 的行数与 yaml 声明一致，覆盖 precision(8) + metric_routing(34) 共 42 例。
+改 `dimension_generator` 或重新 seed 之后漂移一定会再来，届时应当是 CI 红灯而不是
+分数悄悄掉。
+
+两处刻意验证，不是写完就算：
+
+- **确认它真能报红**：先把 q001 的 29 改回失真值 2，跑出红灯并确认报错点名了题号、
+  期望、实际与后果，才恢复。没见过红的守门等于没有守门。
+- **确认它不会误伤**：模块加载 `.env` 后 `PG_HOST` 恒有值，用它当 skip 开关会让
+  没起 docker 的人撞连接错误而不是跳过（`make test` 不过滤 integration）。改成探
+  真实连通性，验证了库可达时 43 passed、指向错误端口时 42 skipped。**守门自身的
+  失效方式同样是静默的**——不验证跳过路径，它会以「gold SQL 跑不通」的伪装报错，
+  然后被当成环境问题忽略。
+
+**3. 删掉 `HAPPY_PATH_IDS` 白名单。** gold 修好后两题都及格，白名单再无理由。
+删除后 `make eval-p1` 与 `run_all_evals.py` 自动跑全量，默认口径与公布口径从此一致。
+
+#### Alternatives
+
+| 方案 | 采纳 | 理由 |
+|---|---|---|
+| 只回填行数，不碰 q005/q008 | 否 | 白名单继续藏着两道坏题，等于承认评测集有不敢跑的部分 |
+| 把 `expected_result_count` 改成运行时跑 gold SQL 动态取 | 否 | 自愈，但会改变一个计分维度的语义（退化成与 `result_match` 重复），且需重建历史基线。守门测试能达到同样效果而不动评分 |
+| q008 gold 改成端点取法（与 agent 一致） | 否 | 唯一坐实「对着 agent 拟合」的选项；且会拿掉 CASE WHEN 考点 |
+| q008 不动，留 `result_match=False` 当诊断 | 否 | 在所有人都认为 gold 站不住的题上留一个恒假信号，会训练人忽略 `result_match`，消耗这个诊断位的可信度 |
+| 把 `result_match` 并入 `combined_score` | 未来 | 需重建全部历史基线，是独立决定（见 ADR-013 Update 2026-08-13） |
+
+#### Consequences
+
+**P1 成绩单重述**（8 题全量，`qwen3.7-max`，commit `fbf516f`，verify_ab 退 0）：
+
+| | 基线（路由关） | 语义层 t=0.63 |
+|---|---:|---:|
+| avg_score（8 题） | 0.9646 | 0.9688 |
+| passed | 8/8 | 8/8 |
+| avg_score（6 题 happy 子集） | 1.0000 | 1.0000 |
+| metric_hit_rate | — | 0.25 |
+| precision_when_hit | — | 1.000 |
+
+**6 题口径回到 1.000 且可复现**；8 题全量 0.965，首次全部及格。语义层再一次
+**对分数零影响**（逐题完全相同），与前三轮 A/B 结论一致。
+
+**两处诚实记账：**
+
+1. **q005 掉到 0.82 是真扣该扣的。** 改题面钉时点后，agent 反而把
+   `account_type='SAVING'` 过滤丢了——题面写着「定期存款」，它漏了。改 gold 前它
+   是带这个过滤的。属于 prompt 敏感性还是跑间抖动，n=1 说不了。
+2. **q008 改完预测错了。** 事前判断是「分数会先掉，因为 agent 做端点、gold 做日均」，
+   实际 0.75 → 0.90：agent 跟着改后的题面换成了两段 AVG。预测错在假设 agent 不会
+   跟着题面走。
+
+**残留差异（不再修）**：q008 的 `result_match` 仍为 False，因为边界日归属不同——
+gold 把 4/14 算进后段（前 7 天 + 后 8 天），agent 排除 4/14（前 7 天 + 后 7 天，
+与题面「前 7 天、后 7 天」字面更符）。这恰好演示了为什么需要那条边界线：
+**每修一轮 gold 都会露出下一道解释缝，不设线就会一直修到 gold == agent。**
+
+**副产品观察**：q008 改题面后，语义层 arm 的路由从 `nl2sql` 变成
+`metric_then_nl2sql`（`metric_id=deposit_balance`，`prefilter_cosine=0.6389`）——
+「日均余额」的措辞把它顶过了 0.63 阈值，**余量只有 0.009**。随后 resolve 以
+`no_metric` 正确退回（取顶类问题语义层一律拒绝，见 `a9c3b83`），无损。但这说明
+prefilter 对措辞敏感，且当前阈值在这类问题上余量很薄。记录备查，暂不调整。
+
+**Trace**：`9183f29`（行数回填）、`46cc2ab`（q005/q008 gold）、`7e11f4b`（README）、
+`29b19a1`（删白名单）、`fbf516f`（q008 日均 + 守门测试）；
+产物 `results/p1_full8_{baseline,metric_t063}_v3_2026-08-14.json`
 
 ---
 
