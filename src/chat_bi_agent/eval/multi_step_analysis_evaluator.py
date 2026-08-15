@@ -6,6 +6,8 @@ from typing import Optional
 
 import yaml
 
+from chat_bi_agent.eval.zh_tokenize import overlap_ratio
+
 
 def _yaml_listdict_to_dict(value) -> dict:
     """YAML 里 analysis_steps / expected_insights 都是 list of single-key dict
@@ -182,20 +184,28 @@ class MultiStepAnalysisEvaluator:
             score.multi_metric_coverage = min(1.0, mentioned_key_metrics / max(1, len(key_metrics)))
 
         # 3. 洞察准确度 (insight_accuracy)
+        # 逐条 expected insight 算「内容词召回率」，取均值。
+        #
+        # 2026-08-15 之前这里是 `exp_insight_val.split()[:5]` + 任一 token 命中即算数，
+        # 对中文等于没分词：纯中文洞察 split 后只剩整句一个 token（要求逐字出现，
+        # 评测集里 10 条永远拿 0），中英混合的首 token 是 '2'/'ATM'/'和' 这类
+        # （几乎必然误命中，21 条白送分）。两个方向同时错，而本维占 25% 权重。
         expected_insights = _yaml_listdict_to_dict(question.get("expected_insights"))
         if expected_insights:
-            matched_insights = 0
-            for exp_insight_key, exp_insight_val in expected_insights.items():
-                # 检查是否提到了关键洞察的关键词
-                if isinstance(exp_insight_val, str):
-                    keywords = exp_insight_val.split()[:5]  # 前 5 个关键词
-                    if any(kw in agent_response for kw in keywords):
-                        matched_insights += 1
-                elif isinstance(exp_insight_val, list):
-                    if any(item in agent_response for item in exp_insight_val):
-                        matched_insights += 1
+            ratios = []
+            for _key, exp_insight_val in expected_insights.items():
+                # list 型逐项算，取最好的一项——任一项被说到就算讲到了这条洞察
+                if isinstance(exp_insight_val, list):
+                    ratios.append(
+                        max(
+                            (overlap_ratio(str(v), agent_response) for v in exp_insight_val),
+                            default=0.0,
+                        )
+                    )
+                else:
+                    ratios.append(overlap_ratio(str(exp_insight_val), agent_response))
 
-            score.insight_accuracy = min(1.0, matched_insights / max(1, len(expected_insights)))
+            score.insight_accuracy = sum(ratios) / len(ratios) if ratios else 0.0
 
         # 4. 推理质量 (reasoning_quality)
         # 评估是否包含因果关系、对比、条件推理等
