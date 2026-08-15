@@ -88,7 +88,8 @@ class Reflector:
       DATE 'YYYY-MM-DD'/ILIKE），升级为 DIALECT_MISMATCH 并给方言特定 hint
     """
 
-    def __init__(self, max_attempts: int = 3, dialect: str = "postgres"):
+    # 默认 2 = 1 初次 + 1 次重试，与 ADR-006 一致。此前默认是 3，与该 ADR 相反。
+    def __init__(self, max_attempts: int = 2, dialect: str = "postgres"):
         self.max_attempts = max_attempts
         self.dialect = dialect
 

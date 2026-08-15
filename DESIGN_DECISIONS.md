@@ -14,7 +14,7 @@
 
 | 决策点 | 选型 | 主要替代 | 一句话理由 | 深入 |
 |---|---|---|---|---|
-| **LLM（生成 + 评分）** | Qwen3.6-max-preview（DashScope） | GPT-4 / Claude 3.5 / DeepSeek-V2 | 中文银行场景 + 国内合规接入 + 单源省心 | [ADR-001](#adr-001-llm-选-qwen36-max-preview) |
+| **LLM（生成 + 评分）** | **当前 `qwen3.7-max`**（DashScope；ADR-001 立项时为 Qwen3.6-max-preview） | GPT-4 / Claude 3.5 / DeepSeek-V2 | 中文银行场景 + 国内合规接入 + 单源省心 | [ADR-001](#adr-001-llm-选-qwen36-max-preview) |
 | **Agent 编排** | 自研函数链 + `@observe` 装饰器 | LangGraph / CrewAI / AutoGen | 三路径流程都是**固定 DAG**，框架抽象换不来收益，多一层维护负担 | [ADR-002](#adr-002-自研函数链编排不引入-agent-框架) |
 | **可观测性** | Langfuse v3（self-hosted） | LangSmith / Phoenix / OpenLLMetry | 自托管无数据出境风险 + trace tree 完整 + LLM judge 分数可回流 | [ADR-003](#adr-003-langfuse-v3-self-hosted-做全链路可观测) |
 | **评分方式** | LLM-as-judge（Qwen 自评，4 维 rubric） | 人工标注 / Ragas / DeepEval | 启动期无标注预算，Qwen 自评在银行场景稳定性可接受，后续可切人工 | [ADR-004](#adr-004-llm-as-judge-qwen-自评-做评分) |
@@ -533,7 +533,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | **做 few-shot 但只在同域生产用，BIRD 不做** | 否 | 需要 BIRD 校验实现正确性 + 建立方法学 |
 | **做 few-shot 且以 BIRD 提分为目标** | **否**（本次结论） | 跨库场景先验就低，不适合当收益证明；工程做完但不改 default 阈值 |
 
-**默认配置**：`--few-shot-min-sim = 0.55`（保守，覆盖率仅 33% 但不制造负例）；`--example-pool` 默认 None（off）。**生产 P1 已 hot-load `data/example_pool_prod.jsonl`**（`min_sim=0.7` 更严，池空时零成本 fallback）——2026-08-13 核对：池内 31 条，retriever 实际生效。
+**默认配置**：`--few-shot-min-sim = 0.7`（同域场景，比 BIRD 跨库那轮用的 0.55 严格，宁缺毋滥；0.55 是本 ADR 实验期的值，代码默认后来改为 0.7 而此处一直没回填，2026-08-15 排查时更正）；`--example-pool` 默认 None（off）。**生产 P1 已 hot-load `data/example_pool_prod.jsonl`**（`min_sim=0.7` 更严，池空时零成本 fallback）——2026-08-13 核对：池内 31 条，retriever 实际生效。
 
 **跟进项**：
 - ~~**待做**：给中文银行域构建生产 pool~~ ✅ pool 已建成并接入生产（夜间 cron 从 👍 反馈追加）

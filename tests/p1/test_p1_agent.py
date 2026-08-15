@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from chat_bi_agent.agents.p1.nl2sql_agent import P1AgentResult, P1NL2SQLAgent
+from chat_bi_agent.agents.p1.nl2sql_agent import MAX_ATTEMPTS, P1AgentResult, P1NL2SQLAgent
 from chat_bi_agent.agents.p1.reflector import ReflectAction, ReflectDecision
 from chat_bi_agent.agents.p1.sql_generator import InvalidJsonError, SQLGenResult
 from chat_bi_agent.agents.p1.sql_validator import ValidationResult
@@ -176,7 +176,12 @@ def test_invalid_json_then_success():
     assert r.reflect_history[0]["err_class"] == "INVALID_JSON"
 
 
-def test_three_attempts_all_fail():
+def test_all_attempts_fail():
+    """跑满 reflect 预算仍失败时干净放弃。
+
+    预算大小由 MAX_ATTEMPTS 决定（ADR-006：1 次重试），这里引用常量而不写死数字——
+    数值本身由 tests/p1/test_reflect_budget_matches_adr.py 钉住，避免两处维护。
+    """
     agent = _make_agent_with_mocks()
     agent.sql_generator.generate.return_value = SQLGenResult(
         sql="SELECT * FROM foo",
@@ -187,19 +192,20 @@ def test_three_attempts_all_fail():
     agent.sql_validator.validate.return_value = ValidationResult(ok=True, error=None)
     agent.sql_executor.execute.return_value = (None, 'relation "foo" does not exist')
     agent.sql_executor.classify_error.return_value = SQLErrorClass.UNKNOWN_TABLE
-    # 第 1/2 次 RETRY，第 3 次 GIVE_UP（也可以全 RETRY，由 for 循环上限阻断）
+    # 前 N-1 次 RETRY，最后一次 GIVE_UP（也可以全 RETRY，由 for 循环上限阻断）
     agent.reflector.reflect.side_effect = [
-        ReflectDecision(action=ReflectAction.RETRY, repair_hint="h1"),
-        ReflectDecision(action=ReflectAction.RETRY, repair_hint="h2"),
-        ReflectDecision(action=ReflectAction.GIVE_UP, repair_hint=None),
-    ]
+        ReflectDecision(action=ReflectAction.RETRY, repair_hint=f"h{i}")
+        for i in range(1, MAX_ATTEMPTS)
+    ] + [ReflectDecision(action=ReflectAction.GIVE_UP, repair_hint=None)]
 
     r = agent.run(question_id="q1", question="x")
-    assert r.attempts == 3
+    assert r.attempts == MAX_ATTEMPTS
     assert r.rows is None
     assert r.execution_error == 'relation "foo" does not exist'
     assert r.error_class == SQLErrorClass.UNKNOWN_TABLE
-    assert len(r.reflect_history) == 3
+    # 每次尝试都留一条 reflect 记录，最后一条是 GIVE_UP
+    assert len(r.reflect_history) == MAX_ATTEMPTS
+    assert r.reflect_history[-1]["action"] == "GIVE_UP"
 
 
 def test_empty_schema_link_raises():

@@ -17,7 +17,16 @@ from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass, SQLExecutor
 from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS, TOP_K_NL2SQL
 from chat_bi_agent.schema.loader import SchemaLoader
 
-MAX_ATTEMPTS = 3
+# ADR-006 决定「Reflector 只做 1 次重试」，Alternatives 里明确否决了「多次重试
+# （e.g. 3 次）」。但这里长期写的是 3，配合 range(1, MAX_ATTEMPTS + 1) 实际跑
+# 1 初次 + 2 次重试——正是被否决的那个方案，实现没跟上决策。
+#
+# 2026-08-15 翻全部 results/ 产物统计，证据支持 ADR 的判断：
+#   attempts=2（第 1 次重试）：出现 23 次，最终成功 13 次（57%）
+#   attempts=3（第 2 次重试）：出现 27 次，最终成功  0 次（0%）
+# 第二次重试一次都没救回来过。改回 2 对分数零影响（那 27 题少跑一次仍然失败，
+# 结果相同），省下的是 27 次白打的 LLM 调用与对应延迟。
+MAX_ATTEMPTS = 2
 
 
 @dataclass
