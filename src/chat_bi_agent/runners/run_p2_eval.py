@@ -9,6 +9,7 @@ Output:
     - results/baseline_p2_analysis_<DATE>.json
 """
 
+import argparse
 import json
 import sys
 from datetime import UTC, datetime
@@ -41,10 +42,16 @@ def load_questions() -> dict[str, dict]:
 
 
 @observe(name="p2_eval_batch")
-def main() -> int:
+def main(limit: int | None = None, only_qid: str | None = None) -> int:
     get_client()
     questions = load_questions()
     qids = sorted(questions.keys())
+    # 与 run_p3_eval 的 --limit/--qid 对齐。P2 单题 300~500s，跑全 8 题要一小时，
+    # 没有子集开关时无法只复跑与历史 baseline 可比的那几题。
+    if only_qid is not None:
+        qids = [only_qid] if only_qid in questions else []
+    elif limit is not None:
+        qids = qids[:limit]
 
     p1 = P1NL2SQLAgent(top_k=4)
     p2 = P2MultiStepAnalysisAgent(
@@ -155,8 +162,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=None, help="Run first N questions only")
+    parser.add_argument(
+        "--qid", type=str, default=None, help="Run only this question_id (overrides --limit)"
+    )
+    args = parser.parse_args()
     try:
-        exit_code = main()
+        exit_code = main(limit=args.limit, only_qid=args.qid)
     finally:
         flush()
     sys.exit(exit_code)
