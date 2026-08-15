@@ -292,6 +292,30 @@ Langfuse v3，全套 self-hosted，随 `docker-compose.yml` 一起起。栈：`l
 - ✅ 成本可控：worst case 每题多 1 次 LLM 调用
 - ⚠️ 特别难的 SQL（如 P1 里没有的 CTE / 递归查询）单次重试可能不够。目前评估集不覆盖这类，未来加时再评估
 
+**Update 2026-08-15：实现曾长期与本决策相反，已修正**
+
+代码里 `MAX_ATTEMPTS = 3` 配合 `range(1, MAX_ATTEMPTS + 1)`，实际跑的是
+**1 初次 + 2 次重试**——正是上面 Alternatives 表里被否决的「多次重试（e.g. 3 次）」。
+本 ADR 的 Decision 从写下起就没被实现过，而且没有任何信号提示：多跑一次不报错，
+只是慢一点、贵一点，分数还一样。
+
+翻全部 `results/` 产物统计，证据支持本 ADR 原本的判断：
+
+| | 出现次数 | 最终成功 |
+|---|---:|---:|
+| attempts=2（第 1 次重试） | 23 | **13（57%）** |
+| attempts=3（第 2 次重试） | 27 | **0（0%）** |
+
+抽样核实那 27 次都是 `sql=无`、`ex=0` 的真失败。上面写的「第 3 次几乎无」还保守了，
+实测是一次都没有。因此改代码而非改文档——不是决策错了，是实现没跟上决策。
+`Reflector.__init__` 的默认值一并从 3 改到 2，否则不显式传参的调用方仍拿到旧预算。
+
+**未验证到的部分（诚实记账）**：改完重跑 P1 全量，8 题 `attempts` 全是 1，
+reflect 路径一次都没触发——这轮只能证明没引入回归，**不构成对改动本身的验证**。
+依据仍是上表的历史统计。要真正验证需构造必然触发 reflect 的用例，另计。
+
+守门 `tests/p1/test_reflect_budget_matches_adr.py` 钉住预算数值，改之前先更新本 ADR。
+
 ---
 
 ### ADR-007: YAML 事件库 + 传播引擎 构造 P3 ground truth
@@ -1196,10 +1220,32 @@ prefilter 对措辞敏感，且当前阈值在这类问题上余量很薄。记�
 0.965–0.977 的实测区间。取权威 baseline 用的是「最新一次 `commit_dirty=false` 的跑」
 这个可复述规则，而不是挑最好看的数——但读者有权知道它恰好是三次里最高的那次。
 
+#### 补记 2026-08-15：对该失效族做定向排查
+
+前面几处都是顺着一根线撞出来的，说明这一族有基率，值得主动扫一遍。排查范围限定为
+「文档/配置声称 X、代码实际 Y，且失配不报错」，查了五类：argparse 默认值、模块级常量、
+脚本间的文件名/pattern 耦合、Makefile 与 README 引用的脚本、`.env.example` 与代码
+读取的变量。**清白的**：脚本引用全部存在，环境变量完全一致。**查出四处**：
+
+| # | 失配 | 处置 |
+|---|---|---|
+| F1 | `MAX_ATTEMPTS=3` vs ADR-006「1 次重试」 | 改代码，见 ADR-006 Update |
+| F2 | `local.example.yaml` 的 `chat_model` 是 `qwen3.6-plus-2026-04-02`，所有公布数字用的是 `qwen3.7-max`；§1 表与 README badge 又各写了第三、第四个值 | 全部对齐到当前模型 |
+| F3 | ADR-012 写 `--few-shot-min-sim` 默认 0.55，代码是 0.7 | 回填文档 |
+| F4 | CI 跑 `pytest -m "not integration"`，行数守门不执行 | **未修**，需给 CI 加 Postgres service + 种子数据 |
+
+F2 的危害最直观：照模板配好环境的人，跑出来的是和每一个已公布数字都不同的模型，
+README 上的成绩他一个都复现不了，而且**不会有任何报错告诉他为什么**。
+
+**排查中被自己的埋点救了一次**：比对改动前后分数时，因日期跨天读成了前一天的产物，
+等于拿旧结果跟它自己比。是 `run_metadata.commit_hash` 显示的提交早于改动才发现——
+如果产物里没有这个字段（`5da64da` 之前正是如此），这个错会直接进汇报。
+
 **Trace**：`9183f29`（行数回填）、`46cc2ab`（q005/q008 gold）、`7e11f4b`（README）、
-`29b19a1`（删白名单）、`fbf516f`（q008 日均 + 行数守门）、`33bcf27`（report pattern
-失配 + 守门）；权威产物 `results/baseline_p1_eval_2026-08-14.json` 与
-`results/eval_report_2026-08-14.md`；A/B 产物
+`29b19a1`（删白名单）、`fbf516f`（q008 日均 + 行数守门）、`33bcf27` 与 `200dadb`
+（report/diff 两处 pattern 失配 + 守门）、`78094f1`（reflect 预算 + 模型/阈值回填）；
+权威产物 `results/baseline_p1_eval_2026-08-15.json` 与
+`results/eval_report_2026-08-15.md`；A/B 产物
 `results/p1_full8_{baseline,metric_t063}_v3_2026-08-14.json`
 
 ---
