@@ -4,8 +4,6 @@
 llm:
   # DashScope chat 模型 ID。可换 qwen-plus / qwen-max / 带日期的快照版本。
   # 这里必须是 README 各项成绩实际使用的模型——换模型分数会变，而且不会有任何报错。
-  # 2026-08-15 之前这里写的是 qwen3.6-plus-2026-04-02，与所有已公布数字都不是同一个
-  # 模型，照模板配好的人复现不出 README 上的任何一个数，且没有信号提示他为什么。
   chat_model: qwen3.7-max
   # Embedding 模型 ID。
   embed_model: text-embedding-v4
