@@ -191,7 +191,7 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
        ┌──────────────────┼──────────────────┐
        ▼                  ▼                  ▼
 ┌─────────────┐  ┌────────────────┐  ┌──────────────────┐
-│ Qwen3.6     │  │ PostgreSQL 16  │  │ Langfuse v3      │
+│ Qwen3.7     │  │ PostgreSQL 16  │  │ Langfuse v3      │
 │ (DashScope) │  │ (read-only     │  │ (self-hosted)    │
 │ + Embedding │  │  user enforced)│  │ 全链路 trace      │
 └─────────────┘  └────────────────┘  └──────────────────┘
@@ -334,7 +334,7 @@ chat-bi-agent/
 
 | 类别 | 选型 | 备注 |
 |---|---|---|
-| LLM（生成 + 评分） | Qwen3.6-max-preview（DashScope） | 单源，中文银行场景 → ADR-001 |
+| LLM（生成 + 评分） | 当前 `qwen3.7-max`（DashScope；ADR-001 立项时为 Qwen3.6-max-preview） | 单源，中文银行场景 → ADR-001 |
 | 嵌入 | text-embedding-v4（DashScope，dim=1024） | schema 检索用 |
 | 可观测性 | Langfuse v3（self-hosted） | 全链路 trace + LLM judge 评分回流 → ADR-003 |
 | Agent 编排 | 自研函数链 + `@observe` 装饰器 | 流程固定，未用 LangGraph → ADR-002 |
@@ -353,7 +353,7 @@ chat-bi-agent/
 
 - [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) —— 技术选型对比 + 架构演进史 + 10 条 ADR
 - [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md) —— 三路径评估方法、问题集、rubric、ground truth
-- [金融 data agent 架构设计](./金融data%20agent架构设计.md) —— 业务背景与原始设计稿
+- [金融 data agent 架构设计](./docs/金融data%20agent架构设计.md) —— 业务背景与原始设计稿
 - [CONTRIBUTING.md](./CONTRIBUTING.md) —— 开发环境与贡献流程
 
 ---
