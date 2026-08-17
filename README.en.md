@@ -28,22 +28,24 @@
 | Track | Questions | Passed | Avg Score | Baseline | Notes |
 |---|---:|---:|---:|---|---|
 | **P1 NL2SQL** | 8 / 8 | 8 | **0.965** | 2026-08-15 | Full question set; multi-table JOIN, time windows, aggregation, branch filters — all pass |
-| **P2 Multi-Step Analysis** | 3 / 8 | 0 | **0.601** | 2026-08-17 | 4 scored dims (insight 35% + steps 25% + metric coverage 15% + rubric LLM judge 25%); reasoning/business demoted to diagnostics |
+| **P2 Multi-Step Analysis** | 3 / 8 | 1 | **0.626** | 2026-08-17 | 3 scored dims (insight 45% + rubric LLM judge 35% + metric coverage 20%); reasoning/business/step-completeness demoted to diagnostics |
 | **P3 RCA Attribution** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4-dim rubric, all events matched, zero hallucination |
 
 The denominator in "Questions" is the total in each evaluation set. **P2 has only ever scored the
 first 3 of its 8 questions**; q004–q008 have never been scored. At 300–500s per question,
 completing them takes 40–70 minutes — deferred on cost.
 
-**P2's 0.601 is the only score in this project that has been repeatedly revised downward**, because
-much of the earlier figure was unearned. Three steps (2026-08-15/17):
+**P2 is the only score in this project that has been repeatedly revised downward**, because much of
+the earlier figure was unearned. Four steps (2026-08-15/17), each one a case of "this dimension
+claims to measure A but actually computes B":
 
 | Step | Change | Avg | Passed |
 |---|---|---:|---:|
 | Start | — | 0.798 | 3/3 |
 | ① Fix two silently broken dims | The insight dim split Chinese on whitespace (i.e. did not tokenize at all); metric coverage matched **individual characters** — '长' and '户' appear in almost any banking narrative | 0.798 | 3/3 |
 | ② Delete the two dims with no ground truth | Reasoning quality and business relevance have **nothing to compare against**; their only possible criterion was counting keywords, and they sat at exactly 1.000 — 35% of the weight was a constant, not a measurement | 0.655 | 2/3 |
-| ③ Add a rubric LLM judge | 4-dim G-Eval modelled on P3, each dim anchored to **this question's** YAML fields, weighted 25% | **0.601** | **0/3** |
+| ③ Add a rubric LLM judge | 4-dim G-Eval modelled on P3, each dim anchored to **this question's** YAML fields | 0.601 | 0/3 |
+| ④ Demote step completeness to diagnostic | It computed `len(plan nodes)/len(YAML steps)` — **plan granularity**, not whether the steps were performed | **0.626** | **1/3** |
 
 Deleting in ② and adding in ③ is not self-contradictory: the deleted dims were anchored to a generic
 word list (identical for every question, hence guaranteed to saturate), whereas the judge's four dims
@@ -51,22 +53,34 @@ are anchored to per-question `analysis_steps` / `expected_insights` / `evaluatio
 by hand before the agent ever ran. See [ADR-015](./DESIGN_DECISIONS.md#adr-015) and
 [ADR-016](./DESIGN_DECISIONS.md#adr-016).
 
-**The substantive defect the judge exposed is `quantification`: 0.50 / 0.00 / 0.00 across the three
-questions.** The agent largely fails to report figures comparable to the expected baselines — nothing
-could see this before (`insight_accuracy` measures content-word recall, so saying "growth" counts as
-a hit whether the reported figure is +25% or +3%).
+**④ is a benefit the judge paid out immediately.** On q001 the agent planned only 2 steps (the YAML
+lists 5) → step completeness 0.40, while the judge, anchored to **the same** `analysis_steps`, scored
+content fidelity at 1.00. Manual review of the full answer confirms all five steps' substance is
+present — the judge was right, and the old dimension was penalising "did all five steps in two".
+**Two dimensions sharing an anchor but reaching opposite conclusions act as a control on each other**,
+which is impossible when only one measurement exists.
 
-**Read 0/3 as "all three fall below 0.7", but not as a precise scale**: q001 scored 0.700 and 0.679
-on two runs, straddling the pass line, so `passed` oscillates between 1/3 and 0/3. The table reports
-the `commit_dirty=false` run.
+**The substantive defect the judge exposed is `quantification`: 0.50 / 0.00 / 0.00.** But the accurate
+statement is not "the agent fails to report figures" — it reports plenty (q001 contains 4 percentages
+and 13 large numbers). The real gap is that it **does not compute the derived rates the gold expects**:
+on q003 it retrieved both numerator and denominator (9141 / 5265 / 720) yet never divided them into a
+redemption or continuation rate. q001 proves it *can* (319% / −70.7%); on q003 it simply did not.
+Nothing could see this before (`insight_accuracy` measures content-word recall, so saying "growth"
+counts as a hit whether the reported figure is +25% or +3%).
+
+**Do not read 1/3 as a precise scale**: q001 scored 0.700 and 0.679 across two agent runs under the
+old weights, straddling the pass line. The table's figure comes from
+`baseline_p2_analysis_2026-08-17_rescored.json` — the same agent answers **rescored** under the new
+scorer, with the two provenance chains (agent run / scorer) recorded separately in `run_metadata` and
+`rescorer_metadata`, both `commit_dirty=false`. Re-running the agent after a scorer change would
+conflate "the scorer changed" with "the agent ran differently", so rescoring is deliberate.
 
 **Still unresolved — and all of it blocked on the same thing: `n=3`**:
 
-- `multi_metric_coverage` sits at 1.000 across these three questions; the candidate terms are too
-  generic. Its intent overlaps heavily with the judge's `step_fidelity` (which is anchored to
-  `analysis_steps` and judges the same thing more finely), so **deleting it** may be more consistent
-  than tuning the term list — but it scored 0.500 on q001, so it is not a pure constant, and three
-  questions cannot support that conclusion.
+- `multi_metric_coverage` (20% weight) sits at 1.000 across these three questions — **zero
+  discrimination**; the candidate terms are too generic. It scored 0.500 on q001 previously, so it is
+  not a pure constant, and three questions cannot settle whether to delete or repair it. It is now the
+  only scored dimension that has never been scrutinised.
 - `causal_reasoning` / `business_actionability` have a **floor at 0.50** (never observed lower),
   compressing their effective range to [0.5, 1.0]. This is **not saturation** — they do vary across
   questions, unlike the deleted dims which sat at exactly 1.000 — but it is impossible to tell

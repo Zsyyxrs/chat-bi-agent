@@ -73,12 +73,24 @@ score = evaluator.evaluate_response(
 ### 评估维度
 | 维度 | 权重 | 测量内容 | 判定方式 |
 |------|------|---------|---------|
-| 洞察准确度 | 35% | 发现的洞察与 `expected_insights` 的内容词召回率 | 确定性 |
-| 步骤完整性 | 25% | 是否完成了必要的分析步骤 | 确定性 |
-| 多指标覆盖 | 15% | 是否提到了关键指标词（整词匹配） | 确定性 |
-| **rubric judge** | **25%** | 4 维 G-Eval：`step_fidelity` / `quantification` / `causal_reasoning` / `business_actionability` | **LLM（中位数 ×3）** |
+| 洞察准确度 | 45% | 发现的洞察与 `expected_insights` 的内容词召回率 | 确定性 |
+| **rubric judge** | **35%** | 4 维 G-Eval：`step_fidelity` / `quantification` / `causal_reasoning` / `business_actionability` | **LLM（中位数 ×3）** |
+| 多指标覆盖 | 20% | 是否提到了关键指标词（整词匹配） | 确定性 |
 | ~~推理质量~~ | — | **诊断字段，2026-08-17 起不计入总分** | — |
 | ~~业务相关性~~ | — | **诊断字段，2026-08-17 起不计入总分** | — |
+| ~~步骤完整性~~ | — | **诊断字段，2026-08-17 起不计入总分**（见下） | — |
+
+**步骤完整性为何降为诊断**：它算的是 `len(mentioned_steps) / len(analysis_steps)`——
+**计划节点数**，不是步骤有没有做。实测 q001：agent 只规划 2 步（YAML 有 5 步）→ 0.40，而
+judge 拿**同一份** `analysis_steps` 判内容给 1.00；人工核对回答全文，5 步的实质内容全部
+覆盖，judge 是对的。旧维度罚的是「把 5 步并成 2 步做完」这件本身无可指摘的事。
+
+换成内容词召回同样不行（实测 0.553/0.337/0.350，比数节点还低）：期望步骤是指令式文本、
+带表名（「从 `fct_holding` 查询…」），agent 用业务语言报结果，不会复述表名。步骤判定因此
+整体交给 judge 的 `step_fidelity`，本字段保留为「计划粒度」诊断。
+
+judge 份额由 25% 升到 35% 是这次搬迁的直接结果，不是更信任 LLM 判读；守门上限随之由
+0.30 放宽到 0.35，仍要求确定性侧过半。
 
 推理质量与业务相关性移出总分的原因**不是阈值松，是没有可比对的对象**：题目 YAML 里
 没有任何东西说这题的推理该长什么样、该提哪些业务概念，判据只能退化成「数中文连接词」
@@ -140,7 +152,15 @@ print(score.combined_score, score.rubric_score, score.rubric_available)
 python scripts/replay_p2_scoring.py results/baseline_p2_analysis_2026-08-17.json --compare
 # 用当前 prompt 重跑 judge（要调 LLM），照 P3 的 scripts/rejudge_baseline.py
 python scripts/replay_p2_scoring.py results/baseline_p2_analysis_2026-08-17.json --rejudge
+# 写出重评产物 <原名>_rescored.json（改了权重/维度后据此更新公布数字）
+python scripts/replay_p2_scoring.py results/baseline_p2_analysis_2026-08-17.json --write
 ```
+
+**改评分器后为什么重评而不重跑 agent**：agent 跑间本身有波动（实测 q001 两轮 0.700 /
+0.679），重跑会把「评分器变了」和「agent 这次跑得不同」搅在一起，归因不干净。重评保持
+agent 输出不变、只换评分器。重评产物保留原 agent 跑的 `ran_at` / `run_metadata`，评分器
+出处另记 `rescorer_metadata`——**这两条出处必须分开**，混淆过一次就再也说不清分数变化
+来自哪一侧。守门见 `tests/eval/test_p2_rubric_judge.py::TestRescoredArtifactProvenance`。
 
 ### 示例问题
 1. **multi_step_q001：** 对比春节前后现金支取行为（总额、日均、客户数、渠道分布）
