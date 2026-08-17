@@ -3,8 +3,6 @@
 部分测试需要真实 PG，标记 @pytest.mark.integration，可用 `pytest -m "not integration"` 跳过。
 """
 
-import os
-
 import pytest
 
 from chat_bi_agent.agents.shared.sql_executor import (
@@ -12,6 +10,7 @@ from chat_bi_agent.agents.shared.sql_executor import (
     SQLExecutor,
     UnsafeSQLError,
 )
+from tests.pg_probe import PG_UP, SKIP_REASON
 
 
 def test_blocks_drop():
@@ -75,8 +74,8 @@ def test_classify_other():
 @pytest.mark.integration
 def test_select_against_real_pg():
     """需要 docker-compose 启动 + chatbi_readonly 角色存在 + dim_customer 有数据。"""
-    if not os.environ.get("PG_HOST"):
-        pytest.skip("PG 未配置")
+    if not PG_UP:
+        pytest.skip(SKIP_REASON)
     executor = SQLExecutor()
     rows, err = executor.execute("SELECT customer_id FROM dim_customer LIMIT 1")
     assert err is None
@@ -85,8 +84,8 @@ def test_select_against_real_pg():
 
 @pytest.mark.integration
 def test_unknown_table_against_real_pg():
-    if not os.environ.get("PG_HOST"):
-        pytest.skip("PG 未配置")
+    if not PG_UP:
+        pytest.skip(SKIP_REASON)
     executor = SQLExecutor()
     rows, err = executor.execute("SELECT * FROM nonexistent_table_xyz")
     assert rows is None

@@ -6,7 +6,6 @@
 未配 PG_HOST 时整个模块 skip；也可用 `pytest -m "not integration"` 绕开。
 """
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +19,7 @@ from chat_bi_agent.agents.p1.metric_resolver import (
 )
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent
 from chat_bi_agent.agents.shared.sql_executor import SQLExecutor
+from tests.pg_probe import PG_UP, SKIP_REASON
 
 CATALOG_PATH = Path(__file__).resolve().parents[2] / "config" / "metrics.yaml"
 
@@ -50,8 +50,8 @@ def test_every_metric_dim_filter_combo_executes_on_real_pg(real_catalog):
     （fbd.account_type / ft.channel / dc.is_active），48 组合里 18 组挂。
     catalog 改完必须跑这个。
     """
-    if not os.environ.get("PG_HOST"):
-        pytest.skip("PG 未配置")
+    if not PG_UP:
+        pytest.skip(SKIP_REASON)
 
     executor = SQLExecutor()
     failures: list[str] = []
@@ -88,8 +88,8 @@ def test_every_metric_dim_filter_combo_executes_on_real_pg(real_catalog):
 @pytest.mark.integration
 def test_metric_hit_produces_rows_from_real_pg(real_catalog):
     """deposit_balance 命中 → 拼真 SQL → 跑 Postgres 应返 rows。"""
-    if not os.environ.get("PG_HOST"):
-        pytest.skip("PG 未配置")
+    if not PG_UP:
+        pytest.skip(SKIP_REASON)
 
     deposit = next(m for m in real_catalog.metrics if m.id == "deposit_balance")
     router = MetricRouter(
