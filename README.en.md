@@ -60,12 +60,20 @@ a hit whether the reported figure is +25% or +3%).
 on two runs, straddling the pass line, so `passed` oscillates between 1/3 and 0/3. The table reports
 the `commit_dirty=false` run.
 
-**Still unresolved**:
-- `multi_metric_coverage` is at 1.000 on **all three** questions; the candidate terms are too generic.
-- `causal_reasoning` / `business_actionability` still hit 1.000 on some questions. The prompt
-  explicitly forbids awarding credit merely for business vocabulary, but the criteria remain lenient
-  for competently written analysis — **only partly solved**.
-- q004–q008 have never been scored.
+**Still unresolved — and all of it blocked on the same thing: `n=3`**:
+
+- `multi_metric_coverage` sits at 1.000 across these three questions; the candidate terms are too
+  generic. Its intent overlaps heavily with the judge's `step_fidelity` (which is anchored to
+  `analysis_steps` and judges the same thing more finely), so **deleting it** may be more consistent
+  than tuning the term list — but it scored 0.500 on q001, so it is not a pure constant, and three
+  questions cannot support that conclusion.
+- `causal_reasoning` / `business_actionability` have a **floor at 0.50** (never observed lower),
+  compressing their effective range to [0.5, 1.0]. This is **not saturation** — they do vary across
+  questions, unlike the deleted dims which sat at exactly 1.000 — but it is impossible to tell
+  whether the criteria are lenient or these three answers are genuinely mid-quality.
+- **q004–q008 have never been scored** (300–500s per question; 40–70 minutes to complete). That is
+  the prerequisite for both points above: only at n=8 can a dimension be shown to discriminate.
+  Deferred on cost, so those two items **lack evidence, not effort**.
 
 **Do not read P1's 0.965 as a precise value**: repeated runs of the same configuration land between
 **0.965 and 0.977**, and the spread comes **entirely** from one question, q008 (observed 0.90 / 0.93
