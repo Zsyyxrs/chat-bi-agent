@@ -28,21 +28,27 @@
 | Track | Questions | Passed | Avg Score | Baseline | Notes |
 |---|---:|---:|---:|---|---|
 | **P1 NL2SQL** | 8 / 8 | 8 | **0.965** | 2026-08-15 | Full question set; multi-table JOIN, time windows, aggregation, branch filters — all pass |
-| **P2 Multi-Step Analysis** | 3 / 8 | 3 | **0.798** | 2026-08-15 | 5-dim rubric (step completeness, metric coverage, insight, reasoning, business relevance) |
+| **P2 Multi-Step Analysis** | 3 / 8 | 2 | **0.655** | 2026-08-17 | 3 scored dims (insight 40% + step completeness 30% + metric coverage 30%); reasoning/business demoted to diagnostics |
 | **P3 RCA Attribution** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4-dim rubric, all events matched, zero hallucination |
 
 The denominator in "Questions" is the total in each evaluation set. **P2 has only ever scored the
 first 3 of its 8 questions**; q004–q008 have never been scored. At 300–500s per question,
 completing them takes 40–70 minutes — deferred on cost.
 
-**P2's 0.798 means "no longer obviously wrong", not yet a capability measure**: three of its five
-dimensions (metric coverage / reasoning quality / business relevance — **55% of the weight
-combined**) sit at exactly 1.000 on every question. They count keyword occurrences and saturate at
-4–5 hits, which any fluent Chinese analysis reaches automatically, so they carry no discriminative
-signal. On 2026-08-15 the highest-weighted dimension (insight accuracy) was fixed — it had been
-splitting Chinese on whitespace, i.e. not tokenizing at all (see
-[ADR-015](./DESIGN_DECISIONS.md#adr-015)); the entire 0.740 → 0.798 move came from that one
-dimension. Whether to tighten the other three is an open decision.
+**P2's 0.655 is the only score in this project that was revised downward**, because much of the
+previous figure was unearned. Two rounds of fixes (2026-08-15/17): first the insight dimension
+(which split Chinese on whitespace, i.e. did not tokenize at all) and the metric-coverage dimension
+(which matched **individual characters** — '长' and '户' appear in almost any banking narrative);
+then reasoning quality and business relevance were moved out of the total score entirely. Those two
+have **nothing to compare against** — their only possible criterion was counting keywords, and they
+sat at exactly 1.000 on every question, making 35% of the weight a constant rather than a
+measurement. The move from 0.798 to 0.655, and 3/3 to 2/3 passing, is that water being squeezed out.
+See [ADR-015](./DESIGN_DECISIONS.md#adr-015).
+
+**Still unresolved**: `multi_metric_coverage` remains at 1.000 on 2 of 3 questions — whole-word
+matching removed the worst false positives, but the candidate terms themselves are too generic.
+Genuinely measuring reasoning and business relevance requires a rubric LLM judge modelled on P3's
+`_llm_judge_conclusion`; not yet done.
 
 **Do not read P1's 0.965 as a precise value**: repeated runs of the same configuration land between
 **0.965 and 0.977**, and the spread comes **entirely** from one question, q008 (observed 0.90 / 0.93
