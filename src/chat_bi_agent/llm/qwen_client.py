@@ -48,7 +48,12 @@ def _ensure_api_key() -> None:
 # DashScope SDK 读的是 `request_timeout`（dashscope.common.constants.REQUEST_TIMEOUT_KEYWORD），
 # 不是 `timeout`——写错名字会被静默忽略，照样按 300s 默认值挂着。
 REQUEST_TIMEOUT_SECONDS = 60
-MAX_TRANSIENT_RETRIES = 2
+# 2026-08-17 上调：原为 2 次重试 + 线性退避 2s/4s，总计只扛得住约 6 秒的抖动。
+# 当天有三轮跑批（P1 A/B 一轮、P2 两轮，合计 45+ 分钟与对应 LLM 花费）死在
+# dashscope 的 DNS/连接瞬断上，每次都超过 6 秒。对「一轮 20 分钟起」的批量评测来说，
+# 6 秒就放弃是明显失配：省下的几十秒抵不上报废一整轮。
+# 现为 4 次重试 + 指数退避 2/4/8/16，总计约 30 秒。
+MAX_TRANSIENT_RETRIES = 4
 _RETRY_BACKOFF_SECONDS = 2
 
 # 只重试网络类瞬时故障；配额/鉴权错误重试没意义，必须快速失败
@@ -71,7 +76,8 @@ def _call_with_retry(fn, **kwargs):
         except _TRANSIENT_EXC as e:
             last = e
             if attempt < MAX_TRANSIENT_RETRIES:
-                time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                # 指数退避而非线性：DNS/连接瞬断往往持续十几秒，线性 2/4/6 收敛太慢
+                time.sleep(_RETRY_BACKOFF_SECONDS * (2**attempt))
     raise last
 
 
