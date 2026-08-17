@@ -71,6 +71,11 @@ def main() -> int:
         action="store_true",
         help="用当前 prompt 重跑 rubric LLM judge（要花钱调 LLM）；默认复用产物里存的 rubric",
     )
+    ap.add_argument(
+        "--write",
+        action="store_true",
+        help="把重评结果写成 <原名>_rescored.json（保留原 agent 跑的出处，另记评分器出处）",
+    )
     args = ap.parse_args()
 
     data = json.loads(args.artifact.read_text(encoding="utf-8"))
@@ -147,7 +152,68 @@ def main() -> int:
         print(f"，产物记录 avg = {data.get('avg_score')}")
     else:
         print()
+
+    if args.write:
+        _write_rescored(args.artifact, data, rows, avg, rejudged=args.rejudge)
     return 0
+
+
+def _write_rescored(src: Path, data: dict, rows: list, avg: float, rejudged: bool) -> None:
+    """写重评产物。
+
+    为什么单独一份而不是覆盖原产物：原产物是「那次 agent 跑 + 当时评分器」的忠实记录，
+    覆盖掉就再也无法回答「分数变化里多少来自评分器、多少来自 agent」。改评分器后重跑
+    agent 也不行——agent 跑间本身有波动（实测 q001 两轮 0.700 / 0.679），会把两个变量
+    混在一起。重评保持 agent 输出不变、只换评分器，归因才干净。
+
+    `ran_at` / `run_metadata` 原样保留（它们描述的是 agent 那次跑），评分器出处另记在
+    `rescored_*` 字段里——这两个出处混淆过一次就再也说不清了。
+    """
+    from datetime import UTC, datetime
+
+    from chat_bi_agent.eval.run_metadata import build_run_metadata
+
+    out = dict(data)
+    by_id = {q["question_id"]: s for q, s in rows}
+    passed = 0
+    per_q = []
+    for q in data.get("per_question", []):
+        q2 = dict(q)
+        s = by_id.get(q.get("question_id"))
+        if s is not None:
+            q2["score"] = round(s.combined_score, 4)
+            q2["sub_scores"] = {
+                "step_completeness": round(s.step_completeness, 4),
+                "multi_metric_coverage": round(s.multi_metric_coverage, 4),
+                "insight_accuracy": round(s.insight_accuracy, 4),
+                "reasoning_quality": round(s.reasoning_quality, 4),
+                "business_relevance": round(s.business_relevance, 4),
+                "analysis_rubric": s.analysis_rubric,
+            }
+            q2["rubric_unavailable"] = not s.rubric_available
+            passed += s.combined_score >= 0.7
+        per_q.append(q2)
+
+    out["per_question"] = per_q
+    out["passed_questions"] = passed
+    out["pass_rate"] = round(passed / len(rows), 4) if rows else 0.0
+    out["avg_score"] = round(avg, 4)
+    out["rubric_unavailable_questions"] = [
+        q["question_id"] for q in per_q if q.get("rubric_unavailable")
+    ]
+    # 出处：agent 那次跑的 ran_at / run_metadata 原样不动，评分器的出处单独记。
+    out["rescored_from"] = src.name
+    out["rescored_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    out["rescored_judge_rerun"] = rejudged
+    out["rescorer_metadata"] = build_run_metadata()
+
+    dst = src.with_name(src.stem + "_rescored.json")
+    dst.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n写入重评产物 → {dst}")
+    print(
+        "  注意：agent 回答沿用原产物（ran_at / run_metadata 未改），"
+        "仅评分器为当前代码（rescorer_metadata）。"
+    )
 
 
 if __name__ == "__main__":

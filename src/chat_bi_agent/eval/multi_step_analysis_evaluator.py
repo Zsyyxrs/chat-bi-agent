@@ -21,14 +21,16 @@ JUDGE_DIMS = (
     "business_actionability",  # 锚：本题 evaluation_criteria
 )
 
-# 计分维度权重。确定性三维 0.75 / LLM judge 0.25，对齐 P3 的 0.80/0.20——
-# judge 的锚是「人写的 rubric 文本 + LLM 判读」，比 P1 的 gold SQL、P3 的事件库弱，
-# 不该让它主导总分。judge 缺席时按剩余维度归一，见 `AnalysisScore.combined_score`。
+# 计分维度权重。judge 缺席时按剩余维度归一，见 `AnalysisScore.combined_score`。
+#
+# 2026-08-17 第二次调整：`step_completeness` 移出计分（降为诊断），步骤判定整体交给
+# judge 的 `step_fidelity`——两者本来锚在同一份 `analysis_steps` 上，但前者数的是**计划
+# 节点数**而非步骤有没有做，详见 `AnalysisScore.combined_score` 与 ADR-016 Update。
+# judge 份额因此由 0.25 升到 0.35，是这次搬迁的直接结果，不是更信任 LLM 判读。
 SCORED_WEIGHTS = {
-    "insight_accuracy": 0.35,  # 唯一有硬 ground truth（expected_insights 文本）
-    "step_completeness": 0.25,
-    "multi_metric_coverage": 0.15,
-    "analysis_rubric": 0.25,  # LLM judge 4 维均值
+    "insight_accuracy": 0.45,  # 唯一有硬 ground truth（expected_insights 文本）
+    "analysis_rubric": 0.35,  # LLM judge 4 维均值（含 step_fidelity）
+    "multi_metric_coverage": 0.20,
 }
 
 
@@ -55,7 +57,7 @@ class AnalysisScore:
     """单个多步分析问题的评估分数。"""
 
     question_id: str
-    step_completeness: float = 0.0  # 0-1: 完成了多少个必要步骤
+    step_completeness: float = 0.0  # 0-1: 报了几个计划节点 / YAML 步数（诊断，不计分）
     multi_metric_coverage: float = 0.0  # 0-1: 是否覆盖了多个关键指标
     insight_accuracy: float = 0.0  # 0-1: 发现的洞察与期望的相似度
     reasoning_quality: float = 0.0  # 0-1: 推理逻辑的严谨性（诊断，不计分）
@@ -106,10 +108,21 @@ class AnalysisScore:
         judge 缺席（未开启或调用失败）时按剩余维度**归一**，而不是记 0：记 0 等于因
         基础设施故障扣 agent 的分。归一会让口径在两种运行间不同，故必须配 `rubric_available`
         显式记账，runner 与报告都要打出来。
+
+        **2026-08-17 第二次调整：`step_completeness` 也移出总分。** 它的实现是
+        `len(mentioned_steps) / len(analysis_steps)`——数的是**计划节点数**，不是步骤有没有
+        做。实测 q001：agent 只规划 2 步（YAML 有 5 步）→ 0.40，而 judge 拿同一份
+        `analysis_steps` 判内容给 1.00。人工核对回答全文，5 步的实质内容全部覆盖（节前基线 /
+        假期数据 / 日均与增长率 / 按渠道分别统计 / 对比总结），**judge 是对的**：它罚的是
+        「把 5 步并成 2 步做完」这件本身无可指摘的事。
+
+        换成内容词召回同样不行（实测 0.553/0.337/0.350，比数节点还低）：期望步骤是指令式
+        文本且带表名（「从 fct_holding 查询…」），agent 用业务语言报结果，不会复述表名——
+        那是另一个错的测法。步骤判定因此整体交给 judge 的 `step_fidelity`，本字段保留为
+        「计划粒度」诊断。
         """
         parts = {
             "insight_accuracy": self.insight_accuracy,
-            "step_completeness": self.step_completeness,
             "multi_metric_coverage": self.multi_metric_coverage,
         }
         rubric = self.rubric_score

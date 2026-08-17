@@ -9,7 +9,12 @@
 被删的两维锚在通用词表上（对任何题目都一样），judge 的四维锚在每道题 YAML 里人工写死的
 `analysis_steps` / `expected_insights` / `evaluation_criteria` 上（每题不同，且写在 agent
 跑之前）。这仍比 P1 的 gold SQL、P3 的事件库弱——它是「人写的 rubric 文本 + LLM 判读」，
-所以权重只给 0.25，确定性三维仍占 0.75（对齐 P3 的 0.80/0.20）。
+所以确定性维度必须过半。
+
+权重当日调过两次：先是 insight 0.35 / step 0.25 / metric 0.15 / rubric 0.25，随后
+`step_completeness` 被证伪（数计划节点而非判步骤有没有做，见
+`TestWeights::test_step_completeness_is_not_scored`）并降为诊断，步骤判定整体搬进 judge 的
+`step_fidelity`，权重变为 insight 0.45 / metric 0.20 / rubric 0.35。
 
 本文件锁死三件最容易悄悄退化的事：
   1. judge 失败**不得**回退到被删的关键词启发式——那等于把缺陷原样请回来；
@@ -76,19 +81,35 @@ class TestWeights:
     def test_scored_weights_sum_to_one(self):
         assert abs(sum(SCORED_WEIGHTS.values()) - 1.0) < 1e-9
 
-    def test_deterministic_dims_outweigh_the_judge(self):
-        """确定性维度必须占多数：judge 是人写 rubric + LLM 判读，锚比 gold SQL 弱。
+    def test_deterministic_dims_still_carry_the_majority(self):
+        """确定性维度必须过半：judge 是人写 rubric + LLM 判读，锚比 gold SQL 弱。
 
-        对齐 P3：那边确定性 0.80 / LLM judge 0.20。
+        上限 2026-08-17 由 0.30 放宽到 0.35：`step_completeness` 降为诊断后，**步骤判定
+        整体搬进了 judge 的 `step_fidelity`**，judge 份额上升是这次搬迁的直接结果，不是
+        因为更信任 LLM 判读。仍要求确定性侧过半。
         """
         judge_w = SCORED_WEIGHTS["analysis_rubric"]
-        assert judge_w <= 0.30, f"judge 权重 {judge_w} 过高，会让总分主要由 LLM 判读决定"
-        assert sum(v for k, v in SCORED_WEIGHTS.items() if k != "analysis_rubric") >= 0.70
+        assert judge_w <= 0.35, f"judge 权重 {judge_w} 过高，总分会主要由 LLM 判读决定"
+        assert sum(v for k, v in SCORED_WEIGHTS.items() if k != "analysis_rubric") > 0.50
 
-    def test_insight_accuracy_is_the_heaviest_deterministic_dim(self):
+    def test_insight_accuracy_is_the_heaviest_dim(self):
         """insight_accuracy 是唯一有硬 ground truth 的维度（expected_insights）。"""
         others = {k: v for k, v in SCORED_WEIGHTS.items() if k != "insight_accuracy"}
         assert SCORED_WEIGHTS["insight_accuracy"] >= max(others.values())
+
+    def test_step_completeness_is_not_scored(self):
+        """回归：`step_completeness` 数的是计划节点数，不是步骤有没有做。
+
+        2026-08-17 实测 q001：agent 只规划 2 步（YAML 有 5 步）→ 0.40，而 judge 拿同一份
+        `analysis_steps` 判内容给 1.00。人工核对回答全文，5 步的实质内容全部覆盖
+        （节前基线 / 假期数据 / 日均与增长率 / 按渠道分别统计 / 对比总结），**judge 是对的**。
+        它罚的是「把 5 步并成 2 步做完」，即计划粒度，与维度名声称的「步骤完整性」无关。
+
+        换成内容词召回也不行（实测 0.553/0.337/0.350，比数节点更低）：期望步骤是指令式
+        文本、带表名（「从 fct_holding 查询…」），agent 用业务语言报结果，不会复述表名。
+        那是另一个错的测法，不是修好。故降为诊断，步骤判定由 judge 的 step_fidelity 承担。
+        """
+        assert "step_completeness" not in SCORED_WEIGHTS
 
 
 class TestCombinedScore:
@@ -152,9 +173,9 @@ class TestCombinedScore:
         assert judged_zero.combined_score < absent.combined_score
 
     def test_deleted_dims_stay_out_of_the_score(self):
-        """回归 ADR-015：reasoning_quality / business_relevance 仍是诊断字段。
+        """回归 ADR-015/016：三个诊断字段都不得进总分。
 
-        judge 上线后最自然的错误动作，就是顺手把这两维加回总分。
+        judge 上线后最自然的错误动作，就是顺手把它们加回去。
         """
         base = AnalysisScore(question_id=QID, analysis_rubric=_rubric())
         loud = AnalysisScore(
@@ -162,8 +183,20 @@ class TestCombinedScore:
             analysis_rubric=_rubric(),
             reasoning_quality=1.0,
             business_relevance=1.0,
+            step_completeness=1.0,
         )
         assert base.combined_score == pytest.approx(loud.combined_score)
+
+    def test_step_completeness_still_computed_as_diagnostic(self):
+        """降为诊断不等于停止计算——它仍是「计划粒度」的有用信号，只是不计分。"""
+        ev = MultiStepAnalysisEvaluator(use_llm_judge=False)
+        score = ev.evaluate_response(
+            question_id=QID,
+            agent_response="回答",
+            mentioned_steps=["a", "b"],
+        )
+        # q001 的 YAML 有 5 步，报了 2 步 → 2/5
+        assert score.step_completeness == pytest.approx(0.4)
 
 
 # ---------------------------------------------------------------- judge 本身
@@ -410,6 +443,58 @@ class TestRunnerPersistsRubric:
         )
         assert "rubric_unavailable_questions" in src, (
             "run_all_evals 未读取 rubric_unavailable_questions，报告看不出口径差异"
+        )
+
+
+class TestRescoredArtifactProvenance:
+    """重评产物必须把两条出处链分开：agent 那次跑 vs 评分器。
+
+    混淆过一次就再也说不清「分数变化里多少来自评分器、多少来自 agent」。而 agent 跑间
+    本身有波动（实测 q001 两轮 0.700 / 0.679），所以改评分器后重跑 agent 会把两个变量
+    搅在一起——这正是重评存在的理由。
+    """
+
+    @staticmethod
+    def _artifact():
+        import json
+        from pathlib import Path
+
+        p = (
+            Path(__file__).resolve().parents[2]
+            / "results"
+            / "baseline_p2_analysis_2026-08-17_rescored.json"
+        )
+        if not p.exists():
+            pytest.skip("重评产物不在仓库中")
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    def test_agent_run_provenance_preserved(self):
+        d = self._artifact()
+        assert d.get("ran_at"), "ran_at 被抹掉了——agent 那次跑的时间无从追溯"
+        assert d["run_metadata"].get("commit_hash"), "run_metadata 必须仍描述 agent 那次跑"
+
+    def test_scorer_provenance_recorded_separately(self):
+        d = self._artifact()
+        assert d.get("rescored_from"), "没记来源产物，无法复现这次重评"
+        assert d.get("rescorer_metadata", {}).get("commit_hash"), "没记评分器出处"
+        assert d["rescorer_metadata"]["commit_hash"] != d["run_metadata"]["commit_hash"] or d.get(
+            "rescored_at"
+        ), "两条出处不可辨"
+
+    def test_declares_whether_judge_was_rerun(self):
+        """复用存下的 rubric 与重跑 judge 是两回事，产物必须自己说清。"""
+        assert "rescored_judge_rerun" in self._artifact()
+
+    def test_script_keeps_the_two_chains_separate(self):
+        """源码层契约：重评不得覆盖 run_metadata。"""
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[2] / "scripts" / "replay_p2_scoring.py").read_text(
+            encoding="utf-8"
+        )
+        assert '"rescorer_metadata"' in src
+        assert 'out["run_metadata"]' not in src, (
+            "重评脚本覆盖了 run_metadata——那描述的是 agent 那次跑，不是评分器"
         )
 
 
