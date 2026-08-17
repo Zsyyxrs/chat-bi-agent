@@ -32,7 +32,10 @@ from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
 
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "multi_step_analysis_evaluation.yaml"
 
-OUTPUT_DATE = "2026-06-07"
+# 与 run_p1_eval / run_p3_eval 一致取当天日期。此处曾长期硬编码为 "2026-06-07"，
+# 后果是**每一次 P2 跑批都覆盖那份历史 baseline**，而且提示信息里印的还是旧日期，
+# 不会有任何人察觉自己刚销毁了对照组。2026-08-17 复跑时实际触发，靠 git 才救回来。
+OUTPUT_DATE = datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def load_questions() -> dict[str, dict]:

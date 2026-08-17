@@ -28,12 +28,21 @@
 | Track | Questions | Passed | Avg Score | Baseline | Notes |
 |---|---:|---:|---:|---|---|
 | **P1 NL2SQL** | 8 / 8 | 8 | **0.965** | 2026-08-15 | Full question set; multi-table JOIN, time windows, aggregation, branch filters — all pass |
-| **P2 Multi-Step Analysis** | 3 / 8 | 3 | **0.740** | 2026-06-07 | 5-dim rubric (step completeness, metric coverage, insight, reasoning, business relevance) |
+| **P2 Multi-Step Analysis** | 3 / 8 | 3 | **0.798** | 2026-08-15 | 5-dim rubric (step completeness, metric coverage, insight, reasoning, business relevance) |
 | **P3 RCA Attribution** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4-dim rubric, all events matched, zero hallucination |
 
 The denominator in "Questions" is the total in each evaluation set. **P2 has only ever scored the
-first 3 of its 8 questions** (the 2026-06-07 run passed `--limit 3`); q004–q008 have never been
-scored. At 300–500s per question, completing them takes 40–70 minutes — deferred on cost.
+first 3 of its 8 questions**; q004–q008 have never been scored. At 300–500s per question,
+completing them takes 40–70 minutes — deferred on cost.
+
+**P2's 0.798 means "no longer obviously wrong", not yet a capability measure**: three of its five
+dimensions (metric coverage / reasoning quality / business relevance — **55% of the weight
+combined**) sit at exactly 1.000 on every question. They count keyword occurrences and saturate at
+4–5 hits, which any fluent Chinese analysis reaches automatically, so they carry no discriminative
+signal. On 2026-08-15 the highest-weighted dimension (insight accuracy) was fixed — it had been
+splitting Chinese on whitespace, i.e. not tokenizing at all (see
+[ADR-015](./DESIGN_DECISIONS.md#adr-015)); the entire 0.740 → 0.798 move came from that one
+dimension. Whether to tighten the other three is an open decision.
 
 **Do not read P1's 0.965 as a precise value**: repeated runs of the same configuration land between
 **0.965 and 0.977**, and the spread comes **entirely** from one question, q008 (observed 0.90 / 0.93
