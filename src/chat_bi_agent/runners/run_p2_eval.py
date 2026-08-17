@@ -25,6 +25,7 @@ from langfuse import observe  # noqa: E402
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent  # noqa: E402
 from chat_bi_agent.agents.p2 import P2MultiStepAnalysisAgent  # noqa: E402
 from chat_bi_agent.eval.multi_step_analysis_evaluator import (  # noqa: E402
+    JUDGE_DIMS,
     AnalysisEvaluation,
     MultiStepAnalysisEvaluator,
 )
@@ -102,13 +103,23 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
         )
         print(f"  Facts: {len(report.facts)}, Insights: {len(report.insights)}")
         print(f"  Latency: {report.total_latency_ms:.0f}ms")
+        rubric_str = (
+            " ".join(f"{d.split('_')[0]}={score.analysis_rubric[d]:.2f}" for d in JUDGE_DIMS)
+            if score.rubric_available
+            else "judge 未判（该维退出计分）"
+        )
+        rubric_avg = "—" if score.rubric_score is None else f"{score.rubric_score:.2f}"
         print(
             f"  Score: {score.combined_score:.3f} "
             f"(step={score.step_completeness:.2f} "
             f"metric={score.multi_metric_coverage:.2f} "
             f"insight={score.insight_accuracy:.2f} "
-            f"reason={score.reasoning_quality:.2f} "
-            f"biz={score.business_relevance:.2f})"
+            f"rubric={rubric_avg})"
+        )
+        print(f"    rubric: {rubric_str}")
+        print(
+            f"    诊断（不计分）: reason={score.reasoning_quality:.2f} "
+            f"biz={score.business_relevance:.2f}"
         )
 
         evaluation.scores.append(score)
@@ -130,9 +141,15 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
                     "step_completeness": round(score.step_completeness, 4),
                     "multi_metric_coverage": round(score.multi_metric_coverage, 4),
                     "insight_accuracy": round(score.insight_accuracy, 4),
+                    # 诊断字段，不计分（ADR-015）
                     "reasoning_quality": round(score.reasoning_quality, 4),
                     "business_relevance": round(score.business_relevance, 4),
+                    # rubric 子分原样落盘（照 P3 的 conclusion_rubric）：既让判分事后可
+                    # 复核，也让 replay 能复用它精确重放总分而不必再花钱重判。
+                    # None 表示 judge 未判，该题总分口径是确定性三维归一。
+                    "analysis_rubric": score.analysis_rubric,
                 },
+                "rubric_unavailable": not score.rubric_available,
                 "final_answer_preview": report.final_answer[:200],
                 # 评分器的完整入参原样落盘，喂回 evaluate_response(**eval_input) 即可
                 # 精确重放。此前只存 200 字预览（评分用的却是完整回答），既无法事后
@@ -161,6 +178,9 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
     # 产物里的 partial 字段此前无代码设置，2026-06-07 那份的 partial=true 是人手写的。
     errored = [q["question_id"] for q in per_question if "agent_exception" in q]
     scored = evaluation.total_questions - len(errored)
+    # judge 降级同样必须记账：这些题的总分是「确定性三维归一」，与四维题不同口径。
+    # 不标出来的话，judge 大面积失败的一轮与正常一轮产物同形，只是分数分布悄悄变了。
+    rubric_missing = [q["question_id"] for q in per_question if q.get("rubric_unavailable")]
     payload = {
         "baseline_id": "p2_analysis_mvp",
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -169,6 +189,7 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
         "scored_questions": scored,
         "errored_questions": errored,
         "partial": bool(errored),
+        "rubric_unavailable_questions": rubric_missing,
         "passed_questions": evaluation.passed_questions,
         # 保留原字段名：run_all_evals.py 与 eval_diff.py 直接按 d['avg_score'] 取值
         # 且无 .get 兜底，改名会让报告生成 KeyError。口径由上面的 scored/partial 说明。
@@ -182,6 +203,12 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
             f"\n⚠️  {len(errored)}/{evaluation.total_questions} 题未执行（agent 异常）："
             f"{', '.join(errored)}\n"
             f"    avg/pass_rate 的分母是成功评分的 {scored} 题，不代表整批结果。"
+        )
+    if rubric_missing:
+        print(
+            f"\n⚠️  {len(rubric_missing)}/{scored} 题的 rubric judge 未判："
+            f"{', '.join(rubric_missing)}\n"
+            f"    这些题的总分按确定性三维归一，与其余题不同口径，不可直接对比。"
         )
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
     print(f"\nWrote baseline JSON → {out_path}")

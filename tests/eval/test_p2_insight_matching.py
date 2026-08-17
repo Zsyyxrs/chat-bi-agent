@@ -62,7 +62,7 @@ class TestOverlapRatio:
 class TestEvaluatorIntegration:
     @pytest.fixture
     def ev(self):
-        return MultiStepAnalysisEvaluator()
+        return MultiStepAnalysisEvaluator(use_llm_judge=False)
 
     def test_insight_accuracy_rewards_stating_the_insight(self, ev):
         """健全性检查：原文照抄应当高分（旧实现也过，不用于区分新旧）。"""

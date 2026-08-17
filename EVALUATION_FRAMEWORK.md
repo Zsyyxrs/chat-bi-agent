@@ -71,23 +71,43 @@ score = evaluator.evaluate_response(
   - 预测与趋势外推 (2 题)
 
 ### 评估维度
-| 维度 | 权重 | 测量内容 |
-|------|------|---------|
-| 洞察准确度 | 40% | 发现的洞察与 `expected_insights` 的内容词召回率 |
-| 步骤完整性 | 30% | 是否完成了必要的分析步骤 |
-| 多指标覆盖 | 30% | 是否提到了关键指标词（整词匹配） |
-| ~~推理质量~~ | — | **诊断字段，2026-08-17 起不计入总分** |
-| ~~业务相关性~~ | — | **诊断字段，2026-08-17 起不计入总分** |
+| 维度 | 权重 | 测量内容 | 判定方式 |
+|------|------|---------|---------|
+| 洞察准确度 | 35% | 发现的洞察与 `expected_insights` 的内容词召回率 | 确定性 |
+| 步骤完整性 | 25% | 是否完成了必要的分析步骤 | 确定性 |
+| 多指标覆盖 | 15% | 是否提到了关键指标词（整词匹配） | 确定性 |
+| **rubric judge** | **25%** | 4 维 G-Eval：`step_fidelity` / `quantification` / `causal_reasoning` / `business_actionability` | **LLM（中位数 ×3）** |
+| ~~推理质量~~ | — | **诊断字段，2026-08-17 起不计入总分** | — |
+| ~~业务相关性~~ | — | **诊断字段，2026-08-17 起不计入总分** | — |
 
 推理质量与业务相关性移出总分的原因**不是阈值松，是没有可比对的对象**：题目 YAML 里
 没有任何东西说这题的推理该长什么样、该提哪些业务概念，判据只能退化成「数中文连接词」
 「数业务名词」，达到 4~5 个即满分——任何通顺的中文分析都会自动拿满，实测三题上恒等
 1.000。合计 35% 权重是常数而非测量，等于给每道题无条件加 0.35 分。
 
-对照另两条路径：**P1 有 gold SQL**（可真打库比对结果集），**P3 有 YAML 事件库**
-（埋雷时即知真因，`event_hit` 40% 可确定性判定）。P2 五维里只有洞察准确度有真值
-（`expected_insights`），故权重最高。要真正度量前两者，需照 P3 的
-`_llm_judge_conclusion` 补 rubric LLM judge，见 [ADR-015](./DESIGN_DECISIONS.md#adr-015)。
+删除是对的，但留下真实缺口：推理链条与业务可落地性此后**完全没被度量**。
+2026-08-17 补上 rubric LLM judge（[ADR-016](./DESIGN_DECISIONS.md#adr-016)），
+照 P3 的 `_llm_judge_conclusion` 做，四维**各锚在每道题的 YAML 字段**上：
+
+| judge 维度 | 锚（per-question ground truth） |
+|---|---|
+| `step_fidelity` | `analysis_steps` |
+| `quantification` | `expected_insights` 里的量化基准（+25% / +12% / 58% …） |
+| `causal_reasoning` | 本题 `evaluation_criteria` |
+| `business_actionability` | 本题 `evaluation_criteria` |
+
+**与被删两维的本质差别就在这个锚**：被删两维锚在通用词表上（对任何题目都一样），
+judge 四维锚在每题人工写死、且写在 agent 跑之前的字段上。
+
+对照另两条路径的真值强度：**P1 有 gold SQL**（可真打库比对结果集），**P3 有 YAML
+事件库**（埋雷时即知真因，`event_hit` 40% 可确定性判定）。P2 的 judge 锚仍是
+「人写 rubric 文本 + LLM 判读」，弱于前两者，所以**确定性三维保持 75%、judge 只占
+25%**（对齐 P3 的 80/20），不让 LLM 判读主导总分。
+
+**judge 降级不静默**：调用失败时该维退出计分、其余维度归一，并在 `rubric_available`
+/ 产物 `rubric_unavailable_questions` / 一键报告里显式标注——这些题与四维题不同口径，
+不可直接对比。**刻意不回退到启发式**：唯一的廉价替代品正是刚删掉的关键词计数，
+放进 fallback 分支只会让缺陷更隐蔽。
 
 ### 通过标准
 - **单题：** combined_score ≥ 0.7

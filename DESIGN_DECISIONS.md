@@ -513,6 +513,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-013](#adr-013-语义层-metric-resolver-原型-6-指标模板-llm-抽-spec-fallback-回原-nl2sql) | 语义层 Metric Resolver 原型 | Accepted（2026-08-12 已接线到 P1 主路径，见 Update） |
 | [ADR-014](#adr-014-评测集-gold-的可信度修哪些不修哪些以及行数守门) | 评测集 gold 的可信度守门 | Accepted |
 | [ADR-015](#adr-015-p2-评分器中文分词修复饱和维度暂留) | P2 评分器中文分词修复 | Accepted（三个饱和维度待决） |
+| [ADR-016](#adr-016-p2-rubric-llm-judge补回被删两维的度量能力) | P2 rubric LLM judge | Accepted |
 
 新增 ADR 命名 `ADR-013`、`ADR-014` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
@@ -1394,6 +1395,112 @@ KeyError——正是本轮一直在修的那类失配。
 + eval_input + 重放脚本）、`bb8fde0`（残缺记账）、`67a9575`（重试预算）；
 产物 `results/baseline_p2_analysis_2026-08-15.json`（A 档后）与
 `results/baseline_p2_analysis_2026-08-17.json`（B 档后，`partial=false`）
+
+---
+
+### ADR-016: P2 rubric LLM judge——补回被删两维的度量能力
+
+**Status**：Accepted（2026-08-17）
+
+#### Context
+
+ADR-015 的 B 档把 `reasoning_quality` 与 `business_relevance` 移出总分，理由是它们**没有
+可比对的对象**（判据只能是数连接词、数业务名词，任何通顺中文都拿满）。删除是对的，但
+留下一个真实缺口：**推理链条与业务可落地性此后完全没有被度量**——P2 的总分只剩三个
+维度，全是词面匹配，没有任何东西在看这段分析讲没讲通。
+
+问题是：换成 LLM judge 就能解决吗？如果只是把「数关键词」换成「问 LLM 这段写得好不好」，
+那还是没有可比对的对象，只是把常数 1.0 换成了 LLM 的主观印象分，缺陷更难发现。
+
+**决定性的观察是 P2 题目 YAML 里本来就有 per-question 的人工锚点**，只是从没被用过：
+
+```yaml
+analysis_steps:      # 解题所需的关键步骤，逐条写死
+expected_insights:   # 期望洞察，含量化基准（+25% / +12% / 58% / 42%）
+evaluation_criteria: # 本题人工 rubric，如「Agent 是否识别出 2-5 天的响应延迟窗口」
+```
+
+这正是 P3 `_llm_judge_conclusion` 的做法：通用 4 维 backbone + 把每题的
+`evaluation_criteria` / `expected_key_metrics` 注入 prompt 作为该题的重点检查项。
+
+#### Decision
+
+**照 P3 补 4 维 G-Eval rubric judge，每一维都锚在本题 YAML 字段上。**
+
+| judge 维度 | 锚 |
+|---|---|
+| `step_fidelity` | `analysis_steps` |
+| `quantification` | `expected_insights` 里的量化基准 |
+| `causal_reasoning` | 本题 `evaluation_criteria` |
+| `business_actionability` | 本题 `evaluation_criteria` |
+
+**与被删两维的本质差别就是这个锚**：被删两维锚在通用词表上（对任何题目都一样，所以必然
+饱和），judge 四维锚在每题人工写死、且写在 agent 跑之前的字段上。
+
+三个刻意的设计选择：
+
+**1. 权重只给 25%，确定性三维保持 75%（对齐 P3 的 80/20）。** judge 的锚是「人写 rubric
+文本 + LLM 判读」，比 P1 的 gold SQL、P3 的事件库弱一个量级，不该让它主导总分。
+新权重：insight 0.35 / step 0.25 / metric 0.15 / rubric 0.25。
+
+**2. 失败不回退到启发式。** P3 的 judge 失败回退 Jaccard，因为 Jaccard 对「结论是否相似」
+至少是个弱信号。P2 这四维没有这种替代品——唯一想得到的廉价近似，**正是 ADR-015 刚删掉的
+关键词计数**。把它放进 fallback 分支只会让缺陷更隐蔽：平时看不见，judge 一挂就悄悄接管。
+所以 judge 失败时该维**退出计分**，其余维度归一。
+
+归一而非记 0，是因为记 0 等于拿基础设施故障扣 agent 的分。但归一会让两种运行的口径不同，
+所以必须配套记账：`AnalysisScore.rubric_available`、产物 `rubric_unavailable_questions`、
+终端警告、一键报告标注——与 ADR-015 处理残缺运行的做法一致。
+
+**3. 逐维中位数 ×3（self-consistency），这一条与 P3 不同。** 依据是实测：同一份 agent
+回答连判 3 次，**`temperature=0` 并不给出确定性输出**。
+
+| | 单次判分（3 次重复） | 摆幅 |
+|---|---|---:|
+| q001 | 0.750 / 0.812 / 0.750 | 0.062 |
+| q002 | 0.750 / 0.875 / **0.562** | **0.313** |
+| q003 | 0.375 / 0.312 / 0.312 | 0.063 |
+
+q002 那 0.313 的摆幅乘 25% 权重 ≈ 总分 ±0.078，**与真实退化同量级**——单次判分根本无法
+区分「agent 变差了」和「judge 这次心情不同」。改逐维中位数 ×3 后实测：
+
+| | 中位数 ×3（3 次重复） | 摆幅 |
+|---|---|---:|
+| q001 | 0.812 / 0.812 / 0.812 | 0.000 |
+| q002 | 0.625 / 0.625 / 0.688 | 0.062 |
+| q003 | 0.375 / 0.312 / 0.312 | 0.062 |
+
+**最坏摆幅 0.313 → 0.062，降到约五分之一。** 成本可忽略：judge 每题几秒，agent 每题
+300~500s。3 次里挂 1 次仍出分（`samples` 字段记实际次数），全挂才算 judge 未判。
+
+#### Consequences
+
+**judge 确实在区分，不是又一个饱和维度。** 三题 rubric 均值 0.812 / 0.625 / 0.375——
+被删两维在同样三题上恒等 1.000。
+
+**最有信息量的发现是 `quantification` 维**：三题分别 0.25 / 0.00 / 0.00。agent 的分析
+**基本不报与期望基准可比的数字**。这是一直存在、但此前没有任何维度看得见的缺陷——
+`insight_accuracy` 算的是内容词召回，说到「增长」就算命中，不管报的是 +25% 还是 +3%。
+
+**`causal_reasoning` / `business_actionability` 在 q001/q002 上仍是 1.00**，只有 q003
+掉到 0.50。这两维**部分饱和，没有完全解决**——prompt 里已写死「不要因为出现『客户』
+『分行』等业务名词就给分」「不要因为没用『因此/所以』就扣分」，但对写得像样的分析，
+判据仍然偏松。如实记录，不粉饰。
+
+**离线重放闭环保住了。** rubric 子分随产物落盘（照 P3 的 `conclusion_rubric`），
+`scripts/replay_p2_scoring.py` 默认复用它——改确定性维度时精确重放、零 LLM 花费；
+`--rejudge` 才重跑 judge（照 P3 的 `scripts/rejudge_baseline.py`）。旧产物没有 rubric，
+重放时按三维归一并显式告警，不与四维题混为一谈。
+
+**副作用：默认开 judge 让单元测试挂住。** `use_llm_judge` 默认 True（与 P3 一致，避免谁
+忘了开就静默少一维），代价是两处不带该参数的构造让 `pytest -m "not integration"` 跑过
+120s 仍未结束，且不报错、看不出在等什么。守门见
+`tests/eval/test_p2_rubric_judge.py::test_no_unit_test_constructs_the_evaluator_bare`
+（扫 `tests/` 全目录）。另外 `replay_p2_scoring.py` 原本没有 `load_dotenv`，`--rejudge`
+第一次跑就三题全降级——好在降级是响的（三条 warning + rubric 列显示 `—`），当场看见。
+
+**Trace**：`tests/eval/test_p2_rubric_judge.py`（36 个测试）；
+产物 `results/baseline_p2_analysis_2026-08-17.json`
 
 ---
 

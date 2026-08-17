@@ -96,6 +96,10 @@ def render_report(phase_results: dict[str, dict | None]) -> str:
         errored = d.get("errored_questions") or []
         if errored:
             extra += f" ⚠️ {len(errored)} 题未执行，avg 仅基于 {d.get('scored_questions', '?')} 题"
+        # P2 的 rubric judge 若未判，该题总分按确定性维度归一——与其余题不同口径。
+        no_rubric = d.get("rubric_unavailable_questions") or []
+        if no_rubric:
+            extra += f" ⚠️ {len(no_rubric)} 题 rubric 未判（口径不同）"
         lines.append(
             f"| {phase} | {label} | "
             f"{d['total_questions']} | {d['passed_questions']} | "

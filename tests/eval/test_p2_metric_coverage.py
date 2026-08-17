@@ -20,7 +20,7 @@ from chat_bi_agent.eval.multi_step_analysis_evaluator import MultiStepAnalysisEv
 
 @pytest.fixture
 def ev():
-    return MultiStepAnalysisEvaluator()
+    return MultiStepAnalysisEvaluator(use_llm_judge=False)
 
 
 def test_key_metrics_are_whole_terms_not_characters(ev):
