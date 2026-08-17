@@ -41,21 +41,34 @@ class AnalysisScore:
 
     @property
     def combined_score(self) -> float:
-        """综合评分：0-1，权重分配。"""
+        """综合评分：0-1。只计入有 ground truth 可比的维度。
+
+        2026-08-17 起 `reasoning_quality` 与 `business_relevance` 移出总分，降为诊断
+        字段（与 P1 的 `result_match` 同样处理）。原因不是阈值松，是**它们没有可比对
+        的对象**：题目 YAML 里没有任何东西说这题的推理该长什么样、该提哪些业务概念，
+        判据只能是「数中文连接词」「数业务名词」，达到 4~5 个即满分——任何通顺的中文
+        分析都会自动拿满。实测三题上恒等 1.000，合计 35% 权重是常数而非测量，等于给
+        每道题无条件加 0.35 分，把 0.7 及格线的含义架空。
+
+        对照 P1/P3：P1 有 gold SQL、P3 有 YAML 事件库，两者的高权重维度都能确定性比对。
+        P2 五维里只有 insight_accuracy 有真值（expected_insights），故权重最高。
+
+        剩余三维按原比例归一（0.20/0.20/0.25 → 0.65），取整为 0.30/0.30/0.40：
+        insight 由 0.3846 微升到 0.40，因它是唯一有真值的维度。
+
+        要真正度量推理质量与业务相关性，需照 P3 的 `_llm_judge_conclusion` 补 rubric
+        LLM judge——那是独立一轮的事，见 ADR-015。
+        """
         weights = {
-            "step_completeness": 0.2,  # 是否完成了必要步骤
-            "multi_metric": 0.2,  # 是否覆盖了多个指标
-            "insight_accuracy": 0.25,  # 最重要：洞察准确度
-            "reasoning_quality": 0.2,  # 推理逻辑
-            "business_relevance": 0.15,  # 业务相关性
+            "step_completeness": 0.30,  # 是否完成了必要步骤
+            "multi_metric": 0.30,  # 是否覆盖了关键指标
+            "insight_accuracy": 0.40,  # 最重要且唯一有 ground truth
         }
 
         score = (
             self.step_completeness * weights["step_completeness"]
             + self.multi_metric_coverage * weights["multi_metric"]
             + self.insight_accuracy * weights["insight_accuracy"]
-            + self.reasoning_quality * weights["reasoning_quality"]
-            + self.business_relevance * weights["business_relevance"]
         )
 
         return max(0.0, score)
