@@ -91,6 +91,11 @@ def render_report(phase_results: dict[str, dict | None]) -> str:
         extra = ""
         if "event_hit_count" in d:
             extra = f" · event_hit {d['event_hit_count']}/{d['total_questions']}"
+        # 崩掉的题必须在报告里可见：avg_score 的分母是成功评分的题数，若与 total 不同
+        # 而报告不标注，一次「3 题里 2 题没跑成」的运行看起来就跟完整运行一模一样。
+        errored = d.get("errored_questions") or []
+        if errored:
+            extra += f" ⚠️ {len(errored)} 题未执行，avg 仅基于 {d.get('scored_questions', '?')} 题"
         lines.append(
             f"| {phase} | {label} | "
             f"{d['total_questions']} | {d['passed_questions']} | "

@@ -153,16 +153,36 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     from chat_bi_agent.eval.run_metadata import build_run_metadata
 
+    # 崩掉的题必须显式记账。此前 total_questions 在开跑前就设成 len(qids)，异常时
+    # `continue` 跳过、不进 scores，而 avg_score 只对成功评分的题求平均——两个数字
+    # 来自不同的分母。2026-08-17 实测：3 题里 2 题撞 embedding 端点 ConnectionError
+    # 从未执行，汇总却打印「Total 3 / Passed 0 / Avg 0.631」，那个 0.631 其实是
+    # q001 一题的分数，而 0/3 把「没通过」和「压根没跑」混为一谈。
+    # 产物里的 partial 字段此前无代码设置，2026-06-07 那份的 partial=true 是人手写的。
+    errored = [q["question_id"] for q in per_question if "agent_exception" in q]
+    scored = evaluation.total_questions - len(errored)
     payload = {
         "baseline_id": "p2_analysis_mvp",
         "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "run_metadata": build_run_metadata(),
         "total_questions": evaluation.total_questions,
+        "scored_questions": scored,
+        "errored_questions": errored,
+        "partial": bool(errored),
         "passed_questions": evaluation.passed_questions,
-        "pass_rate": round(evaluation.pass_rate, 4),
+        # 保留原字段名：run_all_evals.py 与 eval_diff.py 直接按 d['avg_score'] 取值
+        # 且无 .get 兜底，改名会让报告生成 KeyError。口径由上面的 scored/partial 说明。
+        # 注意分母是成功评分的题数，不是 total_questions——partial=true 时二者不同。
+        "pass_rate": round(evaluation.passed_questions / scored, 4) if scored else 0.0,
         "avg_score": round(evaluation.avg_score, 4),
         "per_question": per_question,
     }
+    if errored:
+        print(
+            f"\n⚠️  {len(errored)}/{evaluation.total_questions} 题未执行（agent 异常）："
+            f"{', '.join(errored)}\n"
+            f"    avg/pass_rate 的分母是成功评分的 {scored} 题，不代表整批结果。"
+        )
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
     print(f"\nWrote baseline JSON → {out_path}")
 
