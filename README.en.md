@@ -28,27 +28,44 @@
 | Track | Questions | Passed | Avg Score | Baseline | Notes |
 |---|---:|---:|---:|---|---|
 | **P1 NL2SQL** | 8 / 8 | 8 | **0.965** | 2026-08-15 | Full question set; multi-table JOIN, time windows, aggregation, branch filters — all pass |
-| **P2 Multi-Step Analysis** | 3 / 8 | 2 | **0.655** | 2026-08-17 | 3 scored dims (insight 40% + step completeness 30% + metric coverage 30%); reasoning/business demoted to diagnostics |
+| **P2 Multi-Step Analysis** | 3 / 8 | 0 | **0.601** | 2026-08-17 | 4 scored dims (insight 35% + steps 25% + metric coverage 15% + rubric LLM judge 25%); reasoning/business demoted to diagnostics |
 | **P3 RCA Attribution** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4-dim rubric, all events matched, zero hallucination |
 
 The denominator in "Questions" is the total in each evaluation set. **P2 has only ever scored the
 first 3 of its 8 questions**; q004–q008 have never been scored. At 300–500s per question,
 completing them takes 40–70 minutes — deferred on cost.
 
-**P2's 0.655 is the only score in this project that was revised downward**, because much of the
-previous figure was unearned. Two rounds of fixes (2026-08-15/17): first the insight dimension
-(which split Chinese on whitespace, i.e. did not tokenize at all) and the metric-coverage dimension
-(which matched **individual characters** — '长' and '户' appear in almost any banking narrative);
-then reasoning quality and business relevance were moved out of the total score entirely. Those two
-have **nothing to compare against** — their only possible criterion was counting keywords, and they
-sat at exactly 1.000 on every question, making 35% of the weight a constant rather than a
-measurement. The move from 0.798 to 0.655, and 3/3 to 2/3 passing, is that water being squeezed out.
-See [ADR-015](./DESIGN_DECISIONS.md#adr-015).
+**P2's 0.601 is the only score in this project that has been repeatedly revised downward**, because
+much of the earlier figure was unearned. Three steps (2026-08-15/17):
 
-**Still unresolved**: `multi_metric_coverage` remains at 1.000 on 2 of 3 questions — whole-word
-matching removed the worst false positives, but the candidate terms themselves are too generic.
-Genuinely measuring reasoning and business relevance requires a rubric LLM judge modelled on P3's
-`_llm_judge_conclusion`; not yet done.
+| Step | Change | Avg | Passed |
+|---|---|---:|---:|
+| Start | — | 0.798 | 3/3 |
+| ① Fix two silently broken dims | The insight dim split Chinese on whitespace (i.e. did not tokenize at all); metric coverage matched **individual characters** — '长' and '户' appear in almost any banking narrative | 0.798 | 3/3 |
+| ② Delete the two dims with no ground truth | Reasoning quality and business relevance have **nothing to compare against**; their only possible criterion was counting keywords, and they sat at exactly 1.000 — 35% of the weight was a constant, not a measurement | 0.655 | 2/3 |
+| ③ Add a rubric LLM judge | 4-dim G-Eval modelled on P3, each dim anchored to **this question's** YAML fields, weighted 25% | **0.601** | **0/3** |
+
+Deleting in ② and adding in ③ is not self-contradictory: the deleted dims were anchored to a generic
+word list (identical for every question, hence guaranteed to saturate), whereas the judge's four dims
+are anchored to per-question `analysis_steps` / `expected_insights` / `evaluation_criteria`, written
+by hand before the agent ever ran. See [ADR-015](./DESIGN_DECISIONS.md#adr-015) and
+[ADR-016](./DESIGN_DECISIONS.md#adr-016).
+
+**The substantive defect the judge exposed is `quantification`: 0.50 / 0.00 / 0.00 across the three
+questions.** The agent largely fails to report figures comparable to the expected baselines — nothing
+could see this before (`insight_accuracy` measures content-word recall, so saying "growth" counts as
+a hit whether the reported figure is +25% or +3%).
+
+**Read 0/3 as "all three fall below 0.7", but not as a precise scale**: q001 scored 0.700 and 0.679
+on two runs, straddling the pass line, so `passed` oscillates between 1/3 and 0/3. The table reports
+the `commit_dirty=false` run.
+
+**Still unresolved**:
+- `multi_metric_coverage` is at 1.000 on **all three** questions; the candidate terms are too generic.
+- `causal_reasoning` / `business_actionability` still hit 1.000 on some questions. The prompt
+  explicitly forbids awarding credit merely for business vocabulary, but the criteria remain lenient
+  for competently written analysis — **only partly solved**.
+- q004–q008 have never been scored.
 
 **Do not read P1's 0.965 as a precise value**: repeated runs of the same configuration land between
 **0.965 and 0.977**, and the spread comes **entirely** from one question, q008 (observed 0.90 / 0.93

@@ -120,6 +120,8 @@ judge 四维锚在每题人工写死、且写在 agent 跑之前的字段上。
 ```python
 from chat_bi_agent.eval.multi_step_analysis_evaluator import MultiStepAnalysisEvaluator
 
+# use_llm_judge 默认 True，每题会调 LLM 判 3 次取中位数。
+# 单元测试 / 离线快速跑请显式关掉：MultiStepAnalysisEvaluator(use_llm_judge=False)
 evaluator = MultiStepAnalysisEvaluator()
 score = evaluator.evaluate_response(
     question_id="multi_step_q001",
@@ -128,6 +130,16 @@ score = evaluator.evaluate_response(
     mentioned_metrics=["total_amount", "daily_average", ...],
     extracted_insights=[...]
 )
+print(score.combined_score, score.rubric_score, score.rubric_available)
+```
+
+**离线重放**（改评分器不必重跑 agent，单题 300~500s）：
+
+```bash
+# 复用产物里存的 rubric，精确重放、零 LLM 花费
+python scripts/replay_p2_scoring.py results/baseline_p2_analysis_2026-08-17.json --compare
+# 用当前 prompt 重跑 judge（要调 LLM），照 P3 的 scripts/rejudge_baseline.py
+python scripts/replay_p2_scoring.py results/baseline_p2_analysis_2026-08-17.json --rejudge
 ```
 
 ### 示例问题
