@@ -176,11 +176,13 @@ class MultiStepAnalysisEvaluator:
 
         # 2. 多指标覆盖度 (multi_metric_coverage)
         # 简化实现：检查回答中是否提到了多个关键指标
+        # 整词匹配。此前是 `any(m in agent_response for m in metric)`——metric 是字符串，
+        # `for m in metric` 迭代的是**单个字**，判据退化成「指标名里任意一个字出现过吗」。
+        # '长'（长期/董事长）、'户'（账户）这类字在银行叙述里几乎必然出现，于是本维在
+        # 每道题上恒等 1.000，占着 20% 权重却零区分度。与 ADR-015 修的 insight 维同类。
         key_metrics = self._extract_key_metrics(question)
         if key_metrics:
-            mentioned_key_metrics = sum(
-                1 for metric in key_metrics if any(m in agent_response for m in metric)
-            )
+            mentioned_key_metrics = sum(1 for metric in key_metrics if metric in agent_response)
             score.multi_metric_coverage = min(1.0, mentioned_key_metrics / max(1, len(key_metrics)))
 
         # 3. 洞察准确度 (insight_accuracy)

@@ -134,6 +134,11 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
                     "business_relevance": round(score.business_relevance, 4),
                 },
                 "final_answer_preview": report.final_answer[:200],
+                # 评分器的完整入参原样落盘，喂回 evaluate_response(**eval_input) 即可
+                # 精确重放。此前只存 200 字预览（评分用的却是完整回答），既无法事后
+                # 复核「这分打得对不对」，也让每次改评分器都得重跑一轮（单题
+                # 300~500s）。P3 早就同时存完整 narrative 与 preview。
+                "eval_input": eval_input,
             }
         )
 
