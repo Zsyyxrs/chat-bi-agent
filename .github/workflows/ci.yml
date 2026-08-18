@@ -31,5 +31,106 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check src tests streamlit_app
 
+      # 覆盖率门槛设在 72（实测 76）：它是防退化的棘轮，不是冲刺目标——留 4 个点
+      # 缓冲，避免无关改动因取整抖动而红。范围只含 src/chat_bi_agent：streamlit_app
+      # 665 行几乎无测试（app.py 0%），把它算进来只会把已知缺口编码成一个更低的门槛。
       - name: Unit tests
-        run: uv run pytest -m "not integration" -v
+        run: >-
+          uv run pytest -m "not integration" -v
+          --cov=src/chat_bi_agent --cov-report=term-missing --cov-fail-under=72
+
+  # 集成测试单独一个 job：需要真 Postgres + 完整种子数据（约 2 分钟），
+  # 没必要在 python 矩阵的每个版本上重复付这个代价。
+  #
+  # 2026-08-18 之前 CI 只跑 `pytest -m "not integration"`，后果是 **43 个 gold SQL
+  # 行数守门从未在 CI 执行过**——评测集 gold 的正确性一直只靠本地开发库背书。
+  # 而 gold 行数正是 2026-08-14 那次 P1 分数失真的根源（声明区间与实际行数不符，
+  # 静默扣 0.15），恰恰最需要 CI 兜住。
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: chatbi
+          POSTGRES_USER: chatbi
+          POSTGRES_PASSWORD: chatbi_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chatbi -d chatbi"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PG_HOST: localhost
+      PG_PORT: 5432
+      PG_DATABASE: chatbi
+      PG_READONLY_USER: chatbi_readonly
+      PG_READONLY_PASSWORD: readonly_dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      # services 容器不挂载 docker-entrypoint-initdb.d，只能显式跑这三个脚本。
+      # 顺序有意义：01 建表 → 02 建索引 → 03 建 chatbi_readonly 角色并授 SELECT。
+      - name: Apply schema
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+          for f in docker/postgres/init/*.sql; do
+            echo "--- $f"
+            PGPASSWORD=chatbi_dev psql -h localhost -p 5432 -U chatbi -d chatbi -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      # --seed 42 是 gold 行数可复现的前提：43 个守门断言的是具体行数（如 674 行），
+      # 换种子就全红。本地用一次性容器验证过：全新库 seed 后 43 个守门全通过，
+      # 即行数确实来自种子而非开发库的历史状态。
+      - name: Seed database
+        run: uv run python -m chat_bi_agent.data.seed --rows 100000 --seed 42 --with-events --truncate
+
+      # 03_readonly_role.sql 里的 GRANT 只对当时已存在的表生效。种子过程若新建表，
+      # 新表不会被覆盖，症状是「连得上但查不到」——补一次授权把这种可能排掉。
+      - name: Grant readonly on seeded tables
+        run: |
+          PGPASSWORD=chatbi_dev psql -h localhost -p 5432 -U chatbi -d chatbi -v ON_ERROR_STOP=1 -q \
+            -c "GRANT SELECT ON ALL TABLES IN SCHEMA public TO chatbi_readonly;"
+
+      - name: Integration tests
+        run: uv run pytest -m integration -v
+
+  # 依赖漏洞审计。此前无任何审计，2026-08-18 首次跑就报出 15 个 CVE，全部在传递依赖上：
+  # aiohttp / cryptography（← dashscope）与 gitpython（← streamlit，我们自己从不 import
+  # git）。三个包都能直接升掉，升完 601+ 测试与 46 个集成测试全绿，审计清零。
+  #
+  # 不加 continue-on-error：审计红了就是真有已知漏洞，应当拦住。若某个 CVE 一时无补丁，
+  # 用 `--ignore-vuln <ID>` 显式豁免并写明理由，而不是让整个 job 允许失败——
+  # 「允许失败的检查」等于没有检查，这个项目已经栽过好几次。
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # --skip-editable：本项目自身以 editable 装入，PyPI 上没有，`--strict` 会因
+      # 「无法审计 chat-bi-agent」直接失败——那是配置问题伪装成安全问题。
+      - name: pip-audit
+        run: uv run --with pip-audit pip-audit --skip-editable
