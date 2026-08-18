@@ -52,32 +52,70 @@ class TestPayloadAccounting:
 
 
 class TestRunnerEmitsAccounting:
-    """runner 源码层面的契约——避免字段被后来的改动悄悄去掉。"""
+    """runner 的产物契约。
+
+    **原写法是假的**：`assert '"scored_questions"' in 源码文本`。2026-08-18 实测，把真实
+    payload 字段行删掉、只留上方注释，本类测试**全绿**——字段名在注释里也出现。现在改为
+    调用真实的 `build_payload` 并断言返回的 dict。
+    """
+
+    @staticmethod
+    def _real_payload(per_question: list[dict]) -> dict:
+        from chat_bi_agent.runners.run_p2_eval import build_payload
+
+        return build_payload(
+            per_question=per_question,
+            total_questions=len(per_question),
+            passed_questions=0,
+            avg_score=0.631,
+        )
 
     @pytest.mark.parametrize("field", ["scored_questions", "errored_questions", "partial"])
     def test_p2_runner_emits_field(self, field):
-        from pathlib import Path
-
-        src = (
-            Path(__file__).resolve().parents[2]
-            / "src"
-            / "chat_bi_agent"
-            / "runners"
-            / "run_p2_eval.py"
-        ).read_text(encoding="utf-8")
-        assert f'"{field}"' in src, (
+        p = self._real_payload([{"question_id": "q1"}])
+        assert field in p, (
             f"run_p2_eval 的 payload 缺 {field}——崩掉的题将无法与「跑了但没通过」区分，"
             f"一次大半没跑成的运行会看起来像完整运行。"
         )
 
+    def test_p2_runner_accounting_is_correct_not_merely_present(self):
+        """字段在还不够，值必须对：这正是 2026-08-17 那次险些成立的错误结论的根子。"""
+        p = self._real_payload(
+            [
+                {"question_id": "q1"},
+                {"question_id": "q2", "agent_exception": "ConnectionError: ..."},
+                {"question_id": "q3", "agent_exception": "ConnectionError: ..."},
+            ]
+        )
+        assert p["total_questions"] == 3
+        assert p["scored_questions"] == 1, "avg 的分母必须是成功评分的题数"
+        assert p["errored_questions"] == ["q2", "q3"]
+        assert p["partial"] is True
+
     def test_report_surfaces_partial_runs(self):
-        """产物里记了账，报告上也必须看得见，否则等于没记。"""
+        """产物里记了账，报告上也必须看得见，否则等于没记。
+
+        直接渲染报告并在**输出文本**里找警告，而不是查源码有没有这个字符串。
+        """
+        import sys
         from pathlib import Path
 
-        src = (Path(__file__).resolve().parents[2] / "scripts" / "run_all_evals.py").read_text(
-            encoding="utf-8"
-        )
-        assert "errored_questions" in src, "run_all_evals 未读取 errored_questions，报告看不出残缺"
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+        from run_all_evals import render_report
+
+        d = {
+            "baseline_id": "p2_analysis_mvp",
+            "ran_at": "2026-08-18T00:00:00Z",
+            "total_questions": 3,
+            "scored_questions": 1,
+            "passed_questions": 0,
+            "avg_score": 0.631,
+            "errored_questions": ["q2", "q3"],
+            "per_question": [],
+        }
+        report = render_report({"p2": {"path": Path("x.json"), "json": d}})
+        assert "⚠️" in report, "报告没有任何警告标记，残缺运行看起来跟完整运行一样"
+        assert "2" in report and "未执行" in report, "报告未说明有几题没跑成"
 
 
 def test_current_p2_artifact_is_honest_about_itself():

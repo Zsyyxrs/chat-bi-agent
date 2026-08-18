@@ -269,17 +269,16 @@ def test_agent_defaults_to_not_tagging_route():
 def test_p1_streamlit_tab_enables_route_tagging():
     """契约测试：P1 tab 是唯一确定为 root trace 的调用点，必须显式打开，
     否则生产流量依旧画不出 metric_hit_rate。"""
-    from pathlib import Path
+    from tests.ast_probe import has_call_keyword
 
-    src = Path("streamlit_app/tabs/p1_nl2sql.py").read_text(encoding="utf-8")
-    assert "tag_route_on_trace=True" in src
+    # AST 而非文本 grep：注释或字符串里出现同样的字面量不该算数。
+    assert has_call_keyword("streamlit_app/tabs/p1_nl2sql.py", "tag_route_on_trace", "True")
 
 
 def test_eval_runner_disables_route_tagging():
     """契约测试：runner 必须显式关掉，否则会冲掉自己刚打的 arm tag。"""
-    import inspect
+    from tests.ast_probe import has_call_keyword
 
-    from chat_bi_agent.runners import run_p1_eval
-
-    src = inspect.getsource(run_p1_eval)
-    assert "tag_route_on_trace=False" in src
+    assert has_call_keyword(
+        "src/chat_bi_agent/runners/run_p1_eval.py", "tag_route_on_trace", "False"
+    )

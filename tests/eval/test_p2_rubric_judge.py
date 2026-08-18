@@ -407,43 +407,137 @@ class TestEvaluateResponseIntegration:
 
 
 class TestRunnerPersistsRubric:
-    """产物层面的契约——rubric 不落盘就没法离线重放，也没法事后复核判分。"""
+    """产物层面的契约——rubric 不落盘就没法离线重放，也没法事后复核判分。
+
+    **这些断言曾经是假的。** 原写法是 `assert "字段名" in 源码文本`，2026-08-18 实测：
+    把 `run_p2_eval` 里的真实 payload 字段行删掉、只留上方注释，本类 3 个测试**全绿**——
+    因为字段名在注释里也出现。那是「声称在守门、实际没守」，比原缺陷更隐蔽：有测试、
+    还是绿的，反而让人以为已经防住了。现在改为**调用真实函数、断言返回的 dict**。
+    """
 
     @staticmethod
-    def _runner_src() -> str:
-        from pathlib import Path
+    def _payload(per_question: list[dict]) -> dict:
+        from chat_bi_agent.runners.run_p2_eval import build_payload
 
-        return (
-            Path(__file__).resolve().parents[2]
-            / "src"
-            / "chat_bi_agent"
-            / "runners"
-            / "run_p2_eval.py"
-        ).read_text(encoding="utf-8")
+        return build_payload(
+            per_question=per_question,
+            total_questions=len(per_question),
+            passed_questions=0,
+            avg_score=0.5,
+        )
+
+    @staticmethod
+    def _row(rubric: dict | None):
+        """用轻量替身调真实的 build_question_row，不必跑 agent（单题 300~500s）。"""
+        from types import SimpleNamespace
+
+        from chat_bi_agent.runners.run_p2_eval import build_question_row
+
+        report = SimpleNamespace(
+            plan=SimpleNamespace(plan_type="plan_and_execute", steps=[1, 2]),
+            step_results=[SimpleNamespace(skipped=False)],
+            facts=[1],
+            insights=[1],
+            replan_count=0,
+            total_latency_ms=1234.0,
+            final_answer="回答" * 200,
+        )
+        score = AnalysisScore(
+            question_id="q1",
+            step_completeness=0.4,
+            multi_metric_coverage=1.0,
+            insight_accuracy=0.69,
+            reasoning_quality=1.0,
+            business_relevance=1.0,
+            analysis_rubric=rubric,
+        )
+        return build_question_row("q1", report, score, {"question_id": "q1"})
 
     def test_runner_persists_analysis_rubric(self):
-        assert "analysis_rubric" in self._runner_src(), (
+        """rubric 子分必须原样进产物——否则离线重放无法复现总分。"""
+        rubric = _rubric()
+        row = self._row(rubric)
+        assert row["sub_scores"]["analysis_rubric"] == rubric, (
             "run_p2_eval 未落盘 analysis_rubric——离线重放将无法复现总分，"
             "每次改评分器又得重跑一轮（单题 300~500s）。"
         )
 
+    def test_row_flags_missing_rubric(self):
+        assert self._row(None)["rubric_unavailable"] is True
+        assert self._row(_rubric())["rubric_unavailable"] is False
+
+    def test_row_persists_eval_input_not_just_preview(self):
+        """只存 200 字预览而评分用完整回答，是重放闭环建立前的老问题。"""
+        row = self._row(_rubric())
+        assert "eval_input" in row
+        assert len(row["final_answer_preview"]) <= 200
+
+    def test_row_keeps_diagnostic_dims(self):
+        """诊断维不计分，但必须留在产物里——否则无法与计分维对照。"""
+        subs = self._row(_rubric())["sub_scores"]
+        for dim in ("reasoning_quality", "business_relevance", "step_completeness"):
+            assert dim in subs
+
     def test_runner_accounts_for_judge_fallback(self):
-        src = self._runner_src()
-        assert "rubric_unavailable" in src, (
-            "run_p2_eval 未记账 judge 降级的题目——judge 全挂时产物看起来与正常运行相同，"
-            "只是分数口径悄悄换了（三维归一 vs 四维）。"
+        p = self._payload(
+            [
+                {"question_id": "q1", "rubric_unavailable": False},
+                {"question_id": "q2", "rubric_unavailable": True},
+            ]
         )
+        assert p["rubric_unavailable_questions"] == ["q2"], (
+            "judge 降级的题未被记账——judge 全挂时产物看起来与正常运行相同，"
+            "只是分数口径悄悄换了（归一 vs 全维）。"
+        )
+
+    def test_errored_questions_change_the_denominator(self):
+        """回归 ADR-015：崩掉的题与「跑了但没通过」必须可辨。"""
+        p = self._payload(
+            [
+                {"question_id": "q1"},
+                {"question_id": "q2", "agent_exception": "ConnectionError: ..."},
+            ]
+        )
+        assert p["errored_questions"] == ["q2"]
+        assert p["partial"] is True
+        assert p["scored_questions"] == 1 and p["total_questions"] == 2
+
+    def test_clean_run_is_not_partial(self):
+        p = self._payload([{"question_id": "q1"}, {"question_id": "q2"}])
+        assert p["partial"] is False
+        assert p["rubric_unavailable_questions"] == []
+        assert p["scored_questions"] == p["total_questions"]
+
+    def test_avg_score_key_name_preserved(self):
+        """run_all_evals.py 与 eval_diff.py 按 d['avg_score'] 取值且无 .get 兜底。"""
+        p = self._payload([{"question_id": "q1"}])
+        assert "avg_score" in p and "pass_rate" in p
 
     def test_report_surfaces_rubric_degradation(self):
-        """产物里记了账，一键报告上也必须看得见，否则等于没记（同 ADR-015 的残缺运行）。"""
+        """产物里记了账，一键报告上也必须看得见，否则等于没记（同 ADR-015 的残缺运行）。
+
+        直接渲染报告并断言警告出现在文本里，而不是查 run_all_evals 源码有没有这个字符串。
+        """
+        import sys
         from pathlib import Path
 
-        src = (Path(__file__).resolve().parents[2] / "scripts" / "run_all_evals.py").read_text(
-            encoding="utf-8"
-        )
-        assert "rubric_unavailable_questions" in src, (
-            "run_all_evals 未读取 rubric_unavailable_questions，报告看不出口径差异"
-        )
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+        from run_all_evals import render_report
+
+        d = {
+            "baseline_id": "p2_analysis_mvp",
+            "ran_at": "2026-08-18T00:00:00Z",
+            "total_questions": 3,
+            "scored_questions": 3,
+            "passed_questions": 1,
+            "avg_score": 0.6,
+            "errored_questions": [],
+            "rubric_unavailable_questions": ["q2", "q3"],
+            "per_question": [],
+        }
+        report = render_report({"p2": {"path": Path("x.json"), "json": d}})
+        assert "rubric" in report and "2" in report, "报告未标出 rubric 未判的题数"
+        assert "⚠️" in report, "报告没有任何警告标记，读者看不出口径差异"
 
 
 class TestRescoredArtifactProvenance:
@@ -486,15 +580,26 @@ class TestRescoredArtifactProvenance:
         assert "rescored_judge_rerun" in self._artifact()
 
     def test_script_keeps_the_two_chains_separate(self):
-        """源码层契约：重评不得覆盖 run_metadata。"""
+        """重评脚本不得覆盖 run_metadata——那描述的是 agent 那次跑，不是评分器。
+
+        用 AST 找真实的下标赋值目标，而不是 grep 源码文本（注释里写一句就能骗过去）。
+        """
+        import ast
         from pathlib import Path
 
-        src = (Path(__file__).resolve().parents[2] / "scripts" / "replay_p2_scoring.py").read_text(
-            encoding="utf-8"
-        )
-        assert '"rescorer_metadata"' in src
-        assert 'out["run_metadata"]' not in src, (
-            "重评脚本覆盖了 run_metadata——那描述的是 agent 那次跑，不是评分器"
+        path = Path(__file__).resolve().parents[2] / "scripts" / "replay_p2_scoring.py"
+        assigned = {
+            node.slice.value
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+            if isinstance(node, ast.Subscript)
+            and isinstance(node.ctx, ast.Store)
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+        }
+        assert "rescorer_metadata" in assigned, "重评脚本未记录评分器出处"
+        assert "run_metadata" not in assigned, (
+            "重评脚本改写了 run_metadata——两条出处一旦混淆，"
+            "日后无法回答「分数变化来自评分器还是来自 agent」"
         )
 
 

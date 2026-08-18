@@ -39,6 +39,89 @@ YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "multi_step_analysis_
 OUTPUT_DATE = datetime.now(UTC).strftime("%Y-%m-%d")
 
 
+def build_question_row(qid: str, report, score, eval_input: dict) -> dict:
+    """组装单题的产物行。与 `build_payload` 同理，单独成函数是为了让守门能直接调它。
+
+    `report` / `score` 只按属性取值，测试可传轻量替身，不必跑 agent（单题 300~500s）。
+    """
+    return {
+        "question_id": qid,
+        "plan_type": report.plan.plan_type,
+        "step_count": len(report.plan.steps),
+        "skipped_steps": sum(1 for s in report.step_results if s.skipped),
+        "fact_count": len(report.facts),
+        "insight_count": len(report.insights),
+        "replan_count": report.replan_count,
+        "latency_ms": round(report.total_latency_ms, 0),
+        "score": round(score.combined_score, 4),
+        "sub_scores": {
+            "step_completeness": round(score.step_completeness, 4),
+            "multi_metric_coverage": round(score.multi_metric_coverage, 4),
+            "insight_accuracy": round(score.insight_accuracy, 4),
+            # 诊断字段，不计分（ADR-015/016）
+            "reasoning_quality": round(score.reasoning_quality, 4),
+            "business_relevance": round(score.business_relevance, 4),
+            # rubric 子分原样落盘（照 P3 的 conclusion_rubric）：既让判分事后可复核，
+            # 也让 replay 能复用它精确重放总分而不必再花钱重判。
+            # None 表示 judge 未判，该题总分口径是确定性维度归一。
+            "analysis_rubric": score.analysis_rubric,
+        },
+        "rubric_unavailable": not score.rubric_available,
+        "final_answer_preview": report.final_answer[:200],
+        # 评分器的完整入参原样落盘，喂回 evaluate_response(**eval_input) 即可精确重放。
+        # 此前只存 200 字预览（评分用的却是完整回答），既无法事后复核「这分打得对不对」，
+        # 也让每次改评分器都得重跑一轮。P3 早就同时存完整 narrative 与 preview。
+        "eval_input": eval_input,
+    }
+
+
+def build_payload(
+    per_question: list[dict],
+    total_questions: int,
+    passed_questions: int,
+    avg_score: float,
+) -> dict:
+    """组装落盘 payload。
+
+    **单独成函数是为了让守门测试能直接调它**。此前守门写的是
+    `assert '"errored_questions"' in 源码文本`——2026-08-18 实测：把真实字段行删掉、
+    只留上方注释，3 个守门测试**全绿**，因为字段名在注释里也出现。那是「声称在守门、
+    实际没守」，比原缺陷更隐蔽：有测试、还是绿的，反而让人以为已经防住了。
+
+    崩掉的题必须显式记账。此前 total_questions 在开跑前就设成 len(qids)，异常时
+    `continue` 跳过、不进 scores，而 avg_score 只对成功评分的题求平均——两个数字
+    来自不同的分母。2026-08-17 实测：3 题里 2 题撞 embedding 端点 ConnectionError
+    从未执行，汇总却打印「Total 3 / Passed 0 / Avg 0.631」，那个 0.631 其实是
+    q001 一题的分数，而 0/3 把「没通过」和「压根没跑」混为一谈。
+    产物里的 partial 字段此前无代码设置，2026-06-07 那份的 partial=true 是人手写的。
+
+    judge 降级同样必须记账：这些题的总分是「确定性维度归一」，与有 rubric 的题不同
+    口径。不标出来的话，judge 大面积失败的一轮与正常一轮产物同形，只是分数分布悄悄变了。
+    """
+    from chat_bi_agent.eval.run_metadata import build_run_metadata
+
+    errored = [q["question_id"] for q in per_question if "agent_exception" in q]
+    scored = total_questions - len(errored)
+    rubric_missing = [q["question_id"] for q in per_question if q.get("rubric_unavailable")]
+    return {
+        "baseline_id": "p2_analysis_mvp",
+        "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "run_metadata": build_run_metadata(),
+        "total_questions": total_questions,
+        "scored_questions": scored,
+        "errored_questions": errored,
+        "partial": bool(errored),
+        "rubric_unavailable_questions": rubric_missing,
+        "passed_questions": passed_questions,
+        # 保留原字段名：run_all_evals.py 与 eval_diff.py 直接按 d['avg_score'] 取值
+        # 且无 .get 兜底，改名会让报告生成 KeyError。口径由上面的 scored/partial 说明。
+        # 注意分母是成功评分的题数，不是 total_questions——partial=true 时二者不同。
+        "pass_rate": round(passed_questions / scored, 4) if scored else 0.0,
+        "avg_score": round(avg_score, 4),
+        "per_question": per_question,
+    }
+
+
 def load_questions() -> dict[str, dict]:
     with open(YAML_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -126,38 +209,7 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
         if score.combined_score >= 0.7:
             evaluation.passed_questions += 1
 
-        per_question.append(
-            {
-                "question_id": qid,
-                "plan_type": report.plan.plan_type,
-                "step_count": len(report.plan.steps),
-                "skipped_steps": sum(1 for s in report.step_results if s.skipped),
-                "fact_count": len(report.facts),
-                "insight_count": len(report.insights),
-                "replan_count": report.replan_count,
-                "latency_ms": round(report.total_latency_ms, 0),
-                "score": round(score.combined_score, 4),
-                "sub_scores": {
-                    "step_completeness": round(score.step_completeness, 4),
-                    "multi_metric_coverage": round(score.multi_metric_coverage, 4),
-                    "insight_accuracy": round(score.insight_accuracy, 4),
-                    # 诊断字段，不计分（ADR-015）
-                    "reasoning_quality": round(score.reasoning_quality, 4),
-                    "business_relevance": round(score.business_relevance, 4),
-                    # rubric 子分原样落盘（照 P3 的 conclusion_rubric）：既让判分事后可
-                    # 复核，也让 replay 能复用它精确重放总分而不必再花钱重判。
-                    # None 表示 judge 未判，该题总分口径是确定性三维归一。
-                    "analysis_rubric": score.analysis_rubric,
-                },
-                "rubric_unavailable": not score.rubric_available,
-                "final_answer_preview": report.final_answer[:200],
-                # 评分器的完整入参原样落盘，喂回 evaluate_response(**eval_input) 即可
-                # 精确重放。此前只存 200 字预览（评分用的却是完整回答），既无法事后
-                # 复核「这分打得对不对」，也让每次改评分器都得重跑一轮（单题
-                # 300~500s）。P3 早就同时存完整 narrative 与 preview。
-                "eval_input": eval_input,
-            }
-        )
+        per_question.append(build_question_row(qid, report, score, eval_input))
 
     print()
     print(evaluation.summary())
@@ -168,46 +220,24 @@ def main(limit: int | None = None, only_qid: str | None = None) -> int:
         Path(__file__).resolve().parents[3] / "results" / f"baseline_p2_analysis_{OUTPUT_DATE}.json"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    from chat_bi_agent.eval.run_metadata import build_run_metadata
 
-    # 崩掉的题必须显式记账。此前 total_questions 在开跑前就设成 len(qids)，异常时
-    # `continue` 跳过、不进 scores，而 avg_score 只对成功评分的题求平均——两个数字
-    # 来自不同的分母。2026-08-17 实测：3 题里 2 题撞 embedding 端点 ConnectionError
-    # 从未执行，汇总却打印「Total 3 / Passed 0 / Avg 0.631」，那个 0.631 其实是
-    # q001 一题的分数，而 0/3 把「没通过」和「压根没跑」混为一谈。
-    # 产物里的 partial 字段此前无代码设置，2026-06-07 那份的 partial=true 是人手写的。
-    errored = [q["question_id"] for q in per_question if "agent_exception" in q]
-    scored = evaluation.total_questions - len(errored)
-    # judge 降级同样必须记账：这些题的总分是「确定性三维归一」，与四维题不同口径。
-    # 不标出来的话，judge 大面积失败的一轮与正常一轮产物同形，只是分数分布悄悄变了。
-    rubric_missing = [q["question_id"] for q in per_question if q.get("rubric_unavailable")]
-    payload = {
-        "baseline_id": "p2_analysis_mvp",
-        "ran_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "run_metadata": build_run_metadata(),
-        "total_questions": evaluation.total_questions,
-        "scored_questions": scored,
-        "errored_questions": errored,
-        "partial": bool(errored),
-        "rubric_unavailable_questions": rubric_missing,
-        "passed_questions": evaluation.passed_questions,
-        # 保留原字段名：run_all_evals.py 与 eval_diff.py 直接按 d['avg_score'] 取值
-        # 且无 .get 兜底，改名会让报告生成 KeyError。口径由上面的 scored/partial 说明。
-        # 注意分母是成功评分的题数，不是 total_questions——partial=true 时二者不同。
-        "pass_rate": round(evaluation.passed_questions / scored, 4) if scored else 0.0,
-        "avg_score": round(evaluation.avg_score, 4),
-        "per_question": per_question,
-    }
-    if errored:
+    payload = build_payload(
+        per_question=per_question,
+        total_questions=evaluation.total_questions,
+        passed_questions=evaluation.passed_questions,
+        avg_score=evaluation.avg_score,
+    )
+    if payload["errored_questions"]:
         print(
-            f"\n⚠️  {len(errored)}/{evaluation.total_questions} 题未执行（agent 异常）："
-            f"{', '.join(errored)}\n"
-            f"    avg/pass_rate 的分母是成功评分的 {scored} 题，不代表整批结果。"
+            f"\n⚠️  {len(payload['errored_questions'])}/{payload['total_questions']} "
+            f"题未执行（agent 异常）：{', '.join(payload['errored_questions'])}\n"
+            f"    avg/pass_rate 的分母是成功评分的 {payload['scored_questions']} 题，"
+            f"不代表整批结果。"
         )
-    if rubric_missing:
+    if payload["rubric_unavailable_questions"]:
         print(
-            f"\n⚠️  {len(rubric_missing)}/{scored} 题的 rubric judge 未判："
-            f"{', '.join(rubric_missing)}\n"
+            f"\n⚠️  {len(payload['rubric_unavailable_questions'])}/{payload['scored_questions']} "
+            f"题的 rubric judge 未判：{', '.join(payload['rubric_unavailable_questions'])}\n"
             f"    这些题的总分按确定性三维归一，与其余题不同口径，不可直接对比。"
         )
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))

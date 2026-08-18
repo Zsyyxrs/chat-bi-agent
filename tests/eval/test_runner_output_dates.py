@@ -43,6 +43,17 @@ def test_runner_does_not_hardcode_output_date(runner):
 
 @pytest.mark.parametrize("runner", RUNNERS)
 def test_runner_derives_output_date_from_clock(runner):
-    """正面断言：输出日期确实来自 datetime，避免上面两条正则被绕过后静默通过。"""
-    src = (RUNNERS_DIR / runner).read_text(encoding="utf-8")
-    assert "datetime.now(UTC)" in src, f"{runner} 未见 datetime.now(UTC)，输出日期来源可疑"
+    """正面断言：OUTPUT_DATE 的**实际取值**等于今天，而不是源码里出现过 datetime.now。
+
+    原写法是 `assert "datetime.now(UTC)" in src`——注释里写一句就能骗过去。
+    """
+    import importlib
+    from datetime import UTC, datetime
+
+    mod = importlib.import_module(f"chat_bi_agent.runners.{runner[:-3]}")
+    output_date = getattr(mod, "OUTPUT_DATE", None)
+    if output_date is None:
+        pytest.skip(f"{runner} 无模块级 OUTPUT_DATE")
+    assert output_date == datetime.now(UTC).strftime("%Y-%m-%d"), (
+        f"{runner} 的 OUTPUT_DATE={output_date!r} 不是今天——很可能又被写死成字面量了"
+    )
