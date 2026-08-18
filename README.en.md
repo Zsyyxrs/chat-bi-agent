@@ -410,13 +410,37 @@ Full rationale and alternatives in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 ## 🧪 Tests & Code Quality
 
 ```bash
-pytest -v                                  # run all tests
+pytest -m "not integration" -v             # unit tests (no Postgres needed)
+pytest -v                                  # everything; integration tests skip cleanly if PG is down
 pytest tests/p3 -v                         # P3 only
-pytest --cov=src --cov-report=html         # coverage → htmlcov/
+pytest --cov=src/chat_bi_agent --cov-report=html   # coverage → htmlcov/
 
 ruff check src/ tests/ streamlit_app/ scripts/
 ruff format src/ tests/ streamlit_app/ scripts/
 ```
+
+Integration tests (`@pytest.mark.integration`, 46 of them) need a **running Postgres with the
+full seed data**. The gate is an actual `SELECT 1` probe, **not the presence of `PG_HOST`** — that
+variable is always set in `.env`, so using it as the switch makes anyone without Docker hit a pile
+of connection errors instead of a clean skip.
+
+### CI (`.github/workflows/ci.yml`) — three jobs
+
+| job | What it does |
+|---|---|
+| `test` | ruff + unit tests on a Python 3.11/3.12 matrix, coverage gate `--cov-fail-under=72` (actual 76) |
+| `integration` | Starts a `postgres:16-alpine` service → applies schema → `seed --rows 100000 --seed 42 --with-events` → runs the 46 integration tests |
+| `audit` | `pip-audit --skip-editable` dependency vulnerability audit |
+
+`--seed 42` is a hard requirement: 43 gold-SQL row-count guards assert **exact row counts**
+(e.g. 674), so a different seed turns them all red. These guards had never run in CI before
+2026-08-18 — and gold row counts were the root cause of the P1 score distortion on 2026-08-14,
+making them exactly what CI most needed to catch. See
+[ADR-014](./DESIGN_DECISIONS.md#adr-014).
+
+The coverage gate covers `src/chat_bi_agent` only: `streamlit_app` is a thin rendering shell whose
+real logic (`viz/` at 96%, `llm/langfuse_feedback.py` at 100%) is already covered inside the core
+package; including it would merely encode a known gap as a lower threshold.
 
 ---
 

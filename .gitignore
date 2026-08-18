@@ -89,8 +89,11 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
-# Design / planning docs stay local
-docs/
+# Design / planning docs stay local，但架构设计随仓库交付
+# （README 的「文档导航」指向它；此前 docs/ 整个被 ignore，导致那个链接对任何
+#  clone 仓库的人都是死链）
+docs/*
+!docs/金融data agent架构设计.md
 
 # External benchmark data (BIRD dev raw files — 340MB+, license restricts redistribution)
 benchmarks/bird/

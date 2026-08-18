@@ -94,4 +94,4 @@ benchmarks/bird/
 - 评测代码位置（待建）：`src/chat_bi_agent/eval/bird_financial/`
 - 入口脚本（待建）：`scripts/run_bird_financial.py`
 - 评测方式：只跑 P1 NL2SQL agent，指标 = EX（Execution Accuracy，行集合等价，参考官方 `evaluation.py` 的 `execution_accuracy` 实现）。
-- 结果落盘：`results/bird_financial_<date>.json`；EX 数字回填 [README.md](../../README.md) 与 [README.en.md](../../README.en.md) 的 Public benchmark 一节。
+- 结果落盘：`results/bird_financial_<date>.json`；EX 数字回填 [README.md](../README.md) 与 [README.en.md](../README.en.md) 的 Public benchmark 一节。

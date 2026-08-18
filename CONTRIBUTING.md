@@ -158,18 +158,35 @@ pytest --cov=src --cov-report=html
 
 ### 跑测试
 ```bash
-# 全套
+# 单元测试（无需 Postgres，CI 的 test job 跑的就是这个）
+pytest -m "not integration"
+
+# 全套；集成测试在 PG 不可达时会干净跳过
 pytest                        # 或 make test
 
 # 单模块
 pytest tests/p1/
 pytest tests/data/
 
-# 覆盖率
-pytest --cov=src --cov-report=html
+# 覆盖率（CI 门槛 72%，范围只含 src/chat_bi_agent）
+pytest --cov=src/chat_bi_agent --cov-report=html
 ```
 
 测试按模块分组：`tests/{p1,p2,p3,data,eval,llm,schema,viz,scripts,shared}/`。依赖运行中的 Postgres + seed 数据的集成测试标了 `@pytest.mark.integration`。
+
+**跑集成测试**需要真数据，且种子必须固定——43 个 gold SQL 行数守门断言的是具体行数：
+
+```bash
+docker compose up -d postgres
+python -m chat_bi_agent.data.seed --rows 100000 --seed 42 --with-events --truncate
+pytest -m integration
+```
+
+是否跳过由**真打一次 `SELECT 1`** 决定，不是看 `PG_HOST` 有没有值（`.env` 里它恒有值，
+拿它当开关会让没起 docker 的人撞连接错误而不是跳过）。
+
+**PR 会跑三个 CI job**：`test`（ruff + 单测 + 覆盖率门槛 72）、`integration`（起 PG + 灌种子 +
+46 个集成测试）、`audit`（`pip-audit` 依赖漏洞审计）。三个都不允许失败。
 
 ### 写测试
 - 放到对应的 `tests/<module>/` 子目录

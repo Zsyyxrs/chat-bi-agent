@@ -14,16 +14,16 @@
 
 | 决策点 | 选型 | 主要替代 | 一句话理由 | 深入 |
 |---|---|---|---|---|
-| **LLM（生成 + 评分）** | **当前 `qwen3.7-max`**（DashScope；ADR-001 立项时为 Qwen3.6-max-preview） | GPT-4 / Claude 3.5 / DeepSeek-V2 | 中文银行场景 + 国内合规接入 + 单源省心 | [ADR-001](#adr-001-llm-选-qwen36-max-preview) |
-| **Agent 编排** | 自研函数链 + `@observe` 装饰器 | LangGraph / CrewAI / AutoGen | 三路径流程都是**固定 DAG**，框架抽象换不来收益，多一层维护负担 | [ADR-002](#adr-002-自研函数链编排不引入-agent-框架) |
-| **可观测性** | Langfuse v3（self-hosted） | LangSmith / Phoenix / OpenLLMetry | 自托管无数据出境风险 + trace tree 完整 + LLM judge 分数可回流 | [ADR-003](#adr-003-langfuse-v3-self-hosted-做全链路可观测) |
-| **评分方式** | LLM-as-judge（Qwen 自评，4 维 rubric） | 人工标注 / Ragas / DeepEval | 启动期无标注预算，Qwen 自评在银行场景稳定性可接受，后续可切人工 | [ADR-004](#adr-004-llm-as-judge-qwen-自评-做评分) |
-| **SQL 校验** | sqlglot（AST 解析 + dry-run） | 直接执行验错 / 自写 Antlr | Python 原生、多方言、AST 可改写；执行验错代价大且噪声高 | [ADR-005](#adr-005-sqlglot-做-sql-ast-校验) |
-| **反思机制** | Reflector 单次重试 | 无反思 / 多次重试 / 树搜索（ToT） | 银行 SQL 错误模式有限（3-4 类），单次重试 ROI 最高 | [ADR-006](#adr-006-reflector-单次重试不做多次或树搜索) |
-| **P3 ground truth** | YAML 事件库 + 传播引擎埋雷 | 用真实生产脱敏数据 / 手工 SQL 注入异常 | 可控、可重放、可量化、可解释；对齐 rubric 的 event_hit 维度 | [ADR-007](#adr-007-yaml-事件库--传播引擎-构造-p3-ground-truth) |
-| **Schema 检索** | Embedding（text-embedding-v4）+ jieba 分词 | BM25 / 静态映射表 / GraphRAG | 中文同义词多（"存款/储蓄/余额"），embedding 召回 + jieba 分词组合覆盖率最好 | [ADR-008](#adr-008-embedding--jieba-做-schema-检索) |
-| **Web UI** | Streamlit | React/Next.js + FastAPI / Gradio | Demo 场景，3 倍开发速度，直接给 Python 对象绑图表 | [ADR-009](#adr-009-streamlit-做-web-ui) |
-| **数据库权限** | 双用户隔离（chatbi 写 / chatbi_readonly 读） | 单账号 + 应用层白名单 | Agent 生成的 SQL 由 readonly 用户执行，DB 层兜底防 DROP/DELETE | [ADR-010](#adr-010-postgresql-双用户隔离-写与读) |
+| **LLM（生成 + 评分）** | **当前 `qwen3.7-max`**（DashScope；ADR-001 立项时为 Qwen3.6-max-preview） | GPT-4 / Claude 3.5 / DeepSeek-V2 | 中文银行场景 + 国内合规接入 + 单源省心 | [ADR-001](#adr-001) |
+| **Agent 编排** | 自研函数链 + `@observe` 装饰器 | LangGraph / CrewAI / AutoGen | 三路径流程都是**固定 DAG**，框架抽象换不来收益，多一层维护负担 | [ADR-002](#adr-002) |
+| **可观测性** | Langfuse v3（self-hosted） | LangSmith / Phoenix / OpenLLMetry | 自托管无数据出境风险 + trace tree 完整 + LLM judge 分数可回流 | [ADR-003](#adr-003) |
+| **评分方式** | LLM-as-judge（Qwen 自评，4 维 rubric） | 人工标注 / Ragas / DeepEval | 启动期无标注预算，Qwen 自评在银行场景稳定性可接受，后续可切人工 | [ADR-004](#adr-004) |
+| **SQL 校验** | sqlglot（AST 解析 + dry-run） | 直接执行验错 / 自写 Antlr | Python 原生、多方言、AST 可改写；执行验错代价大且噪声高 | [ADR-005](#adr-005) |
+| **反思机制** | Reflector 单次重试 | 无反思 / 多次重试 / 树搜索（ToT） | 银行 SQL 错误模式有限（3-4 类），单次重试 ROI 最高 | [ADR-006](#adr-006) |
+| **P3 ground truth** | YAML 事件库 + 传播引擎埋雷 | 用真实生产脱敏数据 / 手工 SQL 注入异常 | 可控、可重放、可量化、可解释；对齐 rubric 的 event_hit 维度 | [ADR-007](#adr-007) |
+| **Schema 检索** | Embedding（text-embedding-v4）+ jieba 分词 | BM25 / 静态映射表 / GraphRAG | 中文同义词多（"存款/储蓄/余额"），embedding 召回 + jieba 分词组合覆盖率最好 | [ADR-008](#adr-008) |
+| **Web UI** | Streamlit | React/Next.js + FastAPI / Gradio | Demo 场景，3 倍开发速度，直接给 Python 对象绑图表 | [ADR-009](#adr-009) |
+| **数据库权限** | 双用户隔离（chatbi 写 / chatbi_readonly 读） | 单账号 + 应用层白名单 | Agent 生成的 SQL 由 readonly 用户执行，DB 层兜底防 DROP/DELETE | [ADR-010](#adr-010) |
 
 ---
 
@@ -41,7 +41,7 @@
 ### v0.5 —— P1 跑通（2026-06 上旬）
 
 - P1 NL2SQL 完整链路：SchemaLinker → SQLGenerator → SQLValidator → SQLExecutor
-- 引入 **Reflector**：SQL 执行失败时，把错误信息回喂 LLM 单次重试（[ADR-006](#adr-006-reflector-单次重试不做多次或树搜索)）
+- 引入 **Reflector**：SQL 执行失败时，把错误信息回喂 LLM 单次重试（[ADR-006](#adr-006)）
 - 接 **Langfuse v3**（self-hosted，docker-compose 全套）：所有 LLM 调用和 agent 节点带 `@observe`
 - P1 评估：6 题 pass_rate 100%，avg 1.000
 
@@ -75,7 +75,7 @@
   - `dim_recall`（30%）：是否找出关键维度
   - `conclusion_similarity`（20%）：语义匹配
   - `hallucination_penalty`（10%）：事实错误扣分
-- 见 [ADR-004](#adr-004-llm-as-judge-qwen-自评-做评分)。
+- 见 [ADR-004](#adr-004)。
 
 ### v0.95 —— P3 全通（2026-06-29）
 
@@ -102,6 +102,8 @@
 每条 ADR 结构：**Status / Context / Decision / Alternatives / Consequences**。
 
 ---
+
+<a id="adr-001"></a>
 
 ### ADR-001: LLM 选 Qwen3.6-max-preview
 
@@ -133,6 +135,8 @@
 **逃生口**：`llm/qwen_client.py:chat()` 返回统一 `ChatResult` 类型，切换到 OpenAI-兼容 API 只改这个文件。
 
 ---
+
+<a id="adr-002"></a>
 
 ### ADR-002: 自研函数链编排，不引入 Agent 框架
 
@@ -168,6 +172,8 @@
 
 ---
 
+<a id="adr-003"></a>
+
 ### ADR-003: Langfuse v3 self-hosted 做全链路可观测
 
 **Status**: Accepted · 2026-06
@@ -197,6 +203,8 @@ Langfuse v3，全套 self-hosted，随 `docker-compose.yml` 一起起。栈：`l
 - ⚠️ 首次启动需要在 UI 里手动创建 API Key 回填 .env（README 已注明）
 
 ---
+
+<a id="adr-004"></a>
 
 ### ADR-004: LLM-as-judge（Qwen 自评）做评分
 
@@ -235,6 +243,8 @@ Langfuse v3，全套 self-hosted，随 `docker-compose.yml` 一起起。栈：`l
 
 ---
 
+<a id="adr-005"></a>
+
 ### ADR-005: sqlglot 做 SQL AST 校验
 
 **Status**: Accepted · 2026-06
@@ -265,6 +275,8 @@ Langfuse v3，全套 self-hosted，随 `docker-compose.yml` 一起起。栈：`l
 - ⚠️ 覆盖不到所有语义错（如死锁、超时），这些仍需依赖执行时 Reflector 处理（见 ADR-006）
 
 ---
+
+<a id="adr-006"></a>
 
 ### ADR-006: Reflector 单次重试，不做多次或树搜索
 
@@ -318,6 +330,8 @@ reflect 路径一次都没触发——这轮只能证明没引入回归，**不�
 
 ---
 
+<a id="adr-007"></a>
+
 ### ADR-007: YAML 事件库 + 传播引擎 构造 P3 ground truth
 
 **Status**: Accepted · 2026-05
@@ -357,6 +371,8 @@ reflect 路径一次都没触发——这轮只能证明没引入回归，**不�
 
 ---
 
+<a id="adr-008"></a>
+
 ### ADR-008: Embedding + jieba 做 schema 检索
 
 **Status**: Accepted · 2026-06
@@ -390,6 +406,8 @@ Embedding 检索：
 
 ---
 
+<a id="adr-009"></a>
+
 ### ADR-009: Streamlit 做 Web UI
 
 **Status**: Accepted · 2026-06
@@ -422,6 +440,8 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 
 ---
 
+<a id="adr-010"></a>
+
 ### ADR-010: PostgreSQL 双用户隔离（写 与 读）
 
 **Status**: Accepted · 2026-06
@@ -453,6 +473,8 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 - ⚠️ Statement timeout 也需要在 readonly 用户上配（当前 config `db.statement_timeout_ms=10000`）
 
 ---
+
+<a id="adr-011"></a>
 
 ### ADR-011: BIRD-financial 只跑 P1，SQLite 直连 + 独立 NL2SQL prompt
 
@@ -498,26 +520,28 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 
 | # | 决策 | 状态 |
 |---|---|---|
-| [ADR-001](#adr-001-llm-选-qwen36-max-preview) | LLM 选 Qwen3.6-max-preview | Accepted |
-| [ADR-002](#adr-002-自研函数链编排不引入-agent-框架) | 自研函数链编排 | Accepted |
-| [ADR-003](#adr-003-langfuse-v3-self-hosted-做全链路可观测) | Langfuse v3 self-hosted | Accepted |
-| [ADR-004](#adr-004-llm-as-judge-qwen-自评-做评分) | LLM-as-judge 评分 | Accepted |
-| [ADR-005](#adr-005-sqlglot-做-sql-ast-校验) | sqlglot AST 校验 | Accepted |
-| [ADR-006](#adr-006-reflector-单次重试不做多次或树搜索) | Reflector 单次重试 | Accepted |
-| [ADR-007](#adr-007-yaml-事件库--传播引擎-构造-p3-ground-truth) | YAML 事件库埋雷 | Accepted |
-| [ADR-008](#adr-008-embedding--jieba-做-schema-检索) | Embedding + jieba schema 检索 | Accepted |
-| [ADR-009](#adr-009-streamlit-做-web-ui) | Streamlit UI | Accepted |
-| [ADR-010](#adr-010-postgresql-双用户隔离-写与读) | PostgreSQL 双用户隔离 | Accepted |
-| [ADR-011](#adr-011-bird-financial-只跑-p1sqlite-直连--独立-nl2sql-prompt) | BIRD-financial 只跑 P1 + SQLite 直连 | Accepted |
-| [ADR-012](#adr-012-q-sql-few-shot-检索注入-bird-验证净效应-0-同域生产未测) | Q-SQL few-shot 检索注入 | Accepted（默认阈值保守） |
-| [ADR-013](#adr-013-语义层-metric-resolver-原型-6-指标模板-llm-抽-spec-fallback-回原-nl2sql) | 语义层 Metric Resolver 原型 | Accepted（2026-08-12 已接线到 P1 主路径，见 Update） |
-| [ADR-014](#adr-014-评测集-gold-的可信度修哪些不修哪些以及行数守门) | 评测集 gold 的可信度守门 | Accepted |
-| [ADR-015](#adr-015-p2-评分器中文分词修复饱和维度暂留) | P2 评分器中文分词修复 | Accepted（三个饱和维度待决） |
-| [ADR-016](#adr-016-p2-rubric-llm-judge补回被删两维的度量能力) | P2 rubric LLM judge | Accepted |
+| [ADR-001](#adr-001) | LLM 选 Qwen3.6-max-preview | Accepted |
+| [ADR-002](#adr-002) | 自研函数链编排 | Accepted |
+| [ADR-003](#adr-003) | Langfuse v3 self-hosted | Accepted |
+| [ADR-004](#adr-004) | LLM-as-judge 评分 | Accepted |
+| [ADR-005](#adr-005) | sqlglot AST 校验 | Accepted |
+| [ADR-006](#adr-006) | Reflector 单次重试 | Accepted |
+| [ADR-007](#adr-007) | YAML 事件库埋雷 | Accepted |
+| [ADR-008](#adr-008) | Embedding + jieba schema 检索 | Accepted |
+| [ADR-009](#adr-009) | Streamlit UI | Accepted |
+| [ADR-010](#adr-010) | PostgreSQL 双用户隔离 | Accepted |
+| [ADR-011](#adr-011) | BIRD-financial 只跑 P1 + SQLite 直连 | Accepted |
+| [ADR-012](#adr-012) | Q-SQL few-shot 检索注入 | Accepted（默认阈值保守） |
+| [ADR-013](#adr-013) | 语义层 Metric Resolver 原型 | Accepted（2026-08-12 已接线到 P1 主路径，见 Update） |
+| [ADR-014](#adr-014) | 评测集 gold 的可信度守门 | Accepted |
+| [ADR-015](#adr-015) | P2 评分器中文分词修复 | Accepted（三个饱和维度待决） |
+| [ADR-016](#adr-016) | P2 rubric LLM judge | Accepted |
 
 新增 ADR 命名 `ADR-013`、`ADR-014` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
 ---
+
+<a id="adr-012"></a>
 
 ### ADR-012: Q-SQL few-shot 检索注入，BIRD 验证净效应 ≈ 0，同域生产未测
 
@@ -612,6 +636,8 @@ few-shot 净效应归零（−0.005，在噪声内）。**
 
 ---
 
+<a id="adr-013"></a>
+
 ### ADR-013: 语义层 Metric Resolver 原型（6 指标模板，LLM 抽 spec，fallback 回原 NL2SQL）
 
 **Status**: Accepted（原型阶段，未接线到 P1 主路径）
@@ -620,8 +646,8 @@ few-shot 净效应归零（−0.005，在噪声内）。**
 **背景**：dbt 2026 benchmark 显示语义层比裸 text-to-SQL 高 10-14 分（GPT-5.3 Codex 从 84.1% → 100%）；WrenAI 全栈押注这条路线。ADR-012 postmortem 里 few-shot 净效应 ≈ 0 也验证了另一个方向：**改 prompt/RAG 是隔靴搔痒，真正的杠杆在"先收窄问题空间"**。原型目标：定义几个核心银行指标模板，把 NL 问题降维成 `{metric, dims, filters, time_window}`，走 governed SQL 路径。
 
 **方案**：
-- **[`config/metrics.yaml`](../config/metrics.yaml)** — 6 个种子指标：`deposit_balance` / `loan_balance` / `customer_aum` / `customer_count` / `product_count` / `transaction_amount`。每个指标声明 fact_table + fact_alias、metric_expr（`AVG(fbd.balance)` 之类）、hard_filters（永远 AND，护业务口径）、date_column、joins（join_id → SQL）、dim_catalog、filter_catalog（含 enum_values 严格校验）。
-- **[`src/chat_bi_agent/agents/p1/metric_resolver.py`](../src/chat_bi_agent/agents/p1/metric_resolver.py)**：
+- **[`config/metrics.yaml`](./config/metrics.yaml)** — 6 个种子指标：`deposit_balance` / `loan_balance` / `customer_aum` / `customer_count` / `product_count` / `transaction_amount`。每个指标声明 fact_table + fact_alias、metric_expr（`AVG(fbd.balance)` 之类）、hard_filters（永远 AND，护业务口径）、date_column、joins（join_id → SQL）、dim_catalog、filter_catalog（含 enum_values 严格校验）。
+- **[`src/chat_bi_agent/agents/p1/metric_resolver.py`](./src/chat_bi_agent/agents/p1/metric_resolver.py)**：
   - `MetricCatalog.from_yaml()` 加载
   - `_build_extractor_prompt(catalog)` 生成 system prompt，把可用指标 / dims / filters / enum 全枚举给 LLM
   - `resolve(question, catalog)` 端到端：LLM → `MetricSpec` → `render_sql_from_spec` 拼 SQL
@@ -1075,6 +1101,8 @@ k=8 相对实际需要有 4 倍余量。真实语义相近的指标（`deposit_b
 
 ---
 
+<a id="adr-014"></a>
+
 ### ADR-014: 评测集 gold 的可信度——修哪些、不修哪些，以及行数守门
 
 **Status**：Accepted（2026-08-14）
@@ -1252,6 +1280,8 @@ README 上的成绩他一个都复现不了，而且**不会有任何报错告�
 
 ---
 
+<a id="adr-015"></a>
+
 ### ADR-015: P2 评分器中文分词修复，饱和维度暂留
 
 **Status**：Accepted（2026-08-15）
@@ -1397,6 +1427,8 @@ KeyError——正是本轮一直在修的那类失配。
 `results/baseline_p2_analysis_2026-08-17.json`（B 档后，`partial=false`）
 
 ---
+
+<a id="adr-016"></a>
 
 ### ADR-016: P2 rubric LLM judge——补回被删两维的度量能力
 

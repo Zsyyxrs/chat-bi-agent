@@ -158,18 +158,38 @@ Descriptions may be in English or Chinese. Keep the subject line under ~72 chara
 
 ### Running Tests
 ```bash
-# All tests
+# Unit tests (no Postgres needed — this is what CI's `test` job runs)
+pytest -m "not integration"
+
+# All tests; integration tests skip cleanly when PG is unreachable
 pytest                        # or: make test
 
 # One module
 pytest tests/p1/
 pytest tests/data/
 
-# With coverage
-pytest --cov=src --cov-report=html
+# With coverage (CI gate is 72%, scoped to src/chat_bi_agent)
+pytest --cov=src/chat_bi_agent --cov-report=html
 ```
 
 Tests are grouped by module under `tests/{p1,p2,p3,data,eval,llm,schema,viz,scripts,shared}/`. Integration tests that require a running Postgres + seed data are marked `@pytest.mark.integration`.
+
+**Running the integration tests** needs real data, and the seed must be fixed — 43 gold-SQL
+row-count guards assert exact row counts:
+
+```bash
+docker compose up -d postgres
+python -m chat_bi_agent.data.seed --rows 100000 --seed 42 --with-events --truncate
+pytest -m integration
+```
+
+Whether they skip is decided by an actual `SELECT 1` probe, not by the presence of `PG_HOST`
+(that variable is always set in `.env`, so using it as the switch makes anyone without Docker hit
+connection errors instead of a clean skip).
+
+**Your PR runs three CI jobs**: `test` (ruff + unit tests + 72% coverage gate), `integration`
+(starts Postgres, seeds it, runs the 46 integration tests), and `audit` (`pip-audit` dependency
+vulnerability scan). None of them are allowed to fail.
 
 ### Writing Tests
 - Place tests under the matching `tests/<module>/` directory

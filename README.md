@@ -405,13 +405,35 @@ chat-bi-agent/
 ## 🧪 测试与代码质量
 
 ```bash
-pytest -v                                  # 跑全部测试
+pytest -m "not integration" -v             # 单元测试（无需 Postgres）
+pytest -v                                  # 全部；集成测试在 PG 不可达时会干净跳过
 pytest tests/p3 -v                         # 只跑 P3
-pytest --cov=src --cov-report=html         # 覆盖率报告 → htmlcov/
+pytest --cov=src/chat_bi_agent --cov-report=html   # 覆盖率报告 → htmlcov/
 
 ruff check src/ tests/ streamlit_app/ scripts/
 ruff format src/ tests/ streamlit_app/ scripts/
 ```
+
+集成测试（`@pytest.mark.integration`，46 个）需要**跑着的 Postgres + 完整种子数据**。
+判断依据是真打一次 `SELECT 1`，**不是看 `PG_HOST` 有没有值**——`.env` 里它恒有值，
+拿它当开关会让没起 docker 的人撞一堆连接错误而不是跳过。
+
+### CI（`.github/workflows/ci.yml`）三个 job
+
+| job | 内容 |
+|---|---|
+| `test` | ruff + 单元测试，Python 3.11/3.12 矩阵，覆盖率门槛 `--cov-fail-under=72`（实测 76） |
+| `integration` | 起 `postgres:16-alpine` service → 建表 → `seed --rows 100000 --seed 42 --with-events` → 跑 46 个集成测试 |
+| `audit` | `pip-audit --skip-editable`，依赖漏洞审计 |
+
+`--seed 42` 是硬要求：43 个 gold SQL 行数守门断言的是**具体行数**（如 674 行），
+换种子全红。这些守门在 2026-08-18 之前从未在 CI 执行过，而 gold 行数正是
+2026-08-14 那次 P1 分数失真的根源，恰恰最需要 CI 兜住——详见
+[ADR-014](./DESIGN_DECISIONS.md#adr-014)。
+
+覆盖率范围只含 `src/chat_bi_agent`：`streamlit_app` 是薄渲染壳，其真实逻辑
+（`viz/` 96%、`llm/langfuse_feedback.py` 100%）已在核心包内覆盖，把它算进门槛
+只会把已知缺口编码成一个更低的数字。
 
 ---
 
