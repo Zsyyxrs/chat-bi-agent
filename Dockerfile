@@ -31,6 +31,10 @@ RUN uv sync --frozen --no-dev --no-install-project --no-cache
 # 再拷源码，装本项目
 COPY src/ ./src/
 COPY streamlit_app/ ./streamlit_app/
+# config/ 必须进镜像：metrics.yaml 是语义层指标目录，缺了 P1 的 MetricRouter
+# 会走 `except Exception: return None` 静默降级——UI 照常能用，但治理特性全丢。
+# local.yaml 已被 .dockerignore 排除，运行时由 compose bind-mount 提供。
+COPY config/ ./config/
 RUN uv sync --frozen --no-dev --no-cache
 
 EXPOSE 8501
