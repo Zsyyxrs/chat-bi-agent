@@ -18,6 +18,12 @@ WORKDIR /app
 # 先只拷 manifest + lock，让依赖层可以独立缓存
 COPY pyproject.toml uv.lock ./
 
+# uv 默认并发下载数≈50，会把 Docker 内嵌 DNS(127.0.0.11)→宿主机解析器这条
+# 转发链路的 UDP 查询打丢，表现为 `dns error / failed to lookup address
+# information: Try again`(EAI_AGAIN)，随机卡在某个包上，重试仍失败。
+# 降到 4 后实测稳定通过，代价只是依赖层多几十秒——只在改 uv.lock 时才重跑。
+ENV UV_CONCURRENT_DOWNLOADS=4
+
 # 装第三方依赖（不装本项目自身），失败时报错而不是重解
 # --no-cache 让 uv 不留 wheel 缓存在镜像里（省 ~600MB）
 RUN uv sync --frozen --no-dev --no-install-project --no-cache
