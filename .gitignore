@@ -94,6 +94,12 @@ dmypy.json
 #  clone 仓库的人都是死链）
 docs/*
 !docs/金融data agent架构设计.md
+# README 里内嵌的演示图同理，不跟着 docs/ 一起被 ignore
+# （docs/* 会连 docs/assets 目录一起排除，必须先放行目录再挑文件类型）
+!docs/assets/
+docs/assets/*
+!docs/assets/*.gif
+!docs/assets/*.png
 
 # External benchmark data (BIRD dev raw files — 340MB+, license restricts redistribution)
 benchmarks/bird/

@@ -19,6 +19,10 @@
 | **P2 Multi-Step Analysis** | Decompose → multi-step retrieval → fact extraction → synthesized insight | "How did cash withdrawal behavior change around Chinese New Year?" |
 | **P3 RCA Attribution** | Anchor fact → drill by dimension → match events → synthesize root cause | "Shanghai branch deposits dropped 8% on 2026-05-14 — why?" |
 
+![P1 demo: natural language → SQL → result table → auto-chart](docs/assets/demo_p1.gif)
+
+<sub>P1 tab, recorded live and **sped up**: ask "monthly transaction-amount trend for 2026" → generate and run SQL → result table → chart type inferred automatically. The 👍 at the end sends this (question, sql) pair to the few-shot pool candidates. The "耗时 18043 ms" at the bottom is the **real** end-to-end latency of this run, not compressed; across all 8 questions avg is 17.7s / p50 12.0s (<a href="results/baseline_p1_eval_2026-08-15.json">baseline JSON</a>). No recording for P2 / P3 yet.</sub>
+
 ---
 
 ## 📊 Evaluation Results
@@ -325,7 +329,12 @@ python scripts/eval_diff.py --phase p3 \
 
 ## 🎬 Demo
 
-Video / GIF coming later. In the meantime, follow Quick Start A, launch Streamlit, and try one question per tab:
+The P1 recording sits under the "Three Capability Tracks" table at the top. **There is no recording for
+P2 / P3** — a single P2 question takes 300–500s and P3 is in the same range, so a real-time capture is
+unwatchable while a fast-forwarded one misrepresents the actual latency. Both tracks output long-form
+attribution prose, which static screenshots serve better; those are still to come.
+
+To see the full set yourself, follow Quick Start A, launch Streamlit, and try one question per tab:
 
 - **P1 tab**: "What was the total deposit balance of HNW customers in the Shanghai branch in May 2026?"
 - **P2 tab**: "How did cash withdrawal behavior change around Chinese New Year?"
