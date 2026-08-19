@@ -194,6 +194,11 @@ services:
   app:
     build: .
     image: chat-bi-agent:local
+    # 默认 pull_policy 是 missing：镜像已存在就直接复用，源码改了也不管。
+    # 2026-08-19 因此踩坑——UI 里跑的是 8 天前的代码，缺了 LLM 瞬时重试层，
+    # DashScope 抖一下就把 ConnectionError 直接甩到界面上。
+    # 改成 build 让每次 up 都走构建；层缓存还在，源码没动时只多几秒。
+    pull_policy: build
     container_name: chatbi-app
     restart: unless-stopped
     depends_on:
@@ -221,6 +226,8 @@ services:
   seed:
     build: .
     image: chat-bi-agent:local
+    # 与 app 同镜像，同理由：seed 用旧代码灌数会灌出与当前 schema 不一致的库
+    pull_policy: build
     container_name: chatbi-seed
     profiles: ["seed"]
     depends_on:
