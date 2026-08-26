@@ -303,6 +303,9 @@ def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = parse_args()
     get_client()
+    # 先探活再干活：模型配错时在这里报错，而不是白跑完 schema embedding 建索引、
+    # 到第 1 题才炸（2026-08-26 的实际教训）。
+    qwen_client.preflight_chat_model()
     questions = load_questions(args.question_set)
     question_ids = list(questions.keys())
     print(

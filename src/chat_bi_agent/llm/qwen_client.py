@@ -1,7 +1,14 @@
 """通义千问 (DashScope) chat + embedding 封装。
 
-只暴露两个函数：chat() 和 embed()，输入输出都用纯 Python 类型，
-不直接暴露 dashscope 的响应对象。所有调用失败抛 RuntimeError。
+输入输出都用纯 Python 类型，不向外暴露 SDK 的响应对象。
+
+两条路径用的是不同 SDK，失败语义也因此不同：
+- `chat()` 走 **OpenAI 兼容端点**（原因见 DASHSCOPE_COMPATIBLE_BASE_URL 处注释），
+  失败抛 openai 的异常（APIConnectionError / AuthenticationError / …）。
+- `embed()` 仍走 dashscope 原生 TextEmbedding，失败抛 RuntimeError。
+
+`preflight_chat_model()` 供跑批入口做启动自检：模型配错时在第 1 次真实调用前就报错，
+而不是让一轮十几分钟的评测跑到一半才炸。
 """
 
 import os
@@ -17,8 +24,9 @@ for _key in ("NO_PROXY", "no_proxy"):
         )
 
 import dashscope  # noqa: E402
+import openai  # noqa: E402
 import requests  # noqa: E402
-from dashscope import Generation, TextEmbedding  # noqa: E402
+from dashscope import TextEmbedding  # noqa: E402
 from langfuse import get_client, observe  # noqa: E402
 
 from chat_bi_agent.config import (  # noqa: E402
@@ -36,6 +44,28 @@ class ChatResult:
     content: str
     prompt_tokens: int
     completion_tokens: int
+
+
+# DashScope 的 OpenAI 兼容端点。chat 走这里而非原生 Generation.call，因为阿里把不同
+# 世代的模型放在不同原生端点上：qwen3.7-max 只在 text-generation 端点，
+# qwen3.7-max-2026-06-08 只在 multimodal-generation 端点，两者互斥；而兼容端点四个
+# 模型全部吃得下。且没有任何 API 能查「某模型该走哪个端点」，只能靠撞 400 试出来，
+# 所以必须收敛到唯一一条能覆盖所有模型的路径。
+DASHSCOPE_COMPATIBLE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+_CHAT_CLIENT: "openai.OpenAI | None" = None
+
+
+def _chat_client() -> "openai.OpenAI":
+    """惰性构造并复用兼容端点客户端（复用连接池，避免每次调用重建）。"""
+    global _CHAT_CLIENT
+    if _CHAT_CLIENT is None:
+        _CHAT_CLIENT = openai.OpenAI(
+            api_key=os.environ["DASHSCOPE_API_KEY"],
+            base_url=DASHSCOPE_COMPATIBLE_BASE_URL,
+            max_retries=0,  # 重试由 _call_with_retry 统一负责，避免两层退避叠加
+        )
+    return _CHAT_CLIENT
 
 
 def _ensure_api_key() -> None:
@@ -58,8 +88,15 @@ _RETRY_BACKOFF_SECONDS = 2
 
 # 只重试网络类瞬时故障；配额/鉴权错误重试没意义，必须快速失败
 _TRANSIENT_EXC = (
+    # dashscope 侧（embed 仍走 TextEmbedding）
     requests.exceptions.Timeout,
     requests.exceptions.ConnectionError,
+    # openai 侧（chat 走兼容端点）。APITimeoutError 继承自 APIConnectionError，
+    # 列前者只为可读性。**换 SDK 时漏掉这两行 = 重试静默失效**：调用照跑、异常照抛，
+    # 只是不再重试，而这段重试注释里记着它救回过 45+ 分钟的跑批。
+    openai.APIConnectionError,
+    openai.APITimeoutError,
+    openai.InternalServerError,  # 5xx 属服务端瞬时故障；4xx（配额/鉴权）不在此列，快速失败
 )
 
 
@@ -90,51 +127,61 @@ def chat(
     """单轮聊天调用。低 temperature 适合 NL2SQL。"""
     _ensure_api_key()
     resp = _call_with_retry(
-        Generation.call,
+        _chat_client().chat.completions.create,
         model=CHAT_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        result_format="message",
         temperature=temperature,
-        request_timeout=REQUEST_TIMEOUT_SECONDS,
+        timeout=REQUEST_TIMEOUT_SECONDS,
     )
-    # resp = MultiModalConversation.call(
-    #     model=CHAT_MODEL,
-    #     messages=[
-    #         {"role": "system", "content": system_prompt},
-    #         {"role": "user", "content": user_prompt},
-    #     ],
-    #     temperature=temperature,
-    # )
-    if resp.status_code != 200:
-        raise RuntimeError(f"qwen chat 调用失败: {resp.code} {resp.message}")
-    choice = resp.output.choices[0]
+    message = resp.choices[0].message
     get_client().update_current_generation(
         model=CHAT_MODEL,
         model_parameters={"temperature": temperature},
+        # 兼容端点用 prompt_tokens/completion_tokens，与 dashscope 原生的
+        # input_tokens/output_tokens 不同名。照抄旧字段名不会报错，只会让 Langfuse
+        # 的成本统计恒为 0——又一处静默失效，所以在此显式映射。
         usage_details={
-            "input": resp.usage.input_tokens,
-            "output": resp.usage.output_tokens,
+            "input": resp.usage.prompt_tokens,
+            "output": resp.usage.completion_tokens,
         },
     )
-    # DashScope SDK 返回的 content 有两种格式（取决于 SDK / API 版本）：
-    # 1. str（当前默认）：直接是文本
-    # 2. list[dict]（旧 multi-modal 兼容格式）：[{"text": "..."}]
-    # 在这里做兼容，无论哪种返回都能正确取文本，避免上游每次 SDK 升级都炸。
-    raw_content = choice.message.content
-    if isinstance(raw_content, list) and raw_content and isinstance(raw_content[0], dict):
-        text_content = raw_content[0].get("text", "")
-    elif isinstance(raw_content, str):
-        text_content = raw_content
-    else:
-        text_content = ""
+    # 推理模型（如 qwen3.7-max-2026-06-08）会另外给一个 reasoning_content 字段，
+    # 里面是思维链。SQL 解析只要最终答案，thinking 不参与，故只取 content。
+    text_content = message.content or ""
     return ChatResult(
         content=text_content,
-        prompt_tokens=resp.usage.input_tokens,
-        completion_tokens=resp.usage.output_tokens,
+        prompt_tokens=resp.usage.prompt_tokens,
+        completion_tokens=resp.usage.completion_tokens,
     )
+
+
+def preflight_chat_model() -> None:
+    """启动自检：确认 CHAT_MODEL 在兼容端点上真的可调通。
+
+    动机是 2026-08-26 那次——模型换成 qwen3.7-max-2026-06-08 后，失败发生在跑批
+    第 1 题，此前已白跑了 schema embedding 建索引；而 DashScope 给的错误是
+    "url error, please check url"，把人往 URL 配置方向引，实际与 URL 无关。
+    一次几十 token 的探活换掉这些，很划算。
+
+    失败一律转成 RuntimeError 并带上模型名与排查方向，不让原始错误信息误导人。
+    """
+    try:
+        _ensure_api_key()
+        _chat_client().chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[{"role": "user", "content": "ok"}],
+            max_tokens=1,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"CHAT_MODEL={CHAT_MODEL!r} 在兼容端点上不可调通：{type(exc).__name__}: {exc}\n"
+            f"排查方向：模型名是否拼错、该模型是否对本账号开通、免费额度是否已耗尽。"
+            f"（端点：{DASHSCOPE_COMPATIBLE_BASE_URL}）"
+        ) from exc
 
 
 # 超过 10 条会被 DashScope 拒掉：
@@ -166,7 +213,8 @@ def embed(texts: list[str]) -> list[list[float]]:
         )
         if resp.status_code != 200:
             raise RuntimeError(f"qwen embedding 调用失败: {resp.code} {resp.message}")
-        # embedding 的 resp.usage 是 dict，只有 total_tokens；chat 的是对象有 input/output_tokens
+        # embedding 的 resp.usage 是 dict，只有 total_tokens
+        # （chat 已改走兼容端点，用的是 prompt_tokens/completion_tokens，与此无关）
         usage = getattr(resp, "usage", None) or {}
         total_input_tokens += usage.get("total_tokens", 0) if isinstance(usage, dict) else 0
         # dashscope 返回的 embeddings 顺序与 input 一致
