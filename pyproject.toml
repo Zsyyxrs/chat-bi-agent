@@ -41,6 +41,10 @@ include = ["chat_bi_agent*", "streamlit_app*"]
 [tool.setuptools.package-data]
 chat_bi_agent = [
     "schema/*.yaml",
+    # 值检索快照（scripts/build_value_index.py 生成）。必须随包分发：值检索默认开启，
+    # 缺文件时 ValueIndex 退化成空索引且**不报错**——漏掉它就是 metrics.yaml 那次
+    # 「语义层在容器里静默关闭」的重演。
+    "schema/*.json",
     "data/*.yaml",
     "data/events/*.yaml",
 ]

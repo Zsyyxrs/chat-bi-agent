@@ -40,6 +40,7 @@ from chat_bi_agent.eval.precision_retrieval_evaluator import (  # noqa: E402
 )
 from chat_bi_agent.llm import qwen_client  # noqa: E402
 from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
+from chat_bi_agent.schema.value_index import ValueIndex  # noqa: E402
 
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "precision_retrieval_evaluation.yaml"
 
@@ -103,6 +104,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "只把 cosine 最高的 k 个指标写进抽取 prompt（prompt 大小与目录规模解耦）。"
             "传一个 >= 目录条数的值等价于旧的全量行为"
+        ),
+    )
+    p.add_argument(
+        "--no-value-index",
+        action="store_true",
+        help=(
+            "关闭值检索（不把库内实际取值以 -- examples 注入 schema DDL）。"
+            "用于 A/B 的基线臂：默认读 schema/value_index.json 快照，传此开关即退化成改造前行为"
         ),
     )
     p.add_argument(
@@ -306,6 +315,8 @@ def main(args: argparse.Namespace | None = None) -> int:
         top_k=4,
         example_retriever=retriever,
         metric_router=metric_router,
+        # 空索引 = 关闭值检索；不传则读默认快照
+        value_index=ValueIndex({}) if args.no_value_index else None,
         # 关键：逐题的 p1_nl2sql_run 是嵌套在下面这条 p1_eval_batch trace 里的
         # （实测一条 batch trace 有 274 个 observation），不是独立 root trace。
         # 生产默认会把 route 打成 tag，但在这里打就会覆盖掉紧接着设的 arm:* 标签，
@@ -423,6 +434,11 @@ def main(args: argparse.Namespace | None = None) -> int:
             "pool_path": str(args.example_pool) if args.example_pool else None,
             "k": args.few_shot_k,
             "min_similarity": args.few_shot_min_sim,
+        },
+        "value_index": {
+            "enabled": not args.no_value_index,
+            "n_columns": len(agent.value_index.columns),
+            "n_values": agent.value_index.n_values,
         },
         "metric_router": _summarize_metric_router(
             per_question=per_question,

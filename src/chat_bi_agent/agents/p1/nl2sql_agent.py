@@ -4,6 +4,7 @@
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from langfuse import get_client, observe
 
@@ -16,6 +17,7 @@ from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass, SQLExecutor
 from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS, TOP_K_NL2SQL
 from chat_bi_agent.schema.loader import SchemaLoader
+from chat_bi_agent.schema.value_index import DEFAULT_CACHE_PATH, ValueIndex
 
 # ADR-006 决定「Reflector 只做 1 次重试」，Alternatives 里明确否决了「多次重试
 # （e.g. 3 次）」。但这里长期写的是 3，配合 range(1, MAX_ATTEMPTS + 1) 实际跑
@@ -62,9 +64,17 @@ class P1NL2SQLAgent:
         example_retriever: ExampleRetriever | None = None,
         metric_router: MetricRouter | None = None,
         tag_route_on_trace: bool = False,
+        schema_yaml_path: "Path | None" = None,
+        value_index: "ValueIndex | None" = None,
     ):
         self.dialect = dialect
-        self.loader = SchemaLoader()
+        # 值检索（CHESS IR 的 retrieve_entity 简化版）：把问题里的自然表述映射回库内
+        # 实际取值及其所属列。默认读离线快照；快照缺失时 ValueIndex 退化成空索引，
+        # 该能力静默关闭而不影响 P1 主链路。
+        self.value_index = (
+            value_index if value_index is not None else ValueIndex.from_cache(DEFAULT_CACHE_PATH)
+        )
+        self.loader = SchemaLoader(yaml_path=schema_yaml_path)
         self.loader.load()
         self.loader.build_index()
         self.schema_linker = SchemaLinker(loader=self.loader, top_k=top_k)
@@ -166,7 +176,10 @@ class P1NL2SQLAgent:
         if not matches:
             raise RuntimeError(f"SchemaLinker 未召回任何表，question: {question!r}")
         top_names = [m.name for m in matches]
-        schema_ddl = "\n\n".join(self.loader.get_ddl_text(name) for name in top_names)
+        value_hits = self.value_index.lookup(question)
+        schema_ddl = "\n\n".join(
+            self.loader.get_ddl_text(name, value_hits=value_hits) for name in top_names
+        )
 
         # Q-SQL few-shot 检索：一次调用，供本次 run 里所有 generate() 复用
         few_shot_pairs: list[tuple[str, str]] = []

@@ -69,14 +69,29 @@ class SchemaLoader:
                 return d
         raise KeyError(f"未找到表 {table_name}")
 
-    def get_ddl_text(self, table_name: str) -> str:
-        """把表元数据格式化成给 LLM 看的 DDL 风格文本。"""
+    def get_ddl_text(self, table_name: str, value_hits: list | None = None) -> str:
+        """把表元数据格式化成给 LLM 看的 DDL 风格文本。
+
+        `value_hits` 是 ValueIndex 对本次问题检索到的库内实际取值（ValueHit 列表，
+        可含其他表的命中，本方法自行过滤）。命中的取值以 `-- examples:` 挂在对应列后，
+        用途是告诉模型「这个词在库里长这样、存在哪一列」——例如问题里的「上海」实际
+        落在 dim_branch.province 而非 city。只注入命中项，不灌整列枚举。
+        """
         d = self.get_doc(table_name)
+        examples: dict[str, list[str]] = {}
+        for hit in value_hits or []:
+            if hit.table == table_name:
+                examples.setdefault(hit.column, []).append(hit.value)
+
         lines = [f"-- {d.description}（domain: {d.domain}）"]
         lines.append(f"CREATE TABLE {d.name} (")
         col_lines = []
         for c in d.columns:
-            col_lines.append(f"    {c['name']} {c['type']}  -- {c['description']}")
+            line = f"    {c['name']} {c['type']}  -- {c['description']}"
+            hit_values = examples.get(c["name"])
+            if hit_values:
+                line += "  -- examples: " + ", ".join(hit_values)
+            col_lines.append(line)
         lines.append(",\n".join(col_lines))
         lines.append(f"    PRIMARY KEY ({d.primary_key})")
         lines.append(");")

@@ -9,13 +9,13 @@ tables:
     description: 机构（分行/支行）维度表，树形结构
     primary_key: branch_id
     columns:
-      - {name: branch_id, type: VARCHAR(16), description: "机构编号，业务主键（如 BR_SH_001 或 BR_CITY_0006）"}
-      - {name: branch_name, type: VARCHAR(64), description: "机构名称（如 上海分行）"}
+      - {name: branch_id, type: VARCHAR(16), description: "机构编号，业务主键。格式 BR_<层级>_<序号>：BR_HEAD_0000 / BR_PROV_0003 / BR_CITY_0006 / BR_SUB_0001"}
+      - {name: branch_name, type: VARCHAR(64), description: "机构名称（如 浦东分行、杭州分行）", value_index: true}
       - {name: branch_level, type: VARCHAR(16), description: "机构层级：HEAD 总行 / PROVINCE 省分行 / CITY 城分行 / SUBBRANCH 支行"}
       - {name: parent_branch_id, type: VARCHAR(16), description: "上级机构编号"}
       - {name: region, type: VARCHAR(16), description: "大区：华东/华北/华南/华中/西南/西北/东北"}
-      - {name: province, type: VARCHAR(32), description: "所在省份"}
-      - {name: city, type: VARCHAR(32), description: "所在城市"}
+      - {name: province, type: VARCHAR(32), description: "所在省份（注意：直辖市如 上海/北京 是 province，其下的 浦东/朝阳 才是 city）", value_index: true}
+      - {name: city, type: VARCHAR(32), description: "所在城市", value_index: true}
       - {name: open_date, type: DATE, description: "机构开业日期"}
       - {name: is_active, type: BOOLEAN, description: "是否存续"}
     embed_text: |
@@ -57,10 +57,10 @@ tables:
     description: 存款/贷款/理财/基金/保险/卡产品
     primary_key: product_id
     columns:
-      - {name: product_id, type: VARCHAR(16), description: "产品编号（如 PROD_FIN_AX90）"}
-      - {name: product_name, type: VARCHAR(64), description: "产品名称"}
+      - {name: product_id, type: VARCHAR(16), description: "产品编号，格式 PROD_<大类前缀>_<4 位序号>，如 PROD_DEP_0000（存款）、PROD_WEA_0003（理财）"}
+      - {name: product_name, type: VARCHAR(64), description: "产品名称", value_index: true}
       - {name: product_category, type: VARCHAR(16), description: "产品大类：DEPOSIT 存款 / LOAN 贷款 / WEALTH 理财 / FUND 基金 / INSURANCE 保险 / CARD 银行卡"}
-      - {name: product_subcategory, type: VARCHAR(32), description: "产品子类（活期/定期/T+0/封闭式 等）"}
+      - {name: product_subcategory, type: VARCHAR(32), description: "产品子类（活期存款/定期存款/短期理财/股票基金 等）", value_index: true}
       - {name: risk_level, type: VARCHAR(8), description: "风险等级：R1 低 / R2 中低 / R3 中 / R4 中高 / R5 高"}
       - {name: term_days, type: INT, description: "产品期限（天），活期为 NULL"}
       - {name: expected_return_rate, type: "NUMERIC(8,4)", description: "预期年化收益率（小数 0.0285 表示 2.85%）"}

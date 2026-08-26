@@ -232,3 +232,78 @@ evaluation_questions:
       - calculated_fields: "Agent 是否计算了百分比变化"
       - complex_aggregation: "Agent 是否使用了条件聚合（CASE WHEN + AVG）而非取端点"
       - ordering_and_limit: "Agent 是否按变化幅度排序并限制行数"
+
+  # ============================================================
+  # 值检索类题目（2026-08-26 新增）
+  #
+  # 与 q001~q008 的关键差异：**问题里不带任何数据库编码**。原有 8 题中有 5 题
+  # 把机构编码直接写进了问题（如「上海分行（BR_CITY_0006）」），等于替 agent
+  # 把「用户说的词 → 库里存的值」这一步做掉了，因此那 8 题测不到值检索能力。
+  #
+  # 这 3 题各自卡住一个真实的映射难点：
+  #   q009 「上海」在库里是 province 的取值，不是 city，也不是某个 branch_name
+  #   q010 「杭州分行」要反查 branch_id 才能过滤客户
+  #   q011 「短期理财」是 product_subcategory 的取值，不是 product_category（那里存 WEALTH）
+  #
+  # 基线可比性：q001~q008 一字未动。跨 run 比对请用「原 8 题」口径，
+  # 与 baseline_p1_eval_2026-08-15.json（avg 0.965）对齐；全量 11 题是新口径。
+  # ============================================================
+
+  - id: precision_q009
+    question: |
+      统计上海地区各家分行的客户数量，返回分行名称和客户数，按客户数从多到少排序。
+    expected_sql: |
+      SELECT b.branch_name, COUNT(c.customer_id) AS customer_count
+      FROM dim_branch b
+      JOIN dim_customer c ON c.branch_id = b.branch_id
+      WHERE b.province = '上海'
+      GROUP BY b.branch_name
+      ORDER BY customer_count DESC
+    expected_result_columns: [branch_name, customer_count]
+    expected_filters:
+      - province: 上海
+    expected_result_count:
+      min: 4
+      max: 4
+    evaluation_criteria:
+      - value_grounding: "「上海」是否落到 dim_branch.province，而不是 city 或 branch_name 模糊匹配"
+      - join_accuracy: "是否正确 join dim_branch 与 dim_customer"
+      - aggregation_function: "是否按分行分组计数并正确排序"
+
+  - id: precision_q010
+    question: |
+      杭州分行有多少个大众层级的客户？
+    expected_sql: |
+      SELECT COUNT(*) AS customer_count
+      FROM dim_customer c
+      JOIN dim_branch b ON c.branch_id = b.branch_id
+      WHERE b.branch_name = '杭州分行'
+        AND c.customer_tier = 'MASS'
+    expected_result_columns: []
+    expected_filters:
+      - branch_name: 杭州分行
+      - customer_tier: MASS
+    expected_result_count:
+      min: 1
+      max: 1
+    evaluation_criteria:
+      - value_grounding: "是否用 branch_name='杭州分行' 反查机构，而不是猜一个 branch_id"
+      - enum_mapping: "「大众层级」是否映射到 customer_tier='MASS' 这个英文枚举"
+
+  - id: precision_q011
+    question: |
+      列出所有短期理财产品的产品名称和风险等级。
+    expected_sql: |
+      SELECT product_name, risk_level
+      FROM dim_product
+      WHERE product_subcategory = '短期理财'
+      ORDER BY product_name
+    expected_result_columns: [product_name, risk_level]
+    expected_filters:
+      - product_subcategory: 短期理财
+    expected_result_count:
+      min: 5
+      max: 5
+    evaluation_criteria:
+      - value_grounding: "「短期理财」是否落到 product_subcategory，而不是 product_category='WEALTH'"
+      - column_selection: "是否只返回产品名称与风险等级两列"

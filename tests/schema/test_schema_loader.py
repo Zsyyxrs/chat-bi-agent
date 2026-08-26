@@ -66,3 +66,26 @@ def test_get_ddl_text_formats_columns(fake_yaml):
     assert "id INT" in ddl
     assert "name VARCHAR" in ddl
     assert "主键" in ddl  # 列 description 作为 SQL 注释保留
+
+
+def test_get_ddl_text_appends_matched_values_as_examples(fake_yaml):
+    """命中的库内取值以 CHESS 风格的 `-- examples:` 挂在对应列后面。"""
+    from chat_bi_agent.schema.value_index import ValueHit
+
+    loader = SchemaLoader(yaml_path=fake_yaml)
+    loader.load()
+
+    ddl = loader.get_ddl_text("t1", value_hits=[ValueHit("t1", "name", "上海")])
+
+    assert "name VARCHAR  -- 名称  -- examples: 上海" in ddl
+    assert "-- examples" not in ddl.split("name VARCHAR")[0]  # 不该污染其他列
+
+
+def test_get_ddl_text_ignores_hits_belonging_to_other_tables(fake_yaml):
+    loader = SchemaLoader(yaml_path=fake_yaml)
+    loader.load()
+    from chat_bi_agent.schema.value_index import ValueHit
+
+    ddl = loader.get_ddl_text("t1", value_hits=[ValueHit("t2", "id", "999")])
+
+    assert "-- examples" not in ddl
