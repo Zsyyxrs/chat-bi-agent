@@ -1099,6 +1099,103 @@ k=8 相对实际需要有 4 倍余量。真实语义相近的指标（`deposit_b
 **Trace**：代码见本次提交；测试 `tests/p1/test_metric_resolver.py`（全局 join 6 例）
 + `tests/p1/test_metric_router.py`（候选裁剪 6 例）+ `tests/eval/`（CLI 透传 2 例）
 
+### Update 2026-08-27：catalog 静态门禁 + 血缘 + 全局 join 剪枝
+
+兑现 [Update 2026-08-12](#adr-013) 结尾留的那条教训——原话是「**catalog 类改动必须
+配一个「全组合真打 DB」的回归扫描**」。当时 6 指标 × 全部 dim/filter 共 48 个组合里
+18 个是坏的（`fbd.account_type` 列不在 fact 表上、`ft.channel` 实际叫
+`transaction_channel`、`dc.is_active` 是 boolean 却声明成 string），全靠真打 PG 才
+暴露。那条跟进项从那时起一直空着，而指标已从 6 个涨到 18 个、`requires_join` 有 40 处，
+同类错误的暴露面比当时大三倍。
+
+**做成静态的，不是真打 DB。** 对照 `schema/schema_docs.yaml` 而非连接 Postgres——
+代价是漏掉「schema_docs 与真库不同步」这一层（另有 `tests/schema/` 守），收益是它能
+当常规单测跑，每次改 catalog 都自动过一遍，而不是靠人记得跑扫描。这个取舍是本次的
+核心决定：**能天天跑的弱检查 > 需要环境的强检查**。
+
+**新增**：
+
+- `src/chat_bi_agent/agents/p1/metric_lineage.py`
+  - `validate_catalog(catalog, loader)` → `list[CatalogIssue]`，比对 catalog 里每一处
+    **带别名前缀的列引用**与 schema。裸标识符不查——混着 SQL 函数名和关键字，判不准，
+    宁可漏报也不误报。
+  - `metric_lineage(metric)` → `Lineage(required_tables, conditional_tables)`
+- `tests/p1/test_metric_lineage.py` — 11 例，含真实 catalog 门禁
+- `scripts/check_metric_catalog.py` — 同一套检查的人读版 + 血缘表
+
+**门禁验证过能咬人**：把当年那两个 bug 注回 `config/metrics.yaml`，2 处注入 →
+6 个指标全部捕获（`deposit_balance` / `loan_balance` / `total_balance` 命中
+`account_type`，`transaction_amount` / `transaction_count` / `avg_transaction_amount`
+命中 `channel`）。**不验证门禁会不会红的门禁不算门禁**——与 ADR-013 那次「单测全绿
+但 catalog 全坏」是同一个道理。
+
+**血缘分两层，不拍平**：
+
+```
+deposit_balance
+  必然  fct_balance_daily, dim_account
+  条件  dim_branch    ← dim:branch_name, dim:branch_city, filter:branch_city, filter:branch_name
+  条件  dim_customer  ← dim:customer_tier, filter:customer_tier
+```
+
+`dim_account` 在「必然」里是因为 hard_filter 挂在它上面，改它影响该指标的**每一次**
+查询；改 `dim_branch` 只影响用了 branch 维度的那部分。拍平成一个表清单会让影响分析
+失真，这是分层的唯一理由。
+
+**顺带挖出并修掉的结构问题：全局 join 注册表过度挂载**
+
+校验第一版报了 16 处错，查下来**不是真错**——[Update 2026-08-14](#adr-013) 引入的全局
+join 注册表会把每条 join 挂到**每个** metric 上，而 `render_sql_from_spec` 只拼
+`hard_filter_joins` 与被选中 dim/filter 的 `requires_join`。没人引用的 join 永远
+拼不出来，所以不是当前的错。
+
+但它们也不是无害的。根因是**全局模板假设每个 fact 都带 account_id / branch_id /
+customer_id / product_id，而这只对真 fct 表成立**：
+
+| fact 表 | account_id | branch_id | customer_id | product_id |
+|---|---|---|---|---|
+| fct_balance_daily / fct_holding / fct_transaction | 有 | 有 | 有 | 有 |
+| fct_risk_event | 有 | 有 | 有 | — |
+| fct_campaign_response | — | 有 | 有 | 有 |
+| dim_customer | — | 有 | 有 | — |
+| dim_product | — | — | — | 有 |
+| dim_branch | — | 有 | — | — |
+
+`customer_count`（fact 是 `dim_customer`）身上挂着 `JOIN dim_account da ON
+dc.account_id = da.account_id`，而 `dim_customer` 没有 `account_id` 列。这些 join
+不是「暂时没用」，是**结构上不可能**——谁给对应维度加一条 `requires_join` 就会炸。
+
+**改法**：`_resolve_joins` 增加 `referenced` 参数（= `hard_filter_joins` ∪ 各
+dim/filter 的 `requires_join`，与 `needed_joins` 同源），**没被引用的全局 join 不挂**。
+两个边界：
+
+- **本地 joins 不剪**——那是作者显式写的逃生舱，意图明确；没人引用时由校验器报成
+  `severity="latent"`
+- **不改写作方式**——新增一个 `requires_join: [branch]` 的维度时 branch 自动变可达，
+  照常挂上。剪枝只影响从来没人提过的那些
+
+改后 18 个指标的 join 总数 25 条，`product_count` 归零（它本来就不需要任何 join），
+16 处潜伏项清零。
+
+**这次没做、且建议不做的：指标版本管理**
+
+排期里与血缘并列的一项。结论是**划掉**：`config/metrics.yaml` 在 git 里，
+`git log -p config/metrics.yaml` 就是带作者和时间的口径变更台账；真正需要的
+`effective_from` / `effective_to`（历史数据按旧口径解释）在合成 seed 数据上没有
+可验证的场景；且它的难点在流程（谁批、怎么留痕）不在代码。等有真实口径变更时再说。
+参照 Snowflake `AI_VERIFIED_QUERIES` 的 `VERIFIED_AT` / `VERIFIED_BY` 是那时的抄法。
+
+**已知局限**：
+
+- 只查 `alias.column` 形式的引用，裸列名不查
+- `schema_docs.yaml` 故意省略了 `dim_*` 的 `create_time` / `update_time`，catalog 若
+  引用这两列会误报（当前没有引用）
+- 校验的是「列存在」，不校验类型——`dc.is_active` 那类 boolean/string 错配仍需
+  `test_is_active_filter_typed_boolean_not_string` 这种针对性断言兜
+
+**Trace**：代码见本次提交；测试 `tests/p1/test_metric_lineage.py`（11 例）+
+`tests/p1/test_metric_resolver.py` 新增剪枝 3 例；全量 664 passed / 55 skipped
+
 ---
 
 <a id="adr-014"></a>
