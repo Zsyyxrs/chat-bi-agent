@@ -85,7 +85,10 @@ def _join_alias(clause: str) -> str | None:
 
 
 def _resolve_joins(
-    global_joins: dict[str, str], local_joins: dict[str, str], fact_alias: str
+    global_joins: dict[str, str],
+    local_joins: dict[str, str],
+    fact_alias: str,
+    referenced: set[str],
 ) -> dict[str, str]:
     """全局 join 模板（{fact} 占位）+ metric 本地 joins → 该 metric 的有效 join 表。
 
@@ -93,10 +96,18 @@ def _resolve_joins(
     - 别名与 fact_alias 撞车的全局 join 直接丢弃：那是自连自己（例如 fact 表本身
       就是 dim_customer 时的 customer join），拼出来的 SQL 语义是错的。真需要时
       metric 可以自己写一条本地 join 覆盖。
-    - 本地 joins 优先级最高，是不规则 join 的逃生舱
+    - **没被 `referenced` 引用的全局 join 也丢弃**。全局模板假设每个 fact 都带
+      account_id / branch_id / customer_id / product_id，可这只对真 fct 表成立；
+      dim_customer 这类当 fact 用的表拼出来的是 `dc.account_id = da.account_id`，
+      列根本不存在。既然没人 `requires_join` 它，挂着只是等着炸。
+      `referenced` = hard_filter_joins ∪ 各 dim/filter 的 requires_join，与
+      `render_sql_from_spec` 里的 needed_joins 同源，所以剪掉的一定拼不出来。
+    - 本地 joins 优先级最高且**不剪**——那是作者显式写的逃生舱，意图明确
     """
     effective: dict[str, str] = {}
     for name, template in global_joins.items():
+        if name not in referenced:
+            continue
         clause = template.replace("{fact}", fact_alias)
         if _join_alias(clause) == fact_alias:
             continue
@@ -136,6 +147,13 @@ class MetricCatalog:
                 )
                 for fid, v in (m.get("filter_catalog") or {}).items()
             }
+            hard_filter_joins = m.get("hard_filter_joins") or []
+            referenced = set(hard_filter_joins)
+            for d in dim_catalog.values():
+                referenced |= set(d.requires_join)
+            for f in filter_catalog.values():
+                referenced |= set(f.requires_join)
+
             ms.append(
                 Metric(
                     id=m["id"],
@@ -147,10 +165,12 @@ class MetricCatalog:
                     metric_alias=m.get("metric_alias", "metric_value"),
                     hard_filters=m.get("hard_filters") or [],
                     date_column=m.get("date_column"),
-                    joins=_resolve_joins(global_joins, m.get("joins") or {}, m["fact_alias"]),
+                    joins=_resolve_joins(
+                        global_joins, m.get("joins") or {}, m["fact_alias"], referenced
+                    ),
                     dim_catalog=dim_catalog,
                     filter_catalog=filter_catalog,
-                    hard_filter_joins=m.get("hard_filter_joins") or [],
+                    hard_filter_joins=hard_filter_joins,
                 )
             )
         return cls(metrics=ms, joins=global_joins)

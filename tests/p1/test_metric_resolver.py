@@ -742,3 +742,63 @@ def test_production_yaml_uses_global_joins_registry():
     sql = render_sql_from_spec(MetricSpec(metric_id="deposit_balance", dims=["branch_city"]), cat)
     assert "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id" in sql
     assert "JOIN dim_account da ON fbd.account_id = da.account_id" in sql
+
+
+# ---------------------- 全局 join 的可达性剪枝 ----------------------
+
+
+_GLOBAL_JOIN_YAML = """
+version: 1
+joins:
+  account: JOIN dim_account da ON {fact}.account_id = da.account_id
+  branch: JOIN dim_branch dbr ON {fact}.branch_id = dbr.branch_id
+metrics:
+  - id: customer_count
+    display_name: 客户数
+    aliases: [客户数]
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: COUNT(dc.customer_id)
+    metric_alias: cnt
+    hard_filters: []
+    joins: {}
+    dim_catalog:
+      branch_city: {select_expr: "dbr.city", alias: city, requires_join: [branch]}
+    filter_catalog: {}
+"""
+
+
+def test_unreferenced_global_join_is_not_attached(tmp_path):
+    """全局 join 只在被引用时才挂到 metric 上。
+
+    全局模板假设每个 fact 都有 account_id / branch_id / customer_id / product_id，
+    但只有真 fct 表成立。dim_customer 当 fact 用时没有 account_id，那条 join 拼出来
+    必然无效——既然没人 requires_join 它，就不该挂上去。
+    """
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(_GLOBAL_JOIN_YAML, encoding="utf-8")
+    m = MetricCatalog.from_yaml(yml).get("customer_count")
+    assert sorted(m.joins) == ["branch"]
+
+
+def test_global_join_attached_once_referenced_by_hard_filter(tmp_path):
+    """被 hard_filter_joins 引用就必须挂上——剪枝不能剪掉真正要用的。"""
+    body = _GLOBAL_JOIN_YAML.replace(
+        "    hard_filters: []", "    hard_filters: []\n    hard_filter_joins: [account]"
+    )
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(body, encoding="utf-8")
+    m = MetricCatalog.from_yaml(yml).get("customer_count")
+    assert sorted(m.joins) == ["account", "branch"]
+
+
+def test_local_join_kept_even_when_unreferenced(tmp_path):
+    """metric 自己写的 join 是逃生舱，作者意图明确，不剪。"""
+    body = _GLOBAL_JOIN_YAML.replace(
+        "    joins: {}",
+        "    joins:\n      odd: JOIN dim_date dd ON dc.open_date = dd.dt",
+    )
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(body, encoding="utf-8")
+    m = MetricCatalog.from_yaml(yml).get("customer_count")
+    assert sorted(m.joins) == ["branch", "odd"]
