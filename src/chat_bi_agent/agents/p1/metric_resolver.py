@@ -190,6 +190,9 @@ class MetricSpec:
     dims: list[str] = field(default_factory=list)
     filters: list[dict[str, Any]] = field(default_factory=list)
     time_window: dict[str, str] | None = None  # {"start": "2026-05-01", "end": "2026-05-31"}
+    # {"by": "metric" | <dim_id>, "desc": bool}；by 只能指向本次查询已选出的东西
+    order_by: dict[str, Any] | None = None
+    limit: int | None = None
 
 
 # ---------------------------- SQL 拼装 ----------------------------
@@ -315,6 +318,31 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     if group_by_parts:
         lines.append("GROUP BY " + ", ".join(group_by_parts))
 
+    # 5. ORDER BY / LIMIT
+    #    排序目标刻意限死在「本次查询已经选出来的东西」——metric 本身或 spec.dims
+    #    里的维度。允许任意表达式等于把 SQL 片段的控制权交回 LLM，那就没有
+    #    governed 模板可言了。
+    if spec.order_by:
+        by = spec.order_by.get("by")
+        if by == "metric":
+            order_expr = metric.metric_alias
+        elif by in spec.dims:
+            order_expr = metric.dim_catalog[by].select_expr
+        else:
+            raise MetricResolverError(
+                f"order_by {by!r} 既不是 'metric' 也不在 spec.dims 里——"
+                "聚合查询下按没选出来的列排序语义不成立"
+            )
+        direction = "DESC" if spec.order_by.get("desc", True) else "ASC"
+        lines.append(f"ORDER BY {order_expr} {direction}")
+
+    if spec.limit is not None:
+        # 这是整个模板里唯一一处把数字直接拼进 SQL 文本的地方，挡严一点。
+        # bool 是 int 的子类，得单独排除，否则 limit=True 会渲染成 LIMIT 1。
+        if isinstance(spec.limit, bool) or not isinstance(spec.limit, int) or spec.limit < 1:
+            raise MetricResolverError(f"limit 必须是正整数，收到 {spec.limit!r}")
+        lines.append(f"LIMIT {spec.limit}")
+
     return "\n".join(lines)
 
 
@@ -385,10 +413,14 @@ def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | N
         "   宁可退回 NL2SQL，也不要丢掉约束后拼一个「看起来对」的查询。",
         "   反例：问「杭州和南京两个分行的客户数」却输出 dims=['branch_city'] 且不带 "
         "branch 过滤——这是按全部城市分组，答的是另一个问题",
-        "6. **spec 表达不了排序与取顶**（没有 ORDER BY / LIMIT 字段）。题目只要涉及",
-        "   「最高/最低」「前 N 个」「排名」「Top」「哪一个最…」，**一律返回 metric_id=null**。",
-        "   反例：问「存款余额最高的前 5 个分行」却输出 dims=['branch_id'] 不带取顶——",
-        "   那是在返回全部分行，答的是另一个问题",
+        "6. **排序与取顶用 order_by / limit 表达，不要丢掉**：",
+        "   - order_by 形如 {by, desc}；by 只能填 'metric'（按指标值排）"
+        "或 **dims 里已经选了的**某个维度名",
+        "   - limit 填正整数",
+        "   - 例：「存款余额最高的前 5 个分行」→ dims=['branch_id']、"
+        "order_by={'by':'metric','desc':true}、limit=5",
+        "   - 「按金额倒序」只排序不取顶 → 填 order_by，不填 limit",
+        "   要按一个没放进 dims 的列排序时，**返回 metric_id=null**——聚合查询里那种排序语义不成立",
         "7. **val 必须落在 col 的值域里**：ID 列传 ID，名称列传名称，不要混。",
         "   题面常写成「杭州（BR_CITY_0000）」这种「名称（ID）」形式——",
         "   选 branch_id 就传 'BR_CITY_0000'，选 branch_city 就传 '杭州'。",
@@ -396,6 +428,11 @@ def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | N
         "8. filter 是 enum 类型时，val **必须**用目录里给的英文枚举代码，禁止用中文",
         "9. time_window 形如 {start: 'YYYY-MM-DD', end: 'YYYY-MM-DD'}；只有指标支持时间窗才填",
         "10. dims 只能选目录里列出的",
+        "11. **一次只能产出一个数**。题目要同时返回两个及以上的数——"
+        "「A 和 B 分别是多少」「总数和已转化数」「占比/百分比/比率」——",
+        "   **一律返回 metric_id=null**。dims 是分组，不是并列的第二个数。",
+        "   反例：问「被触达的客户总数和已转化客户数分别是多少」却输出 dims=['response_type']——",
+        "   那是按响应类型分组的一张明细表，不是问题要的两个数",
         "",
         "可用 metric 目录：",
     ]
@@ -427,7 +464,8 @@ def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | N
     lines.append(
         '{"metric_id":"deposit_balance","dims":["branch_city"],'
         '"filters":[{"col":"customer_tier","op":"=","val":"HIGH_NET_WORTH"}],'
-        '"time_window":{"start":"2026-05-01","end":"2026-05-31"}}'
+        '"time_window":{"start":"2026-05-01","end":"2026-05-31"},'
+        '"order_by":{"by":"metric","desc":true},"limit":5}'
     )
     lines.append("```")
     return "\n".join(lines)
@@ -454,6 +492,8 @@ def _parse_spec(raw: str) -> MetricSpec:
         dims=list(data.get("dims") or []),
         filters=list(data.get("filters") or []),
         time_window=data.get("time_window"),
+        order_by=data.get("order_by"),
+        limit=data.get("limit"),
     )
 
 
