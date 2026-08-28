@@ -8,6 +8,11 @@
     --source langfuse  从 Langfuse trace 拉 score=1 的 (question, sql)
     --source both      合并去重（默认）
 - **只灌 pass 样本**：确定这条 SQL 是"能正确解出该问题"的 → 不能进负例
+- **gold 执行门禁**（默认开）：只认 👍 是不够的。每条 gold 打到真库，报错/空集/
+  聚合没匹配到任何行的一律拒收。`d525ae0fc0e3` 是被 👍 过、进了池子、又在
+  2026-08-28 被人工剔除的样本——它的 gold 返回 `alert_count = 0`，因为
+  `dim_branch.city` 根本没有 '上海'。这种样本当 few-shot 有害：它教模型去
+  filter 一个库里不存在的值
 - **样本量说明**：写这个脚本时 P1 eval 只有 6 gold 题——n 太小做 A/B 无意义；
   真正等 Langfuse 攒够 30+ 条用户 👍 样本后才有统计意义（见 ADR-012 后续跟进）
 
@@ -71,6 +76,14 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="不 embed 不写盘，只报告将会灌入几条",
+    )
+    p.add_argument(
+        "--no-verify-gold",
+        action="store_true",
+        help=(
+            "跳过 gold 执行门禁（默认开启：把每条 gold 打到真库，什么都没解出来的不收）。"
+            "只在没有 PG 可连时用，且会打印警告——关掉它就等于回到「只认 👍」"
+        ),
     )
     return p.parse_args()
 
@@ -235,6 +248,50 @@ def dedup_by_id(examples: list[QAExample]) -> list[QAExample]:
     return out
 
 
+def gold_yielded_nothing(rows: list[dict] | None, err: str | None) -> str | None:
+    """判断这条 gold 是不是「什么都没解出来」。返回原因，None = 有数据。
+
+    三种都算没解出来：
+
+    1. SQL 报错
+    2. 结果集为空
+    3. **单行、且每个值都是 0 / NULL** —— 聚合匹配不到任何行时长这样。
+       `d525ae0fc0e3` 就是这一类：`COUNT(...)` 返回单行 `{'alert_count': 0}`，
+       只判空集会漏掉它，而它恰恰是这个门禁存在的全部理由。
+
+    第 3 条只在单行时生效。分组结果里某一组是 0 是正常的（「各渠道笔数」里
+    某渠道为 0），多行一律放行，不误杀。
+    """
+    if err is not None:
+        return f"SQL 报错：{err}"
+    if not rows:
+        return "结果集为空——SQL 跑得通但没有任何行匹配"
+    if len(rows) == 1 and all(v in (0, None) or v == 0 for v in rows[0].values()):
+        return f"聚合没有匹配到任何行（单行全零/全空）：{rows[0]}"
+    return None
+
+
+def reject_empty_gold(examples, execute_fn):
+    """把 gold 打到真库，滤掉什么都没解出来的。返回 (留下, [(丢掉, 原因)])。
+
+    **只认 👍 是不够的。** `d525ae0fc0e3` 是被 👍 过、进了池子、又在 2026-08-28
+    被人工剔除的样本——有人给一个返回 0 行的答案点了赞。返回空的样本当 few-shot
+    是有害的：它教模型去 filter 一个库里不存在的值。
+
+    `execute_fn` 抛异常时**不接**，直接让它冒上去。探针连不上就静默放行等于门禁
+    自动失效——宁可让 nightly cron 失败，也不要往池子里灌未经验证的样本。
+    """
+    kept, rejected = [], []
+    for ex in examples:
+        rows, err = execute_fn(ex.sql)
+        reason = gold_yielded_nothing(rows, err)
+        if reason is None:
+            kept.append(ex)
+        else:
+            rejected.append((ex, reason))
+    return kept, rejected
+
+
 def batch_embed(examples: list[QAExample], batch_size: int) -> None:
     """就地填充 examples 的 embedding。"""
     from chat_bi_agent.llm import qwen_client
@@ -272,6 +329,28 @@ def main() -> int:
             flush=True,
         )
         return 0
+
+    # gold 执行门禁：放在 embedding 之前，被拒的样本一分钱 embedding 都不花
+    if args.no_verify_gold:
+        print(
+            "[prod-pool] ⚠ gold 执行门禁已关闭——只认 👍，不验证 SQL 真的解出了东西。"
+            "d525ae0fc0e3 就是这么混进池子的",
+            flush=True,
+        )
+    else:
+        from chat_bi_agent.agents.shared.sql_executor import SQLExecutor
+
+        print(f"[prod-pool] gold 执行门禁：把 {len(unique)} 条 gold 打到真库 ...", flush=True)
+        unique, rejected = reject_empty_gold(unique, SQLExecutor().execute)
+        if rejected:
+            print(f"[prod-pool] ✗ 拒收 {len(rejected)} 条（gold 什么都没解出来）：")
+            for ex, reason in rejected:
+                print(f"    {ex.example_id} [{ex.source}] {ex.question[:44]}")
+                print(f"      {reason}")
+        print(f"[prod-pool] ✓ 通过 {len(unique)} 条", flush=True)
+        if not unique:
+            print("[prod-pool] 全部被拒，无样本可灌入")
+            return 0
 
     if args.dry_run:
         print("[prod-pool] --dry-run：跳过 embedding + 落盘")
