@@ -145,7 +145,7 @@ tables:
       - {name: account_id, type: VARCHAR(32), description: "本方账号"}
       - {name: customer_id, type: VARCHAR(16), description: "本方客户号"}
       - {name: counter_account_id, type: VARCHAR(32), description: "对方账号"}
-      - {name: transaction_type, type: VARCHAR(16), description: "交易类型：DEPOSIT 存入 / WITHDRAW 支取 / TRANSFER 转账 / PAYMENT 消费 / INTEREST 利息 / FEE 手续费 / REPAYMENT 还款"}
+      - {name: transaction_type, type: VARCHAR(16), description: "交易类型：DEPOSIT 存入 / WITHDRAW 支取 / TRANSFER 转账 / PAYMENT 消费 / INTEREST 利息 / FEE 手续费 / LOAN 贷款相关"}
       - {name: transaction_channel, type: VARCHAR(16), description: "交易渠道：MOBILE 手机银行 / INTERNET 网上银行 / COUNTER 柜面 / ATM / AGENT 代理 / API"}
       - {name: amount, type: NUMERIC(18,2), description: "交易金额（元，正值）"}
       - {name: currency, type: VARCHAR(8), description: "交易币种"}
@@ -156,7 +156,7 @@ tables:
     embed_text: |
       表名 fct_transaction：交易流水事实表，账户级笔笔交易
       业务域：交易
-      关键列：dt（交易日期，分区键）、transaction_time、account_id、customer_id、transaction_type（DEPOSIT/WITHDRAW/TRANSFER/PAYMENT/INTEREST/FEE/REPAYMENT）、transaction_channel（MOBILE/INTERNET/COUNTER/ATM/AGENT/API）、amount、branch_id、product_id
+      关键列：dt（交易日期，分区键）、transaction_time、account_id、customer_id、transaction_type（DEPOSIT/WITHDRAW/TRANSFER/PAYMENT/INTEREST/FEE/LOAN）、transaction_channel（MOBILE/INTERNET/COUNTER/ATM/AGENT/API）、amount、branch_id、product_id
       典型用途：按日期/类型/渠道查询交易；现金支取/存入/转账统计；春节/节假日交易峰值分析；某日某分行交易明细
 
   - name: fct_balance_daily

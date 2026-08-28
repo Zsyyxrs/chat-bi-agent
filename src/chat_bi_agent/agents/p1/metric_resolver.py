@@ -85,7 +85,10 @@ def _join_alias(clause: str) -> str | None:
 
 
 def _resolve_joins(
-    global_joins: dict[str, str], local_joins: dict[str, str], fact_alias: str
+    global_joins: dict[str, str],
+    local_joins: dict[str, str],
+    fact_alias: str,
+    referenced: set[str],
 ) -> dict[str, str]:
     """全局 join 模板（{fact} 占位）+ metric 本地 joins → 该 metric 的有效 join 表。
 
@@ -93,10 +96,18 @@ def _resolve_joins(
     - 别名与 fact_alias 撞车的全局 join 直接丢弃：那是自连自己（例如 fact 表本身
       就是 dim_customer 时的 customer join），拼出来的 SQL 语义是错的。真需要时
       metric 可以自己写一条本地 join 覆盖。
-    - 本地 joins 优先级最高，是不规则 join 的逃生舱
+    - **没被 `referenced` 引用的全局 join 也丢弃**。全局模板假设每个 fact 都带
+      account_id / branch_id / customer_id / product_id，可这只对真 fct 表成立；
+      dim_customer 这类当 fact 用的表拼出来的是 `dc.account_id = da.account_id`，
+      列根本不存在。既然没人 `requires_join` 它，挂着只是等着炸。
+      `referenced` = hard_filter_joins ∪ 各 dim/filter 的 requires_join，与
+      `render_sql_from_spec` 里的 needed_joins 同源，所以剪掉的一定拼不出来。
+    - 本地 joins 优先级最高且**不剪**——那是作者显式写的逃生舱，意图明确
     """
     effective: dict[str, str] = {}
     for name, template in global_joins.items():
+        if name not in referenced:
+            continue
         clause = template.replace("{fact}", fact_alias)
         if _join_alias(clause) == fact_alias:
             continue
@@ -136,6 +147,13 @@ class MetricCatalog:
                 )
                 for fid, v in (m.get("filter_catalog") or {}).items()
             }
+            hard_filter_joins = m.get("hard_filter_joins") or []
+            referenced = set(hard_filter_joins)
+            for d in dim_catalog.values():
+                referenced |= set(d.requires_join)
+            for f in filter_catalog.values():
+                referenced |= set(f.requires_join)
+
             ms.append(
                 Metric(
                     id=m["id"],
@@ -147,10 +165,12 @@ class MetricCatalog:
                     metric_alias=m.get("metric_alias", "metric_value"),
                     hard_filters=m.get("hard_filters") or [],
                     date_column=m.get("date_column"),
-                    joins=_resolve_joins(global_joins, m.get("joins") or {}, m["fact_alias"]),
+                    joins=_resolve_joins(
+                        global_joins, m.get("joins") or {}, m["fact_alias"], referenced
+                    ),
                     dim_catalog=dim_catalog,
                     filter_catalog=filter_catalog,
-                    hard_filter_joins=m.get("hard_filter_joins") or [],
+                    hard_filter_joins=hard_filter_joins,
                 )
             )
         return cls(metrics=ms, joins=global_joins)
@@ -170,6 +190,9 @@ class MetricSpec:
     dims: list[str] = field(default_factory=list)
     filters: list[dict[str, Any]] = field(default_factory=list)
     time_window: dict[str, str] | None = None  # {"start": "2026-05-01", "end": "2026-05-31"}
+    # {"by": "metric" | <dim_id>, "desc": bool}；by 只能指向本次查询已选出的东西
+    order_by: dict[str, Any] | None = None
+    limit: int | None = None
 
 
 # ---------------------------- SQL 拼装 ----------------------------
@@ -295,6 +318,31 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     if group_by_parts:
         lines.append("GROUP BY " + ", ".join(group_by_parts))
 
+    # 5. ORDER BY / LIMIT
+    #    排序目标刻意限死在「本次查询已经选出来的东西」——metric 本身或 spec.dims
+    #    里的维度。允许任意表达式等于把 SQL 片段的控制权交回 LLM，那就没有
+    #    governed 模板可言了。
+    if spec.order_by:
+        by = spec.order_by.get("by")
+        if by == "metric":
+            order_expr = metric.metric_alias
+        elif by in spec.dims:
+            order_expr = metric.dim_catalog[by].select_expr
+        else:
+            raise MetricResolverError(
+                f"order_by {by!r} 既不是 'metric' 也不在 spec.dims 里——"
+                "聚合查询下按没选出来的列排序语义不成立"
+            )
+        direction = "DESC" if spec.order_by.get("desc", True) else "ASC"
+        lines.append(f"ORDER BY {order_expr} {direction}")
+
+    if spec.limit is not None:
+        # 这是整个模板里唯一一处把数字直接拼进 SQL 文本的地方，挡严一点。
+        # bool 是 int 的子类，得单独排除，否则 limit=True 会渲染成 LIMIT 1。
+        if isinstance(spec.limit, bool) or not isinstance(spec.limit, int) or spec.limit < 1:
+            raise MetricResolverError(f"limit 必须是正整数，收到 {spec.limit!r}")
+        lines.append(f"LIMIT {spec.limit}")
+
     return "\n".join(lines)
 
 
@@ -365,10 +413,14 @@ def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | N
         "   宁可退回 NL2SQL，也不要丢掉约束后拼一个「看起来对」的查询。",
         "   反例：问「杭州和南京两个分行的客户数」却输出 dims=['branch_city'] 且不带 "
         "branch 过滤——这是按全部城市分组，答的是另一个问题",
-        "6. **spec 表达不了排序与取顶**（没有 ORDER BY / LIMIT 字段）。题目只要涉及",
-        "   「最高/最低」「前 N 个」「排名」「Top」「哪一个最…」，**一律返回 metric_id=null**。",
-        "   反例：问「存款余额最高的前 5 个分行」却输出 dims=['branch_id'] 不带取顶——",
-        "   那是在返回全部分行，答的是另一个问题",
+        "6. **排序与取顶用 order_by / limit 表达，不要丢掉**：",
+        "   - order_by 形如 {by, desc}；by 只能填 'metric'（按指标值排）"
+        "或 **dims 里已经选了的**某个维度名",
+        "   - limit 填正整数",
+        "   - 例：「存款余额最高的前 5 个分行」→ dims=['branch_id']、"
+        "order_by={'by':'metric','desc':true}、limit=5",
+        "   - 「按金额倒序」只排序不取顶 → 填 order_by，不填 limit",
+        "   要按一个没放进 dims 的列排序时，**返回 metric_id=null**——聚合查询里那种排序语义不成立",
         "7. **val 必须落在 col 的值域里**：ID 列传 ID，名称列传名称，不要混。",
         "   题面常写成「杭州（BR_CITY_0000）」这种「名称（ID）」形式——",
         "   选 branch_id 就传 'BR_CITY_0000'，选 branch_city 就传 '杭州'。",
@@ -376,6 +428,11 @@ def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | N
         "8. filter 是 enum 类型时，val **必须**用目录里给的英文枚举代码，禁止用中文",
         "9. time_window 形如 {start: 'YYYY-MM-DD', end: 'YYYY-MM-DD'}；只有指标支持时间窗才填",
         "10. dims 只能选目录里列出的",
+        "11. **一次只能产出一个数**。题目要同时返回两个及以上的数——"
+        "「A 和 B 分别是多少」「总数和已转化数」「占比/百分比/比率」——",
+        "   **一律返回 metric_id=null**。dims 是分组，不是并列的第二个数。",
+        "   反例：问「被触达的客户总数和已转化客户数分别是多少」却输出 dims=['response_type']——",
+        "   那是按响应类型分组的一张明细表，不是问题要的两个数",
         "",
         "可用 metric 目录：",
     ]
@@ -407,7 +464,8 @@ def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | N
     lines.append(
         '{"metric_id":"deposit_balance","dims":["branch_city"],'
         '"filters":[{"col":"customer_tier","op":"=","val":"HIGH_NET_WORTH"}],'
-        '"time_window":{"start":"2026-05-01","end":"2026-05-31"}}'
+        '"time_window":{"start":"2026-05-01","end":"2026-05-31"},'
+        '"order_by":{"by":"metric","desc":true},"limit":5}'
     )
     lines.append("```")
     return "\n".join(lines)
@@ -434,6 +492,8 @@ def _parse_spec(raw: str) -> MetricSpec:
         dims=list(data.get("dims") or []),
         filters=list(data.get("filters") or []),
         time_window=data.get("time_window"),
+        order_by=data.get("order_by"),
+        limit=data.get("limit"),
     )
 
 
@@ -500,6 +560,44 @@ def _classify_metric_error(msg: str) -> str:
     return "unknown_dim"  # 兜底：未识别的 metric 结构错
 
 
+# 能被正则穷举的时间表达。**只剥这些**——「月末」「节假日」「在售」是口径不是
+# 时间点，剥掉会改变问题含义，所以「月」「日」只在数字后面才吃。
+_TIME_MODIFIER_RES = [
+    re.compile(p)
+    for p in (
+        r"\d{4}\s*年\s*(?:上半年|下半年|第[一二三四]季度)?",
+        r"\d{1,2}\s*月(?:末|份)?",
+        r"\d{1,2}\s*日",
+        r"\d{4}-\d{2}-\d{2}",
+        r"第[一二三四]季度",
+        r"上半年|下半年",
+        r"期间|当天",
+        r"目前|当前|现在",
+    )
+]
+
+
+def _strip_time_modifiers(question: str) -> str:
+    """剥掉问题里的时间修饰，用于 prefilter 的第二路 embedding。
+
+    catalog 的 alias 是光秃秃的名词（「存款余额」），真实问题却带一堆时间/地域
+    修饰。整句 embedding 被稀释，「2026 年上半年利息入账总金额是多少？」对
+    「交易金额」只有 0.5929，掉在 0.63 阈值外；剥完升到 0.7392。
+
+    离线实测（2026-08-28，31 条生产池）：13 条未命中里 7 条越过阈值，而原本
+    命中的 18 条 cosine **只升不降**，没有一条掉出。所以这不是变相降阈值——
+    降阈值会同时放大假阳性，这里不会。
+
+    结果只喂给 embedding，不参与任何 SQL 拼装。
+    """
+    stripped = question
+    for pattern in _TIME_MODIFIER_RES:
+        stripped = pattern.sub("", stripped)
+    stripped = stripped.replace("（）", "").replace("()", "")
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    return stripped or question
+
+
 class MetricRouter:
     """catalog embedding prefilter + resolve 的一体化路由层。构造时批量 embed 所有 aliases。"""
 
@@ -535,14 +633,20 @@ class MetricRouter:
 
     def try_route(self, question: str) -> RouteResult:
         """从不抛异常。"""
-        # 1. embed 问题
-        q_vec = self.embed_fn([question])[0]
+        # 1. embed 问题。除整句外再 embed 一遍剥掉时间修饰的版本，两路取 max——
+        #    alias 是短名词，长问题的整句 embedding 会被修饰语稀释（见
+        #    _strip_time_modifiers 的实测数据）。剥完只用于打分，不参与拼 SQL。
+        variants = [question]
+        stripped = _strip_time_modifiers(question)
+        if stripped != question:
+            variants.append(stripped)
+        q_vecs = self.embed_fn(variants)
 
         # 2. 每个 metric 取它最像的那条 alias 的 cosine，再按相似度排名
         #    （一个 metric 多条 alias 只占一个候选位）
         best_by_metric: dict[str, float] = {}
         for mid, vec in self._alias_index:
-            cos = _cosine(q_vec, vec)
+            cos = max(_cosine(q_vec, vec) for q_vec in q_vecs)
             if cos > best_by_metric.get(mid, -1.0):
                 best_by_metric[mid] = cos
         ranked = sorted(best_by_metric.items(), key=lambda kv: kv[1], reverse=True)

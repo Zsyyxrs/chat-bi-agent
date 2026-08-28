@@ -380,12 +380,15 @@ evaluation_questions:
       WHERE dt >= DATE '2026-05-01' AND dt <= DATE '2026-05-31'
       GROUP BY dt ORDER BY total DESC LIMIT 1
     expected_route: nl2sql
-    route_note: "argmax——spec 无排序/取顶"
+    # 2026-08-28 换理由（标签不变）：原写「spec 无排序/取顶」，加了 order_by/limit
+    # 之后这条不成立了。仍该走 nl2sql 是因为另一件事——transaction_amount 的
+    # dim_catalog 里没有按日的维度，`GROUP BY dt` 表达不了。补维度前不要改标。
+    route_note: "argmax 按日分组——transaction_amount 无 dt 维度"
     expected_result_columns: ['dt']
     expected_filters: []
     expected_result_count: {min: 1, max: 1}
     evaluation_criteria:
-      - out_of_catalog: "argmax 需 ORDER BY + LIMIT，spec 无此表达"
+      - out_of_catalog: "argmax 需按日分组，dim_catalog 无 dt 维度"
 
   - id: mr_n10
     question: "开户时间超过 3 年的客户有多少人？"
@@ -422,8 +425,13 @@ evaluation_questions:
       FROM fct_balance_daily fbd JOIN dim_account da ON fbd.account_id = da.account_id
       WHERE da.account_type IN ('CURRENT','SAVING')
       GROUP BY fbd.branch_id ORDER BY avg_balance DESC LIMIT 5
-    expected_route: nl2sql
-    route_note: "Top-N——spec 无排序/取顶"
+    expected_route: metric
+    # 2026-08-28 改标：原标 nl2sql，理由是「Top-N——spec 无排序/取顶」。
+    # MetricSpec 加了 order_by/limit 之后这个前提作废——本题的 governed SQL 与
+    # 上面的 expected_sql 逐字等价（同 join、同 hard_filter、同 ORDER BY DESC LIMIT 5），
+    # 实测 score 1.0 / result_match True。标签写的是「该不该走语义层」，
+    # 能力有了就该走，留着旧标等于让标尺永久惩罚一个已经做出来的特性。
+    route_note: "Top-N——order_by=metric desc + limit=5，模板可表达"
     expected_result_columns: ['branch_id']
     expected_filters: []
     expected_result_count: {min: 5, max: 5}

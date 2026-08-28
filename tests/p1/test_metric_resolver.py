@@ -436,6 +436,71 @@ def test_extractor_prompt_requires_value_domain_match():
     assert "值域" in prompt
 
 
+# ---------------------- ORDER BY / LIMIT ----------------------
+
+
+def test_order_by_metric_desc_with_limit():
+    """「按金额倒序取前 5」——2026-08-28 分流里 B 档最常见的一类拒绝原因。
+
+    spec 原本没有排序字段，遇到这类问题只能整条退回 NL2SQL。排序目标限定在
+    「本次查询已经选出来的东西」（metric 本身或 spec.dims 里的维度），
+    LLM 递不进任意表达式。
+    """
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="transaction_amount",
+        dims=["channel"],
+        order_by={"by": "metric", "desc": True},
+        limit=5,
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "ORDER BY total_amount DESC" in sql
+    assert sql.rstrip().endswith("LIMIT 5")
+    # 排序必须排在 GROUP BY 之后
+    assert sql.index("GROUP BY") < sql.index("ORDER BY")
+
+
+def test_order_by_dimension_ascending():
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="transaction_amount",
+        dims=["channel"],
+        order_by={"by": "channel", "desc": False},
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "ORDER BY ft.transaction_channel ASC" in sql
+    assert "LIMIT" not in sql
+
+
+def test_order_by_unselected_dimension_is_rejected():
+    """按一个没出现在 SELECT 里的维度排序——聚合查询下语义不成立，直接拒。"""
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="transaction_amount",
+        dims=["channel"],
+        order_by={"by": "branch_id", "desc": True},
+    )
+    with pytest.raises(MetricResolverError, match="order_by"):
+        render_sql_from_spec(spec, cat)
+
+
+def test_limit_must_be_a_positive_integer():
+    """LIMIT 直接进 SQL 文本，必须挡住非整数——这是唯一一处数字拼进模板的地方。"""
+    cat = _get_cat()
+    for bad in (0, -1, "5; DROP TABLE x", 2.5):
+        spec = MetricSpec(metric_id="transaction_amount", limit=bad)
+        with pytest.raises(MetricResolverError, match="limit"):
+            render_sql_from_spec(spec, cat)
+
+
+def test_no_order_by_renders_unchanged():
+    """不带排序时 SQL 与从前逐字一致——这条特性不该影响既有查询。"""
+    cat = _get_cat()
+    spec = MetricSpec(metric_id="transaction_amount", dims=["channel"])
+    sql = render_sql_from_spec(spec, cat)
+    assert "ORDER BY" not in sql and "LIMIT" not in sql
+
+
 # ---------------------- 冗余别名 ----------------------
 
 
@@ -600,18 +665,117 @@ def test_router_without_probe_fn_skips_domain_check(tmp_path):
     assert rr.sql == "SELECT 1"
 
 
-def test_extractor_prompt_rejects_ordering_and_top_n():
-    """spec 结构里没有 ORDER BY / LIMIT，排序取顶类问题必须拒绝而非硬凑。
+def test_extractor_prompt_teaches_ordering_and_top_n():
+    """spec 2026-08-28 起有了 order_by / limit，prompt 必须教它怎么用。
 
-    A/B 实测：问"存款余额最高的前 5 个分行"，LLM 映射到 deposit_balance 却丢掉
-    Top-5，返回全部分行。SQL 合法、值域也对，只是答的是另一个问题——和当初丢掉
-    IN 约束同一类失败。
+    这条测试的前身断言的是相反的事——「一律返回 metric_id=null」。当时 spec
+    确实编码不了排序：A/B 实测问"存款余额最高的前 5 个分行"，LLM 丢掉 Top-5
+    返回全部分行，只能整条拒掉。分流显示这类问题在生产池里占 B 档近半，
+    于是给渲染层补了 ORDER BY / LIMIT，拒绝规则随之作废。
+
+    仍然要拒的是「按没放进 dims 的列排序」——聚合查询下语义不成立。
     """
     from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
 
     prompt = _build_extractor_prompt(_get_cat())
-    assert "排序" in prompt
-    assert "最高" in prompt or "前 N" in prompt
+    assert "order_by" in prompt and "limit" in prompt
+    # 光说有这个字段不够，得给出形状，否则 LLM 猜不到 by 的取值
+    assert "'metric'" in prompt or '"metric"' in prompt
+    # 越界排序仍须拒绝
+    assert "没放进 dims" in prompt
+
+
+def test_extractor_prompt_rejects_questions_wanting_several_numbers():
+    """一题要两个并列的数 —— spec 编码不了，必须返回 null。
+
+    实测（2026-08-28 example_pool 分流 idx30）：问「被触达的客户总数和已转化
+    客户数分别是多少」，LLM 输出 dims=['response_type']，拼出一张按响应类型
+    分组的明细表。SQL 合法、能跑、返回非空，但形状与问题完全不同——和当初丢掉
+    IN 约束、丢掉 Top-N 同一类失败：欠约束，guardrail 抓不到。
+
+    MetricSpec 是 {metric_id, dims, filters, time_window} 四元组，只能产出
+    一个聚合表达式。条件分列（COUNT(CASE WHEN ...)）、两个指标并列、占比，
+    都在它的表达能力之外。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_get_cat())
+    assert "分别是多少" in prompt
+    assert "占比" in prompt or "比率" in prompt
+    assert "metric_id=null" in prompt
+
+
+# ---------------------- prefilter recall：剥时间修饰 ----------------------
+
+
+def test_strip_time_modifiers_removes_absolute_dates():
+    """catalog 的 alias 是光秃秃的名词，真实问题带一堆时间修饰。
+
+    整句 embedding 被修饰语稀释，「2026 年上半年利息入账总金额是多少？」对
+    「交易金额」只有 0.5929，掉在 0.63 阈值外。剥掉时间部分后升到 0.7392。
+    这不是调阈值——是消掉长问题被稀释的结构性劣势。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _strip_time_modifiers
+
+    assert "2026" not in _strip_time_modifiers("2026 年上半年利息入账总金额是多少？")
+    assert "利息入账总金额" in _strip_time_modifiers("2026 年上半年利息入账总金额是多少？")
+    assert _strip_time_modifiers("2026 年 3 月 ATM 渠道的交易总金额").strip().startswith("ATM")
+
+
+def test_strip_time_modifiers_keeps_business_terms():
+    """只剥能被正则穷举的时间表达，不碰业务词。
+
+    「月末」「节假日」是口径而非时间点——剥掉它们会改变问题含义。规则只在
+    数字后面才吃「月」，所以裸的「月末」留得住。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _strip_time_modifiers
+
+    assert "月末" in _strip_time_modifiers("每个月末最后一天的活期存款余额加总")
+    assert "法定节假日" in _strip_time_modifiers("2026 年第二季度所有法定节假日当天的交易总笔数")
+    # 不含时间修饰的问题原样返回
+    assert _strip_time_modifiers("活跃的高净值客户有多少人") == "活跃的高净值客户有多少人"
+
+
+def test_router_falls_back_to_time_stripped_question():
+    """整句不过阈值、剥掉时间后过——prefilter 应当命中。
+
+    embed_fn 按文本给向量：带 "2026" 的与 alias 正交（cos=0），剥完时间的与
+    alias 完全同向（cos=1）。只有真的两路都算了才可能命中。
+    """
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    router = MetricRouter(
+        _get_cat(),
+        embed_fn=lambda texts: [[0.0, 1.0] if "2026" in t else [1.0, 0.0] for t in texts],
+        threshold=0.9,
+    )
+    spec = MetricSpec(metric_id="deposit_balance")
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("2026 年 4 月的存款余额")
+    assert rr.prefilter_hit is True
+    assert rr.cosine == pytest.approx(1.0)
+
+
+def test_router_reports_the_higher_of_the_two_cosines():
+    """两路取 max：剥完时间反而更差时，不该把原本的命中拖下水。"""
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    def embed_fn(texts):
+        # alias（"存款余额" 等）与带 "2026" 的整句同向，剥完时间的残句正交
+        return [[1.0, 0.0] if ("2026" in t or "余额" in t) else [0.0, 1.0] for t in texts]
+
+    router = MetricRouter(_get_cat(), embed_fn=embed_fn, threshold=0.9)
+    spec = MetricSpec(metric_id="deposit_balance")
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("2026 年的存款情况")  # 剥完变成「的存款情况」，不含 2026/余额
+    assert rr.prefilter_hit is True
+    assert rr.cosine == pytest.approx(1.0)
 
 
 # ---------------------- 全局 joins 复用 ----------------------
@@ -742,3 +906,63 @@ def test_production_yaml_uses_global_joins_registry():
     sql = render_sql_from_spec(MetricSpec(metric_id="deposit_balance", dims=["branch_city"]), cat)
     assert "JOIN dim_branch dbr ON fbd.branch_id = dbr.branch_id" in sql
     assert "JOIN dim_account da ON fbd.account_id = da.account_id" in sql
+
+
+# ---------------------- 全局 join 的可达性剪枝 ----------------------
+
+
+_GLOBAL_JOIN_YAML = """
+version: 1
+joins:
+  account: JOIN dim_account da ON {fact}.account_id = da.account_id
+  branch: JOIN dim_branch dbr ON {fact}.branch_id = dbr.branch_id
+metrics:
+  - id: customer_count
+    display_name: 客户数
+    aliases: [客户数]
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: COUNT(dc.customer_id)
+    metric_alias: cnt
+    hard_filters: []
+    joins: {}
+    dim_catalog:
+      branch_city: {select_expr: "dbr.city", alias: city, requires_join: [branch]}
+    filter_catalog: {}
+"""
+
+
+def test_unreferenced_global_join_is_not_attached(tmp_path):
+    """全局 join 只在被引用时才挂到 metric 上。
+
+    全局模板假设每个 fact 都有 account_id / branch_id / customer_id / product_id，
+    但只有真 fct 表成立。dim_customer 当 fact 用时没有 account_id，那条 join 拼出来
+    必然无效——既然没人 requires_join 它，就不该挂上去。
+    """
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(_GLOBAL_JOIN_YAML, encoding="utf-8")
+    m = MetricCatalog.from_yaml(yml).get("customer_count")
+    assert sorted(m.joins) == ["branch"]
+
+
+def test_global_join_attached_once_referenced_by_hard_filter(tmp_path):
+    """被 hard_filter_joins 引用就必须挂上——剪枝不能剪掉真正要用的。"""
+    body = _GLOBAL_JOIN_YAML.replace(
+        "    hard_filters: []", "    hard_filters: []\n    hard_filter_joins: [account]"
+    )
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(body, encoding="utf-8")
+    m = MetricCatalog.from_yaml(yml).get("customer_count")
+    assert sorted(m.joins) == ["account", "branch"]
+
+
+def test_local_join_kept_even_when_unreferenced(tmp_path):
+    """metric 自己写的 join 是逃生舱，作者意图明确，不剪。"""
+    body = _GLOBAL_JOIN_YAML.replace(
+        "    joins: {}",
+        "    joins:\n      odd: JOIN dim_date dd ON dc.open_date = dd.dt",
+    )
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(body, encoding="utf-8")
+    m = MetricCatalog.from_yaml(yml).get("customer_count")
+    assert sorted(m.joins) == ["branch", "odd"]

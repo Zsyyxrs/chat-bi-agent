@@ -1099,6 +1099,196 @@ k=8 相对实际需要有 4 倍余量。真实语义相近的指标（`deposit_b
 **Trace**：代码见本次提交；测试 `tests/p1/test_metric_resolver.py`（全局 join 6 例）
 + `tests/p1/test_metric_router.py`（候选裁剪 6 例）+ `tests/eval/`（CLI 透传 2 例）
 
+### Update 2026-08-27：catalog 静态门禁 + 血缘 + 全局 join 剪枝
+
+兑现 [Update 2026-08-12](#adr-013) 结尾留的那条教训——原话是「**catalog 类改动必须
+配一个「全组合真打 DB」的回归扫描**」。当时 6 指标 × 全部 dim/filter 共 48 个组合里
+18 个是坏的（`fbd.account_type` 列不在 fact 表上、`ft.channel` 实际叫
+`transaction_channel`、`dc.is_active` 是 boolean 却声明成 string），全靠真打 PG 才
+暴露。那条跟进项从那时起一直空着，而指标已从 6 个涨到 18 个、`requires_join` 有 40 处，
+同类错误的暴露面比当时大三倍。
+
+**做成静态的，不是真打 DB。** 对照 `schema/schema_docs.yaml` 而非连接 Postgres——
+代价是漏掉「schema_docs 与真库不同步」这一层（另有 `tests/schema/` 守），收益是它能
+当常规单测跑，每次改 catalog 都自动过一遍，而不是靠人记得跑扫描。这个取舍是本次的
+核心决定：**能天天跑的弱检查 > 需要环境的强检查**。
+
+**新增**：
+
+- `src/chat_bi_agent/agents/p1/metric_lineage.py`
+  - `validate_catalog(catalog, loader)` → `list[CatalogIssue]`，比对 catalog 里每一处
+    **带别名前缀的列引用**与 schema。裸标识符不查——混着 SQL 函数名和关键字，判不准，
+    宁可漏报也不误报。
+  - `metric_lineage(metric)` → `Lineage(required_tables, conditional_tables)`
+- `tests/p1/test_metric_lineage.py` — 11 例，含真实 catalog 门禁
+- `scripts/check_metric_catalog.py` — 同一套检查的人读版 + 血缘表
+
+**门禁验证过能咬人**：把当年那两个 bug 注回 `config/metrics.yaml`，2 处注入 →
+6 个指标全部捕获（`deposit_balance` / `loan_balance` / `total_balance` 命中
+`account_type`，`transaction_amount` / `transaction_count` / `avg_transaction_amount`
+命中 `channel`）。**不验证门禁会不会红的门禁不算门禁**——与 ADR-013 那次「单测全绿
+但 catalog 全坏」是同一个道理。
+
+**血缘分两层，不拍平**：
+
+```
+deposit_balance
+  必然  fct_balance_daily, dim_account
+  条件  dim_branch    ← dim:branch_name, dim:branch_city, filter:branch_city, filter:branch_name
+  条件  dim_customer  ← dim:customer_tier, filter:customer_tier
+```
+
+`dim_account` 在「必然」里是因为 hard_filter 挂在它上面，改它影响该指标的**每一次**
+查询；改 `dim_branch` 只影响用了 branch 维度的那部分。拍平成一个表清单会让影响分析
+失真，这是分层的唯一理由。
+
+**顺带挖出并修掉的结构问题：全局 join 注册表过度挂载**
+
+校验第一版报了 16 处错，查下来**不是真错**——[Update 2026-08-14](#adr-013) 引入的全局
+join 注册表会把每条 join 挂到**每个** metric 上，而 `render_sql_from_spec` 只拼
+`hard_filter_joins` 与被选中 dim/filter 的 `requires_join`。没人引用的 join 永远
+拼不出来，所以不是当前的错。
+
+但它们也不是无害的。根因是**全局模板假设每个 fact 都带 account_id / branch_id /
+customer_id / product_id，而这只对真 fct 表成立**：
+
+| fact 表 | account_id | branch_id | customer_id | product_id |
+|---|---|---|---|---|
+| fct_balance_daily / fct_holding / fct_transaction | 有 | 有 | 有 | 有 |
+| fct_risk_event | 有 | 有 | 有 | — |
+| fct_campaign_response | — | 有 | 有 | 有 |
+| dim_customer | — | 有 | 有 | — |
+| dim_product | — | — | — | 有 |
+| dim_branch | — | 有 | — | — |
+
+`customer_count`（fact 是 `dim_customer`）身上挂着 `JOIN dim_account da ON
+dc.account_id = da.account_id`，而 `dim_customer` 没有 `account_id` 列。这些 join
+不是「暂时没用」，是**结构上不可能**——谁给对应维度加一条 `requires_join` 就会炸。
+
+**改法**：`_resolve_joins` 增加 `referenced` 参数（= `hard_filter_joins` ∪ 各
+dim/filter 的 `requires_join`，与 `needed_joins` 同源），**没被引用的全局 join 不挂**。
+两个边界：
+
+- **本地 joins 不剪**——那是作者显式写的逃生舱，意图明确；没人引用时由校验器报成
+  `severity="latent"`
+- **不改写作方式**——新增一个 `requires_join: [branch]` 的维度时 branch 自动变可达，
+  照常挂上。剪枝只影响从来没人提过的那些
+
+改后 18 个指标的 join 总数 25 条，`product_count` 归零（它本来就不需要任何 join），
+16 处潜伏项清零。
+
+**这次没做、且建议不做的：指标版本管理**
+
+排期里与血缘并列的一项。结论是**划掉**：`config/metrics.yaml` 在 git 里，
+`git log -p config/metrics.yaml` 就是带作者和时间的口径变更台账；真正需要的
+`effective_from` / `effective_to`（历史数据按旧口径解释）在合成 seed 数据上没有
+可验证的场景；且它的难点在流程（谁批、怎么留痕）不在代码。等有真实口径变更时再说。
+参照 Snowflake `AI_VERIFIED_QUERIES` 的 `VERIFIED_AT` / `VERIFIED_BY` 是那时的抄法。
+
+**已知局限**：
+
+- 只查 `alias.column` 形式的引用，裸列名不查
+- `schema_docs.yaml` 故意省略了 `dim_*` 的 `create_time` / `update_time`，catalog 若
+  引用这两列会误报（当前没有引用）
+- 校验的是「列存在」，不校验类型——`dc.is_active` 那类 boolean/string 错配仍需
+  `test_is_active_filter_typed_boolean_not_string` 这种针对性断言兜
+
+**Trace**：代码见本次提交；测试 `tests/p1/test_metric_lineage.py`（11 例）+
+`tests/p1/test_metric_resolver.py` 新增剪枝 3 例；全量 664 passed / 55 skipped
+
+---
+
+**Update 2026-08-28：口径分歧以 catalog 为准；34 题标尺重测；分流必须带值域探针**
+
+三件事，都是这一轮扩 catalog（dim↔filter 对称、ORDER BY/LIMIT、prefilter 双路召回）
+之后才暴露出来的。
+
+**1. gold 与 catalog 的口径分歧，一律以 catalog 为准。**
+
+`example_pool_prod.jsonl` 里「华东大区各省 4 月日均存款余额」那条，gold 用
+`p.product_category = 'DEPOSIT'` 定义存款，catalog 的 governed 定义是
+`da.account_type IN ('CURRENT','SAVING')`。**语义层存在的意义就是终结这种分歧**——
+让两套定义并存，等于把「存款是什么」这个问题留给每条 SQL 各自回答。所以定死：
+catalog 是唯一口径来源，gold 与它冲突时错的是 gold。
+
+实测这次是零代价的：两条 SQL 在真库上返回完全相同的两行（上海 137077.25 /
+江西 99730.64）。合成数据生成器把 `account_type` 与 `product_category` 做了类别级
+双射（`dimension_generator.py:240-246`），DEPOSIT 只对应 CURRENT/SAVING。
+**但别把「这次相等」当成「一直相等」**——真实行内数据没有这个双射，那时这个决策
+才真正花钱，而那正是它该被提前定死的理由。
+
+漂移检测器按字符串字面量比对，看不出两者等价，会一直报。所以 `--migrate` 加了
+`--adjudicated`：人逐条裁决过的漂移才允许带着漂移移出池子，其余漂移一律留下。
+
+**2. 34 题标尺重测：precision 仍是 1.000，但标尺本身改了一条，须知情。**
+
+放宽过滤面之后重跑，**按旧标签算 precision 掉到 0.9444**（唯一假阳性 `mr_n12`
+「存款余额最高的前 5 个分行」）。查它的标注理由——`route_note: "Top-N——spec 无排序/取顶"`
+——**正是本轮 ORDER BY/LIMIT 特性干掉的那个前提**。它生成的 SQL 与 `expected_sql`
+逐字等价，score 1.0、result_match True。按「前提作废的测试要改写，不要删」这条，
+改标为 `metric` 并在 YAML 里留了前因。
+
+| | 08-14 基线 | 本轮/旧标 | 本轮/新标 |
+|---|---:|---:|---:|
+| 路由 precision | 1.000 | 0.9444 | **1.000** |
+| recall | 0.75 | 0.85 | **0.8571** |
+| F1 | 0.8571 | 0.8947 | **0.9231** |
+| TP/FP/FN/TN | 15/0/5/14 | 17/1/3/13 | **18/0/3/13** |
+| avg_score | 0.9436 | 0.9662 | 0.9662 |
+| result_match | 0.7059 | 0.7941 | 0.7941 |
+
+**改标尺去修好看的数字是重罪，所以把判据写死在这里**：只有当标签的理由是一句
+「模板表达不了 X」、而 X 已经实现且生成的 SQL 与 gold 实测等价时才准改；
+凡是理由涉及业务语义的，一个字都不许动。同一轮里 `mr_n09`（argmax 按日）就
+**没有**改标——它的旧理由（无排序）同样作废，但仍该走 nl2sql，因为
+`transaction_amount` 的 `dim_catalog` 没有按日维度，`GROUP BY dt` 表达不了。
+只订正了理由，标签保持 nl2sql。
+
+**遗留风险**：`mr_n12` 的 cosine 是 0.6314，阈值 0.63，余量 0.0014。两轮重跑都
+稳定命中（cosine 是确定性的），但换 embedding 模型或改 alias 都可能把它推下去，
+届时表现为 recall 掉一格而非报错。
+
+**3. 拿分流结果动 few-shot 池，必须带 `--probe`。**
+
+`triage_example_pool.py` 原本不注入 `probe_fn`（string filter 的值域探针，要连 PG），
+上一轮据此判定 idx24「上海分行 5 月反洗钱告警数」由 B 升 A，记作 dim↔filter
+对称性修复的战果。**注入探针后它掉回 B**（`value_out_of_domain`），而且查下去
+发现 gold 自己就是坏的：`dim_branch.city` 根本没有 `'上海'`（真正的「上海分行」
+是 `BR_PROV_0003`，省级行，`city` 为 NULL），gold SQL 实测返回 `alert_count = 0`。
+
+不带探针的分档偏宽松，拿它决定「哪些题移出池子」会**两头落空**——移出去了，
+生产上却被探针拒绝退回 NL2SQL，而此时 few-shot 兜底也已经没了。所以
+`build_router()` 把 probe 提成显式参数，脚本不带 `--probe` 时会打印警告。
+
+**分流执行结果**（`--probe`，31 条生产池）：A 14（干净 13 + 裁决 1）/ B 12 / C 5。
+14 条移出 `data/example_pool_prod.jsonl`（31 → 17），归档到
+`data/example_pool_metric_governed.jsonl`（不删，可回滚、可审计）。移出前逐条拿
+gold 与 governed SQL 在真库上比对结果集，14/14 完全一致。
+
+**promotion 不加归档排除名单（已定，2026-08-28）**：`nightly_promote.sh` →
+`bootstrap_prod_pool.py` 按 `example_id` 合并去重，**不认识归档文件**——同一条
+(question, sql) 再被 👍 一次就会重新灌回池子。**这是有意保留的**：一条已经交给
+语义层的问题重新以 few-shot 形式冒出来，说明它在生产上没走成 governed 路径而是
+退回了 NL2SQL，那正是语义层退化的信号，堵住它等于把告警静音。代价是这次迁出可能
+被 cron 撤销，可接受——迁出本来就该按 catalog 现状重新判定，而不是一次性生效。
+
+**一条坏 gold 已剔除**：`d525ae0fc0e3`「上海分行 2026 年 5 月的反洗钱告警数量」，
+gold 实测返回 `alert_count = 0`。返回空的样本当 few-shot 是有害的——它教模型去
+filter 一个库里不存在的值（`dim_branch.city` 没有 `'上海'`）。剔到
+`data/example_pool_quarantine.jsonl` 并在记录里写了复活条件。
+
+顺带把迁出后剩下的 17 条 gold 全部打了一遍真库，确认这类缺陷**只有这一条**：
+其余 16 条都返回非空且非全零。**gold 会返回空**这件事在池子里没有任何机制拦——
+`bootstrap_prod_pool.py` 只认 👍，不验证 SQL 真的解出了东西。这是下一个该补的门禁。
+
+**池子最终状态**：原 31 条 = 生产池 16 + governed 归档 14 + 隔离 1，三份互不重叠、
+并集等于原始。
+
+**Trace**：`scripts/triage_example_pool.py` 加 `build_router()` / `split_pool()` /
+`--probe` / `--migrate` / `--adjudicated`；测试 `tests/scripts/test_triage_example_pool.py`
+（10 例）；全量 743 passed / 5 skipped，`ruff check` 干净，
+`check_metric_catalog.py --quiet` 退 0
+
 ---
 
 <a id="adr-014"></a>
