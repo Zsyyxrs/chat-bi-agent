@@ -1265,10 +1265,24 @@ catalog 是唯一口径来源，gold 与它冲突时错的是 gold。
 `data/example_pool_metric_governed.jsonl`（不删，可回滚、可审计）。移出前逐条拿
 gold 与 governed SQL 在真库上比对结果集，14/14 完全一致。
 
-**没做、但必须知道的坑**：`nightly_promote.sh` → `bootstrap_prod_pool.py` 按
-`example_id` 合并去重，**不认识归档文件**。同一条 (question, sql) 再被 👍 一次就会
-重新灌回池子，这次迁出会静默失效。要不要给 promotion 加归档排除名单，是 pipeline
-的设计决定（也可能反过来——重新出现恰恰说明语义层退化了，值得当信号），留给后续。
+**promotion 不加归档排除名单（已定，2026-08-28）**：`nightly_promote.sh` →
+`bootstrap_prod_pool.py` 按 `example_id` 合并去重，**不认识归档文件**——同一条
+(question, sql) 再被 👍 一次就会重新灌回池子。**这是有意保留的**：一条已经交给
+语义层的问题重新以 few-shot 形式冒出来，说明它在生产上没走成 governed 路径而是
+退回了 NL2SQL，那正是语义层退化的信号，堵住它等于把告警静音。代价是这次迁出可能
+被 cron 撤销，可接受——迁出本来就该按 catalog 现状重新判定，而不是一次性生效。
+
+**一条坏 gold 已剔除**：`d525ae0fc0e3`「上海分行 2026 年 5 月的反洗钱告警数量」，
+gold 实测返回 `alert_count = 0`。返回空的样本当 few-shot 是有害的——它教模型去
+filter 一个库里不存在的值（`dim_branch.city` 没有 `'上海'`）。剔到
+`data/example_pool_quarantine.jsonl` 并在记录里写了复活条件。
+
+顺带把迁出后剩下的 17 条 gold 全部打了一遍真库，确认这类缺陷**只有这一条**：
+其余 16 条都返回非空且非全零。**gold 会返回空**这件事在池子里没有任何机制拦——
+`bootstrap_prod_pool.py` 只认 👍，不验证 SQL 真的解出了东西。这是下一个该补的门禁。
+
+**池子最终状态**：原 31 条 = 生产池 16 + governed 归档 14 + 隔离 1，三份互不重叠、
+并集等于原始。
 
 **Trace**：`scripts/triage_example_pool.py` 加 `build_router()` / `split_pool()` /
 `--probe` / `--migrate` / `--adjudicated`；测试 `tests/scripts/test_triage_example_pool.py`
