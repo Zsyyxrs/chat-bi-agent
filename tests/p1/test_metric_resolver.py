@@ -708,6 +708,79 @@ def test_extractor_prompt_rejects_questions_wanting_several_numbers():
 # ---------------------- prefilter recall：剥时间修饰 ----------------------
 
 
+def test_strip_time_modifiers_removes_absolute_dates():
+    """catalog 的 alias 是光秃秃的名词，真实问题带一堆时间修饰。
+
+    整句 embedding 被修饰语稀释，「2026 年上半年利息入账总金额是多少？」对
+    「交易金额」只有 0.5929，掉在 0.63 阈值外。剥掉时间部分后升到 0.7392。
+    这不是调阈值——是消掉长问题被稀释的结构性劣势。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _strip_time_modifiers
+
+    assert "2026" not in _strip_time_modifiers("2026 年上半年利息入账总金额是多少？")
+    assert "利息入账总金额" in _strip_time_modifiers("2026 年上半年利息入账总金额是多少？")
+    assert _strip_time_modifiers("2026 年 3 月 ATM 渠道的交易总金额").strip().startswith("ATM")
+
+
+def test_strip_time_modifiers_keeps_business_terms():
+    """只剥能被正则穷举的时间表达，不碰业务词。
+
+    「月末」「节假日」是口径而非时间点——剥掉它们会改变问题含义。规则只在
+    数字后面才吃「月」，所以裸的「月末」留得住。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _strip_time_modifiers
+
+    assert "月末" in _strip_time_modifiers("每个月末最后一天的活期存款余额加总")
+    assert "法定节假日" in _strip_time_modifiers("2026 年第二季度所有法定节假日当天的交易总笔数")
+    # 不含时间修饰的问题原样返回
+    assert _strip_time_modifiers("活跃的高净值客户有多少人") == "活跃的高净值客户有多少人"
+
+
+def test_router_falls_back_to_time_stripped_question():
+    """整句不过阈值、剥掉时间后过——prefilter 应当命中。
+
+    embed_fn 按文本给向量：带 "2026" 的与 alias 正交（cos=0），剥完时间的与
+    alias 完全同向（cos=1）。只有真的两路都算了才可能命中。
+    """
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    router = MetricRouter(
+        _get_cat(),
+        embed_fn=lambda texts: [[0.0, 1.0] if "2026" in t else [1.0, 0.0] for t in texts],
+        threshold=0.9,
+    )
+    spec = MetricSpec(metric_id="deposit_balance")
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("2026 年 4 月的存款余额")
+    assert rr.prefilter_hit is True
+    assert rr.cosine == pytest.approx(1.0)
+
+
+def test_router_reports_the_higher_of_the_two_cosines():
+    """两路取 max：剥完时间反而更差时，不该把原本的命中拖下水。"""
+    from unittest.mock import MagicMock, patch
+
+    from chat_bi_agent.agents.p1 import metric_resolver as mr
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    def embed_fn(texts):
+        # alias（"存款余额" 等）与带 "2026" 的整句同向，剥完时间的残句正交
+        return [[1.0, 0.0] if ("2026" in t or "余额" in t) else [0.0, 1.0] for t in texts]
+
+    router = MetricRouter(_get_cat(), embed_fn=embed_fn, threshold=0.9)
+    spec = MetricSpec(metric_id="deposit_balance")
+    with patch.object(mr, "_resolve_to_spec_and_sql", MagicMock(return_value=(spec, "SELECT 1"))):
+        rr = router.try_route("2026 年的存款情况")  # 剥完变成「的存款情况」，不含 2026/余额
+    assert rr.prefilter_hit is True
+    assert rr.cosine == pytest.approx(1.0)
+
+
+# ---------------------- 全局 joins 复用 ----------------------
+
+
 def _global_joins_catalog(tmp_path, extra_metric_yaml: str = "") -> MetricCatalog:
     """带顶层 joins 注册表的 catalog：join 子句用 {fact} 占位 fact_alias。"""
     yml = tmp_path / "gj.yaml"

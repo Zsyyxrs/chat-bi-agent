@@ -560,6 +560,44 @@ def _classify_metric_error(msg: str) -> str:
     return "unknown_dim"  # 兜底：未识别的 metric 结构错
 
 
+# 能被正则穷举的时间表达。**只剥这些**——「月末」「节假日」「在售」是口径不是
+# 时间点，剥掉会改变问题含义，所以「月」「日」只在数字后面才吃。
+_TIME_MODIFIER_RES = [
+    re.compile(p)
+    for p in (
+        r"\d{4}\s*年\s*(?:上半年|下半年|第[一二三四]季度)?",
+        r"\d{1,2}\s*月(?:末|份)?",
+        r"\d{1,2}\s*日",
+        r"\d{4}-\d{2}-\d{2}",
+        r"第[一二三四]季度",
+        r"上半年|下半年",
+        r"期间|当天",
+        r"目前|当前|现在",
+    )
+]
+
+
+def _strip_time_modifiers(question: str) -> str:
+    """剥掉问题里的时间修饰，用于 prefilter 的第二路 embedding。
+
+    catalog 的 alias 是光秃秃的名词（「存款余额」），真实问题却带一堆时间/地域
+    修饰。整句 embedding 被稀释，「2026 年上半年利息入账总金额是多少？」对
+    「交易金额」只有 0.5929，掉在 0.63 阈值外；剥完升到 0.7392。
+
+    离线实测（2026-08-28，31 条生产池）：13 条未命中里 7 条越过阈值，而原本
+    命中的 18 条 cosine **只升不降**，没有一条掉出。所以这不是变相降阈值——
+    降阈值会同时放大假阳性，这里不会。
+
+    结果只喂给 embedding，不参与任何 SQL 拼装。
+    """
+    stripped = question
+    for pattern in _TIME_MODIFIER_RES:
+        stripped = pattern.sub("", stripped)
+    stripped = stripped.replace("（）", "").replace("()", "")
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    return stripped or question
+
+
 class MetricRouter:
     """catalog embedding prefilter + resolve 的一体化路由层。构造时批量 embed 所有 aliases。"""
 
@@ -595,14 +633,20 @@ class MetricRouter:
 
     def try_route(self, question: str) -> RouteResult:
         """从不抛异常。"""
-        # 1. embed 问题
-        q_vec = self.embed_fn([question])[0]
+        # 1. embed 问题。除整句外再 embed 一遍剥掉时间修饰的版本，两路取 max——
+        #    alias 是短名词，长问题的整句 embedding 会被修饰语稀释（见
+        #    _strip_time_modifiers 的实测数据）。剥完只用于打分，不参与拼 SQL。
+        variants = [question]
+        stripped = _strip_time_modifiers(question)
+        if stripped != question:
+            variants.append(stripped)
+        q_vecs = self.embed_fn(variants)
 
         # 2. 每个 metric 取它最像的那条 alias 的 cosine，再按相似度排名
         #    （一个 metric 多条 alias 只占一个候选位）
         best_by_metric: dict[str, float] = {}
         for mid, vec in self._alias_index:
-            cos = _cosine(q_vec, vec)
+            cos = max(_cosine(q_vec, vec) for q_vec in q_vecs)
             if cos > best_by_metric.get(mid, -1.0):
                 best_by_metric[mid] = cos
         ranked = sorted(best_by_metric.items(), key=lambda kv: kv[1], reverse=True)
