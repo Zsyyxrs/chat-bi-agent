@@ -80,6 +80,50 @@ metrics:
         enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
         requires_join: [customer]
 
+  # -------------------- 存款余额合计（时点） --------------------
+  # 与 deposit_balance 是同一份数据的两种口径，别合并：
+  #   deposit_balance       AVG，区间日均，回答「这段时间平均有多少存款」
+  #   deposit_balance_total SUM，末日快照，回答「到某个时点一共有多少存款」
+  # 存量指标跨日 SUM 是错的（余额加一个月 = 把同一笔钱数 30 遍），所以这个指标
+  # 标了 time_semantics: point_in_time，渲染时时间窗会被钉成 `dt = 末日`。
+  # aliases 刻意避开「存款总额」「存款金额」这类与 deposit_balance 太近的说法——
+  # 必须带「合计/总额/期末/月末」这种明确的时点信号才算它。
+  - id: deposit_balance_total
+    display_name: 存款余额合计（时点，活期+储蓄）
+    aliases:
+      - 存款余额总额
+      - 存款余额合计
+      - 期末存款余额
+      - 月末存款余额
+      - 存款余额时点值
+    fact_table: fct_balance_daily
+    fact_alias: fbd
+    metric_expr: SUM(fbd.balance)
+    metric_alias: total_deposit_balance
+    time_semantics: point_in_time
+    hard_filters:
+      - "da.account_type IN ('CURRENT','SAVING')"
+    hard_filter_joins: [account]
+    date_column: fbd.dt
+    dim_catalog:
+      branch_id:      {select_expr: "fbd.branch_id",      alias: "branch_id"}
+      branch_name:    {select_expr: "dbr.branch_name",    alias: "branch_name",    requires_join: [branch]}
+      branch_city:    {select_expr: "dbr.city",           alias: "city",           requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
+      customer_tier:  {select_expr: "dc.customer_tier",   alias: "customer_tier",  requires_join: [customer]}
+    filter_catalog:
+      branch_id:      {column: "fbd.branch_id",     type: string}
+      branch_city:    {column: "dbr.city",          type: string,  requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
+      branch_name:    {column: "dbr.branch_name",   type: string,  requires_join: [branch]}
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
+
   # -------------------- 贷款余额 --------------------
   - id: loan_balance
     display_name: 贷款余额（日均）
@@ -244,6 +288,9 @@ metrics:
     hard_filters: []
     date_column: ft.dt
     dim_catalog:
+      # 按日分组。date_column 同时当维度用是允许的——dim↔filter 门禁对
+      # date_column 有豁免（时间归 time_window 管，不需要另配过滤器）。
+      dt:             {select_expr: "ft.dt", alias: "dt"}
       branch_id:        {select_expr: "ft.branch_id",       alias: "branch_id"}
       branch_city:      {select_expr: "dbr.city",           alias: "city",            requires_join: [branch]}
       region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
@@ -287,6 +334,9 @@ metrics:
     hard_filters: []
     date_column: ft.dt
     dim_catalog:
+      # 按日分组。date_column 同时当维度用是允许的——dim↔filter 门禁对
+      # date_column 有豁免（时间归 time_window 管，不需要另配过滤器）。
+      dt:             {select_expr: "ft.dt", alias: "dt"}
       branch_id:        {select_expr: "ft.branch_id",           alias: "branch_id"}
       transaction_type: {select_expr: "ft.transaction_type",    alias: "transaction_type"}
       channel:          {select_expr: "ft.transaction_channel", alias: "transaction_channel"}
@@ -328,6 +378,9 @@ metrics:
     hard_filters: []
     date_column: ft.dt
     dim_catalog:
+      # 按日分组。date_column 同时当维度用是允许的——dim↔filter 门禁对
+      # date_column 有豁免（时间归 time_window 管，不需要另配过滤器）。
+      dt:             {select_expr: "ft.dt", alias: "dt"}
       branch_id:        {select_expr: "ft.branch_id",           alias: "branch_id"}
       transaction_type: {select_expr: "ft.transaction_type",    alias: "transaction_type"}
       channel:          {select_expr: "ft.transaction_channel", alias: "transaction_channel"}
