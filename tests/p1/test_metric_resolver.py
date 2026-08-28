@@ -1003,3 +1003,81 @@ def test_rank_metrics_matches_the_cosine_try_route_gates_on(tmp_path):
     assert calls[0][1] == _strip_time_modifiers(question)
     assert ranked == sorted(ranked, key=lambda kv: kv[1], reverse=True), "必须按 cosine 倒序"
     assert {mid for mid, _ in ranked} == {m.id for m in catalog.metrics}, "每个指标占一个候选位"
+
+
+# --- 时点（stock）指标：SUM 跨日求和是错的 -------------------------------------
+
+_STOCK_YAML = """
+metrics:
+  - id: balance_total
+    display_name: 存款余额合计（时点）
+    aliases: ["存款余额总额"]
+    fact_table: fct_balance_daily
+    fact_alias: fbd
+    metric_expr: SUM(fbd.balance)
+    metric_alias: total_balance
+    time_semantics: point_in_time
+    hard_filters: []
+    date_column: fbd.dt
+    dim_catalog:
+      branch_id: {select_expr: fbd.branch_id, alias: branch_id}
+    filter_catalog:
+      branch_id: {column: fbd.branch_id, type: string}
+"""
+
+
+def _stock_catalog(tmp_path):
+    p = tmp_path / "stock.yaml"
+    p.write_text(_STOCK_YAML, encoding="utf-8")
+    return MetricCatalog.from_yaml(p)
+
+
+def test_point_in_time_metric_pins_to_one_day_not_a_range(tmp_path):
+    """存量指标跨日求和是错的——余额 SUM 一个月等于把同一笔钱数 30 遍。
+
+    区间聚合对流量指标（交易额）成立，对存量指标（余额、市值、持仓）不成立。
+    时点指标取窗口末日的快照，这是财务口径的通行约定（期末余额）。
+    """
+    cat = _stock_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="balance_total",
+        dims=[],
+        filters=[],
+        time_window={"start": "2026-04-01", "end": "2026-04-30"},
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "fbd.dt = DATE '2026-04-30'" in sql, sql
+    assert ">=" not in sql and "<=" not in sql, f"时点指标不该拼区间：{sql}"
+
+
+def test_range_metric_still_renders_a_range(tmp_path):
+    """默认语义不变——没写 time_semantics 的指标照旧拼区间。"""
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="transaction_amount",
+        dims=[],
+        filters=[],
+        time_window={"start": "2026-04-01", "end": "2026-04-30"},
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert ">= DATE '2026-04-01'" in sql and "<= DATE '2026-04-30'" in sql, sql
+
+
+def test_point_in_time_falls_back_to_start_when_only_start_given(tmp_path):
+    cat = _stock_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="balance_total", dims=[], filters=[], time_window={"start": "2026-04-30"}
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "fbd.dt = DATE '2026-04-30'" in sql, sql
+
+
+def test_extractor_prompt_marks_point_in_time_metrics(tmp_path):
+    """抽取 prompt 必须讲明白，否则 LLM 不知道这个指标的时间窗会被钉到末日。"""
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    cat = _stock_catalog(tmp_path)
+    prompt = _build_extractor_prompt(cat)
+    # 不能拿 display_name 里的「时点」二字充数——那是指标名，不是给 LLM 的说明
+    marker = "时点指标：时间窗取末日快照，不跨日求和"
+    assert marker in prompt, prompt
