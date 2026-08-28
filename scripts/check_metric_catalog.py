@@ -12,7 +12,20 @@
     python scripts/check_metric_catalog.py --lineage    # 只看血缘
     python scripts/check_metric_catalog.py --quiet      # 只在有 error 时输出
 
-退出码：有 error 返 1，只有 latent 或全干净返 0。
+三类检查：
+  error      引用的表/列在 schema 里不存在——现在就是坏的
+  latent     只出现在不可达 join 里，当前拼不进 SQL，加条 requires_join 就会炸
+  asymmetry  两类对称性缺口：
+             · 同表兄弟指标能过滤的列本指标不能，或两边 enum 不一致
+             · 同一指标里能 GROUP BY 的列却不能 WHERE
+
+asymmetry 是 2026-08-28 example_pool 分流查出来的坑：`campaign_conversion_amount`
+缺 `response_type`，LLM 只能拿 campaign_name 顶替，SQL 跑得通、返回非空、数字偏大。
+执行反馈捕不到这类错，只能靠 catalog 自身的对称性兜。dim↔filter 那半边同理：
+`risk_event_count` 有 branch_city 维度没有 branch_city 过滤器，「上海分行的反洗钱
+告警数量」prefilter 命中了却在 resolve 阶段被拒，静悄悄退回 NL2SQL。
+
+退出码：有 error 或 asymmetry 返 1，只有 latent 或全干净返 0。
 """
 
 from __future__ import annotations
@@ -21,7 +34,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from chat_bi_agent.agents.p1.metric_lineage import metric_lineage, validate_catalog
+from chat_bi_agent.agents.p1.metric_lineage import (
+    dim_filter_gaps,
+    metric_lineage,
+    sibling_filter_gaps,
+    validate_catalog,
+)
 from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog
 from chat_bi_agent.schema.loader import SchemaLoader
 
@@ -65,11 +83,29 @@ def main() -> int:
         for i in latent:
             print(f"    {i.metric_id:28s} {i.ref:42s} {i.message}")
 
+    gaps = sibling_filter_gaps(catalog)
+    if gaps:
+        print(f"\n✗ {len(gaps)} 处同表指标过滤器不对称——用户这么问时 LLM 会拿别的列顶替：")
+        for g in gaps:
+            print(f"    {g.metric_id:28s} {g.ref:42s} {g.message}")
+    elif not args.quiet:
+        print("✓ 同表指标的可选过滤器与枚举值全部对齐")
+
+    dim_gaps = dim_filter_gaps(catalog)
+    if dim_gaps:
+        print(
+            f"\n✗ {len(dim_gaps)} 处维度能分组却不能过滤——这类问题 prefilter 命中、resolve 拒掉："
+        )
+        for g in dim_gaps:
+            print(f"    {g.metric_id:28s} {g.ref:42s} {g.message}")
+    elif not args.quiet:
+        print("✓ 每个可分组的维度都有同列的过滤器")
+
     if not args.quiet:
         print()
         _print_lineage(catalog)
 
-    return 1 if errors else 0
+    return 1 if errors or gaps or dim_gaps else 0
 
 
 def _print_lineage(catalog: MetricCatalog) -> None:

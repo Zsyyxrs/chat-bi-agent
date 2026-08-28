@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chat_bi_agent.agents.p1.metric_lineage import metric_lineage, validate_catalog
+from chat_bi_agent.agents.p1.metric_lineage import (
+    dim_filter_gaps,
+    metric_lineage,
+    sibling_filter_gaps,
+    validate_catalog,
+)
 from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog
 from chat_bi_agent.schema.loader import SchemaLoader
 
@@ -291,3 +296,190 @@ metrics:
     assert lin.conditional_tables == {"dim_branch": ["dim:branch_name", "filter:branch_city"]}
     # product join 挂着但没人引用，不算依赖
     assert "dim_product" not in lin.conditional_tables
+
+
+# ---------------------- 同表指标的过滤器对称性 ----------------------
+
+_SIBLINGS_YAML = """
+version: 1
+metrics:
+  - id: risk_event_count
+    display_name: 风险事件数
+    aliases: [风险事件数]
+    fact_table: fct_risk_event
+    fact_alias: fre
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    joins: {}
+    dim_catalog: {}
+    filter_catalog:
+      severity: {column: "fre.severity", type: string}
+      status:   {column: "fre.status",   type: string}
+  - id: risk_event_amount
+    display_name: 风险事件金额
+    aliases: [风险事件金额]
+    fact_table: fct_risk_event
+    fact_alias: fre
+    metric_expr: SUM(fre.amount)
+    metric_alias: amt
+    hard_filters: []
+    joins: {}
+    dim_catalog: {}
+    filter_catalog:
+      severity: {column: "fre.severity", type: string}
+"""
+
+
+def test_sibling_metric_missing_a_filter_is_reported(tmp_path):
+    """同一张 fact 表上，兄弟指标能过滤的列本指标也该能过滤。
+
+    由来见 2026-08-28 分流：`campaign_conversion_amount` 缺 `response_type`，
+    LLM 只能拿 campaign_name 顶替，SQL 跑得通、返回非空、数字偏大——执行反馈
+    捕不到。计数类指标被评测题喂胖了，金额类是复制后删剩的。
+    """
+    gaps = sibling_filter_gaps(_catalog_from(tmp_path, _SIBLINGS_YAML))
+    assert [(g.metric_id, g.ref) for g in gaps] == [("risk_event_amount", "fct_risk_event.status")]
+
+
+def test_filter_written_into_hard_filters_is_not_a_gap(tmp_path):
+    """本指标把该列写死在 hard_filters 里 —— 那是有意收窄口径，不是缺口。
+
+    `deposit_balance` 硬过滤 `account_type`，就不该再把 account_type 开放成
+    可选过滤器；`total_balance` 开放它是对的。两者不构成不对称。
+    """
+    body = _SIBLINGS_YAML.replace(
+        """    metric_alias: amt
+    hard_filters: []""",
+        """    metric_alias: amt
+    hard_filters:
+      - "fre.status = 'OPEN'\"""",
+    )
+    assert sibling_filter_gaps(_catalog_from(tmp_path, body)) == []
+
+
+def test_real_catalog_has_no_sibling_filter_gaps():
+    """config/metrics.yaml 的门禁：同表指标的可选过滤器必须对齐。
+
+    新增一个指标时最容易犯的错就是从兄弟指标复制后删剩几个 filter，这条会红。
+    """
+    gaps = sibling_filter_gaps(MetricCatalog.from_yaml(METRICS_YAML))
+    assert gaps == [], "\n".join(f"{g.metric_id}: {g.ref} — {g.message}" for g in gaps)
+
+
+def test_sibling_metrics_disagreeing_on_enum_values_is_reported(tmp_path):
+    """同一列在两个指标里给了不同的 enum_values——必有一个是错的。
+
+    实例：`transaction_amount` 把 channel 写成 [ATM, COUNTER, MOBILE, INTERNET, POS]，
+    而同表的 `transaction_count` 写的是 [..., AGENT, API]。schema 里没有 POS。
+    枚举漏一个值，用户问「利息入账」这类就会被判 enum 越界而整条拒掉。
+    """
+    body = _SIBLINGS_YAML.replace(
+        """      severity: {column: "fre.severity", type: string}
+      status:   {column: "fre.status",   type: string}""",
+        """      severity:
+        column: "fre.severity"
+        type: enum
+        enum_values: [CRITICAL, HIGH, MEDIUM]
+      status:   {column: "fre.status",   type: string}""",
+    ).replace(
+        """    filter_catalog:
+      severity: {column: "fre.severity", type: string}""",
+        """    filter_catalog:
+      status:   {column: "fre.status",   type: string}
+      severity:
+        column: "fre.severity"
+        type: enum
+        enum_values: [CRITICAL, HIGH]""",
+    )
+    gaps = sibling_filter_gaps(_catalog_from(tmp_path, body))
+    assert [(g.metric_id, g.ref) for g in gaps] == [
+        ("risk_event_amount", "fct_risk_event.severity")
+    ]
+    assert "MEDIUM" in gaps[0].message
+
+
+# ---------------------- dim ↔ filter 不对称 ----------------------
+
+_DIM_FILTER_YAML = """
+version: 1
+joins:
+  branch: "JOIN dim_branch dbr ON {fact}.branch_id = dbr.branch_id"
+metrics:
+  - id: risk_event_count
+    display_name: 风险事件数
+    aliases: [风险事件数]
+    fact_table: fct_risk_event
+    fact_alias: fre
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    date_column: fre.dt
+    dim_catalog:
+      branch_city:
+        select_expr: dbr.city
+        alias: branch_city
+        requires_join: [branch]
+    filter_catalog:
+      severity: {column: "fre.severity", type: string}
+"""
+
+
+def test_dimension_without_matching_filter_is_reported(tmp_path):
+    """能 GROUP BY 却不能 WHERE 的列——第二类不对称。
+
+    由来见 2026-08-28 分流：idx24「上海分行 2026 年 5 月的反洗钱告警数量」
+    cosine 0.7566（全场第二高），prefilter 命中了，却因为 `risk_event_count`
+    有 branch_city 维度、没有 branch_city 过滤器而被 resolve 拒掉。
+    维度侧的对称性缺口不会让 SQL 出错，它让整条问题落不进语义层。
+    """
+    gaps = dim_filter_gaps(_catalog_from(tmp_path, _DIM_FILTER_YAML))
+    assert [(g.metric_id, g.ref) for g in gaps] == [("risk_event_count", "dim_branch.city")]
+
+
+def test_dimension_that_is_also_a_filter_is_not_a_gap(tmp_path):
+    """维度与过滤器都挂着同一列——这正是要求的对称状态。"""
+    body = _DIM_FILTER_YAML.replace(
+        """      severity: {column: "fre.severity", type: string}""",
+        """      severity: {column: "fre.severity", type: string}
+      branch_city:
+        column: "dbr.city"
+        type: string
+        requires_join: [branch]""",
+    )
+    assert dim_filter_gaps(_catalog_from(tmp_path, body)) == []
+
+
+def test_dimension_pinned_in_hard_filters_is_not_a_gap(tmp_path):
+    """该列被 hard_filters 写死——口径有意收窄，开放成过滤器反而是错的。"""
+    body = _DIM_FILTER_YAML.replace(
+        """    hard_filters: []""",
+        """    hard_filters:
+      - "dbr.city = 'SH'"
+    hard_filter_joins: [branch]""",
+    )
+    assert dim_filter_gaps(_catalog_from(tmp_path, body)) == []
+
+
+def test_dimension_on_the_date_column_is_not_a_gap(tmp_path):
+    """时间列由 time_window 管，不该再要求一个同列过滤器。"""
+    body = _DIM_FILTER_YAML.replace(
+        """      branch_city:
+        select_expr: dbr.city
+        alias: branch_city
+        requires_join: [branch]""",
+        """      dt:
+        select_expr: fre.dt
+        alias: dt""",
+    )
+    assert dim_filter_gaps(_catalog_from(tmp_path, body)) == []
+
+
+def test_real_catalog_has_no_dim_filter_gaps():
+    """config/metrics.yaml 的门禁：能 GROUP BY 的列必须也能 WHERE。
+
+    维度是从兄弟指标复制过来的，过滤器往往漏跟——漏了不报错，只是让
+    「上海分行的 X」这类问题在 resolve 阶段被拒，静悄悄退回 NL2SQL。
+    """
+    gaps = dim_filter_gaps(MetricCatalog.from_yaml(METRICS_YAML))
+    assert gaps == [], "\n".join(f"{g.metric_id}: {g.ref} — {g.message}" for g in gaps)

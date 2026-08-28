@@ -65,11 +65,14 @@ metrics:
       branch_id:      {select_expr: "fbd.branch_id",      alias: "branch_id"}
       branch_name:    {select_expr: "dbr.branch_name",    alias: "branch_name",    requires_join: [branch]}
       branch_city:    {select_expr: "dbr.city",           alias: "city",           requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
       customer_tier:  {select_expr: "dc.customer_tier",   alias: "customer_tier",  requires_join: [customer]}
-      product_category: {select_expr: "dp.product_category", alias: "product_category", requires_join: [product]}
     filter_catalog:
       branch_id:      {column: "fbd.branch_id",     type: string}
       branch_city:    {column: "dbr.city",          type: string,  requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
       branch_name:    {column: "dbr.branch_name",   type: string,  requires_join: [branch]}
       customer_tier:
         column: "dc.customer_tier"
@@ -97,10 +100,15 @@ metrics:
     dim_catalog:
       branch_id:      {select_expr: "fbd.branch_id",    alias: "branch_id"}
       branch_city:    {select_expr: "dbr.city",         alias: "city",          requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
       customer_tier:  {select_expr: "dc.customer_tier", alias: "customer_tier", requires_join: [customer]}
     filter_catalog:
       branch_id:      {column: "fbd.branch_id",     type: string}
       branch_city:    {column: "dbr.city",          type: string,  requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
+      branch_name:    {column: "dbr.branch_name",   type: string,  requires_join: [branch]}
       customer_tier:
         column: "dc.customer_tier"
         type: enum
@@ -126,14 +134,22 @@ metrics:
     dim_catalog:
       branch_id:    {select_expr: "dc.branch_id",   alias: "branch_id"}
       branch_city:  {select_expr: "dbr.city",       alias: "city",           requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
       customer_tier: {select_expr: "dc.customer_tier", alias: "customer_tier"}
     filter_catalog:
       branch_id:    {column: "dc.branch_id",   type: string}
       branch_city:  {column: "dbr.city",       type: string,  requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
       customer_tier:
         column: "dc.customer_tier"
         type: enum
         enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+      gender:
+        column: "dc.gender"
+        type: enum
+        enum_values: [M, F, U]
 
   # -------------------- 客户数（分行/层级/等维度） --------------------
   - id: customer_count
@@ -152,16 +168,24 @@ metrics:
     dim_catalog:
       branch_id:    {select_expr: "dc.branch_id", alias: "branch_id"}
       branch_city:  {select_expr: "dbr.city",     alias: "city",           requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
       customer_tier: {select_expr: "dc.customer_tier", alias: "customer_tier"}
       gender:       {select_expr: "dc.gender",    alias: "gender"}
     filter_catalog:
       branch_id:    {column: "dc.branch_id",   type: string}
       branch_city:  {column: "dbr.city",       type: string,  requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
       customer_tier:
         column: "dc.customer_tier"
         type: enum
         enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
       is_active:    {column: "dc.is_active",   type: boolean}
+      gender:
+        column: "dc.gender"
+        type: enum
+        enum_values: [M, F, U]
 
   # -------------------- 产品数 --------------------
   - id: product_count
@@ -171,6 +195,8 @@ metrics:
       - 产品数量
       - 有多少产品
       - 有多少个产品
+      - 在售产品数
+      - 在售产品有多少款
     fact_table: dim_product
     fact_alias: dp
     metric_expr: COUNT(*)
@@ -190,6 +216,12 @@ metrics:
         column: "dp.risk_level"
         type: enum
         enum_values: [R1, R2, R3, R4, R5]
+      # 「在售」「在售的」「还在卖的」都落到这一列；dim_product.is_active 就是在售标志
+      is_active: {column: "dp.is_active", type: boolean}
+      currency:
+        column: "dp.currency"
+        type: enum
+        enum_values: [CNY, USD, HKD, EUR]
 
   # -------------------- 交易金额 --------------------
   - id: transaction_amount
@@ -202,6 +234,9 @@ metrics:
       - 转账金额
       - 消费金额
       - 存款交易额
+      - 利息入账金额
+      - 手续费金额
+      - 渠道交易金额
     fact_table: fct_transaction
     fact_alias: ft
     metric_expr: SUM(ft.amount)
@@ -211,19 +246,28 @@ metrics:
     dim_catalog:
       branch_id:        {select_expr: "ft.branch_id",       alias: "branch_id"}
       branch_city:      {select_expr: "dbr.city",           alias: "city",            requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
       transaction_type: {select_expr: "ft.transaction_type", alias: "transaction_type"}
       channel:          {select_expr: "ft.transaction_channel", alias: "channel"}
     filter_catalog:
       branch_id:  {column: "ft.branch_id",  type: string}
       branch_city: {column: "dbr.city",      type: string,  requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
       transaction_type:
         column: "ft.transaction_type"
         type: enum
-        enum_values: [WITHDRAW, DEPOSIT, TRANSFER, PAYMENT, LOAN]
+        enum_values: [DEPOSIT, WITHDRAW, TRANSFER, PAYMENT, LOAN, INTEREST, FEE]
       channel:
         column: "ft.transaction_channel"
         type: enum
-        enum_values: [ATM, COUNTER, MOBILE, INTERNET, POS]
+        enum_values: [ATM, COUNTER, MOBILE, INTERNET, AGENT, API]
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
 
   # ==================== 以下为 2026-08-13 扩容（ADR-013 跟进项 P2）====================
 
@@ -247,10 +291,14 @@ metrics:
       transaction_type: {select_expr: "ft.transaction_type",    alias: "transaction_type"}
       channel:          {select_expr: "ft.transaction_channel", alias: "transaction_channel"}
       branch_city:      {select_expr: "dbr.city",               alias: "city",           requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
       customer_tier:    {select_expr: "dc.customer_tier",       alias: "customer_tier",  requires_join: [customer]}
     filter_catalog:
       branch_id:   {column: "ft.branch_id", type: string}
       branch_city: {column: "dbr.city",     type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
       transaction_type:
         column: "ft.transaction_type"
         type: enum
@@ -284,8 +332,13 @@ metrics:
       transaction_type: {select_expr: "ft.transaction_type",    alias: "transaction_type"}
       channel:          {select_expr: "ft.transaction_channel", alias: "transaction_channel"}
       branch_city:      {select_expr: "dbr.city",               alias: "city",  requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
     filter_catalog:
       branch_id: {column: "ft.branch_id", type: string}
+      branch_city: {column: "dbr.city",     type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
       transaction_type:
         column: "ft.transaction_type"
         type: enum
@@ -294,6 +347,11 @@ metrics:
         column: "ft.transaction_channel"
         type: enum
         enum_values: [ATM, COUNTER, MOBILE, INTERNET, AGENT, API]
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
 
   # -------------------- 持仓市值 --------------------
   - id: holding_market_value
@@ -313,6 +371,8 @@ metrics:
     dim_catalog:
       branch_id:        {select_expr: "fh.branch_id",           alias: "branch_id"}
       branch_city:      {select_expr: "dbr.city",               alias: "city",              requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
       customer_tier:    {select_expr: "dc.customer_tier",       alias: "customer_tier",     requires_join: [customer]}
       product_category: {select_expr: "dp.product_category",    alias: "product_category",  requires_join: [product]}
     filter_catalog:
@@ -327,6 +387,9 @@ metrics:
         type: enum
         enum_values: [DEPOSIT, LOAN, WEALTH, FUND, INSURANCE, CARD]
         requires_join: [product]
+      branch_city:  {column: "dbr.city",     type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
 
   # -------------------- 持仓盈亏 --------------------
   - id: holding_pnl
@@ -347,13 +410,24 @@ metrics:
       branch_id:        {select_expr: "fh.branch_id",        alias: "branch_id"}
       customer_tier:    {select_expr: "dc.customer_tier",    alias: "customer_tier",    requires_join: [customer]}
       product_category: {select_expr: "dp.product_category", alias: "product_category", requires_join: [product]}
+      branch_city:  {select_expr: "dbr.city",     alias: "city",     requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
     filter_catalog:
       branch_id: {column: "fh.branch_id", type: string}
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
       product_category:
         column: "dp.product_category"
         type: enum
         enum_values: [DEPOSIT, LOAN, WEALTH, FUND, INSURANCE, CARD]
         requires_join: [product]
+      branch_city:  {column: "dbr.city",     type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
 
   # -------------------- 风险事件数 --------------------
   - id: risk_event_count
@@ -364,6 +438,9 @@ metrics:
       - 有多少风险事件
       - 风控事件
       - 告警数
+      - 反洗钱告警
+      - 反洗钱告警数量
+      - 可疑交易告警
     fact_table: fct_risk_event
     fact_alias: fre
     metric_expr: COUNT(*)
@@ -376,6 +453,8 @@ metrics:
       severity:   {select_expr: "fre.severity",   alias: "severity"}
       status:     {select_expr: "fre.status",     alias: "status"}
       branch_city: {select_expr: "dbr.city",      alias: "city", requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
     filter_catalog:
       branch_id: {column: "fre.branch_id", type: string}
       event_type:
@@ -395,6 +474,9 @@ metrics:
         type: enum
         enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
         requires_join: [customer]
+      branch_city:  {column: "dbr.city",     type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
 
   # -------------------- 风险事件涉及金额 --------------------
   - id: risk_event_amount
@@ -414,6 +496,9 @@ metrics:
       branch_id:  {select_expr: "fre.branch_id",  alias: "branch_id"}
       event_type: {select_expr: "fre.event_type", alias: "event_type"}
       severity:   {select_expr: "fre.severity",   alias: "severity"}
+      branch_city:  {select_expr: "dbr.city",     alias: "city",     requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
     filter_catalog:
       branch_id: {column: "fre.branch_id", type: string}
       event_type:
@@ -424,6 +509,18 @@ metrics:
         column: "fre.severity"
         type: enum
         enum_values: [CRITICAL, HIGH, MEDIUM]
+      status:
+        column: "fre.status"
+        type: enum
+        enum_values: [OPEN, INVESTIGATING, CONFIRMED, CLOSED]
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
+      branch_city:  {column: "dbr.city",     type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
 
   # -------------------- 营销触达数 --------------------
   - id: campaign_response_count
@@ -487,6 +584,15 @@ metrics:
         column: "fcr.channel"
         type: enum
         enum_values: [SMS, APP_PUSH, CALL, EMAIL, IN_PERSON]
+      response_type:
+        column: "fcr.response_type"
+        type: enum
+        enum_values: [NO_RESPONSE, CLICKED, INTERESTED, CONVERTED, REJECTED]
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
 
   # -------------------- 账户数 --------------------
   - id: account_count
@@ -507,6 +613,8 @@ metrics:
       account_type: {select_expr: "da.account_type", alias: "account_type"}
       status:       {select_expr: "da.status",       alias: "status"}
       branch_city:  {select_expr: "dbr.city",        alias: "city", requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
     filter_catalog:
       branch_id: {column: "da.branch_id", type: string}
       account_type:
@@ -517,6 +625,9 @@ metrics:
         column: "da.status"
         type: enum
         enum_values: [ACTIVE, DORMANT, FROZEN, CLOSED]
+      branch_city:  {column: "dbr.city",     type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
 
   # -------------------- 客户平均年龄 --------------------
   - id: customer_avg_age
@@ -538,8 +649,13 @@ metrics:
       customer_tier: {select_expr: "dc.customer_tier", alias: "customer_tier"}
       gender:        {select_expr: "dc.gender",        alias: "gender"}
       branch_city:   {select_expr: "dbr.city",         alias: "city", requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
     filter_catalog:
       branch_id: {column: "dc.branch_id", type: string}
+      branch_city: {column: "dbr.city",    type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
       customer_tier:
         column: "dc.customer_tier"
         type: enum
@@ -594,10 +710,21 @@ metrics:
       branch_id:    {select_expr: "fbd.branch_id",   alias: "branch_id"}
       account_type: {select_expr: "da.account_type", alias: "account_type", requires_join: [account]}
       branch_city:  {select_expr: "dbr.city",        alias: "city",         requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
     filter_catalog:
       branch_id: {column: "fbd.branch_id", type: string}
+      branch_city: {column: "dbr.city",        type: string, requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
+      branch_name: {column: "dbr.branch_name", type: string, requires_join: [branch]}
       account_type:
         column: "da.account_type"
         type: enum
         enum_values: [CURRENT, SAVING, LOAN, CARD, INVESTMENT]
         requires_join: [account]
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]

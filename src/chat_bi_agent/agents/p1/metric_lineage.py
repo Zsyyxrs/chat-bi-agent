@@ -28,6 +28,9 @@ _JOIN_TABLE_ALIAS_RE = re.compile(
 # `alias.column`。只认带点的，理由见模块 docstring。
 _QUALIFIED_REF_RE = re.compile(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)")
 
+# 光秃秃的 `alias.column`，整串就这么多——dim 的 select_expr 是它才谈得上「对应的过滤器」
+_PLAIN_COLUMN_RE = re.compile(r"^[A-Za-z_]\w*\.[A-Za-z_]\w*$")
+
 # SQL 字符串字面量——先剥掉，否则 'BR_CITY_0006' 之类会被当成引用
 _STRING_LITERAL_RE = re.compile(r"'[^']*'")
 
@@ -201,3 +204,120 @@ def validate_catalog(catalog: MetricCatalog, loader: SchemaLoader) -> list[Catal
                     )
 
     return issues
+
+
+def sibling_filter_gaps(catalog: MetricCatalog) -> list[CatalogIssue]:
+    """同一张 fact 表上，兄弟指标能过滤的列本指标却不能——报为不对称。
+
+    由来（2026-08-28 example_pool 分流）：`campaign_conversion_amount` 的
+    filter_catalog 缺 `response_type`，而同表的 `campaign_response_count` 有。
+    问「已转化客户的转化总金额」时 LLM 只能拿 campaign_name 顶替，拼出的 SQL
+    语法正确、能跑、返回非空，只是数字偏大。执行反馈捕不到这类错。
+
+    成因是复制粘贴：计数类指标被评测题逐步喂胖，金额类是从它复制后删剩的。
+
+    同一列两边都有、但 `enum_values` 不一致时也报：必有一边是错的。实例是
+    `transaction_amount` 把 channel 写成 [..., POS]（schema 里没这个值）而漏了
+    AGENT/API，漏掉的值会让整条问题被判越界拒掉。
+
+    **例外**：本指标把该列写死在 `hard_filters` 里，说明是有意收窄口径
+    （`deposit_balance` 硬过滤 account_type），不算缺口。
+    """
+    by_fact: dict[str, list[Metric]] = {}
+    for metric in catalog.metrics:
+        by_fact.setdefault(metric.fact_table, []).append(metric)
+
+    gaps: list[CatalogIssue] = []
+    for fact_table, metrics in by_fact.items():
+        if len(metrics) < 2:
+            continue
+        # 过滤器身份用「物理列」而非 filter_id：不同指标可能给同一列起不同的 id
+        for metric in metrics:
+            own_by_column = {f.column: f for f in metric.filter_catalog.values()}
+            own_columns = set(own_by_column)
+            pinned = {f"{a}.{c}" for a, c in _qualified_refs(*metric.hard_filters)}
+            for sibling in metrics:
+                if sibling.id == metric.id:
+                    continue
+                for f in sibling.filter_catalog.values():
+                    if f.column in pinned:
+                        continue
+                    ref = f"{fact_table}.{f.column.split('.')[-1]}"
+                    if any(g.metric_id == metric.id and g.ref == ref for g in gaps):
+                        continue
+
+                    if f.column not in own_columns:
+                        message = (
+                            f"同表指标 {sibling.id} 能按 {f.column} 过滤，本指标不能——"
+                            "用户这么问时 LLM 会拿别的列顶替，SQL 跑得通但数字错"
+                        )
+                    else:
+                        own = own_by_column[f.column]
+                        missing = [
+                            v for v in f.enum_values or [] if v not in (own.enum_values or [])
+                        ]
+                        if not missing:
+                            continue
+                        message = (
+                            f"同表指标 {sibling.id} 的 {f.column} 枚举里有 "
+                            f"{'、'.join(missing)}，本指标没有——必有一边是错的，"
+                            "漏掉的那个值会被判越界而整条拒掉"
+                        )
+
+                    gaps.append(
+                        CatalogIssue(
+                            metric_id=metric.id, ref=ref, message=message, severity="asymmetry"
+                        )
+                    )
+    return gaps
+
+
+def dim_filter_gaps(catalog: MetricCatalog) -> list[CatalogIssue]:
+    """同一个指标里，能 GROUP BY 的列却不能 WHERE——第二类不对称。
+
+    与 `sibling_filter_gaps` 是两回事：那个比的是**兄弟指标之间**的过滤器，
+    这个比的是**同一指标内部** dim_catalog 与 filter_catalog 的对齐。
+
+    由来（2026-08-28 example_pool 分流）：`risk_event_count` 有 branch_city 维度、
+    没有 branch_city 过滤器。idx24「上海分行 2026 年 5 月的反洗钱告警数量」
+    cosine 0.7566（全场第二高），prefilter 命中了，resolve 阶段却没有能按分行名
+    过滤的列，只能拒掉、静悄悄退回 NL2SQL。
+
+    这类缺口不会让 SQL 出错——它让整条问题落不进语义层，所以执行反馈同样捕不到。
+    成因也是复制粘贴：维度是从兄弟指标抄来的，过滤器漏跟。
+
+    **例外**两条：
+      - 该列写死在 `hard_filters` 里，那是有意收窄口径（同 `sibling_filter_gaps`）；
+      - 该列就是 `date_column`，时间由 time_window 管，不需要另一个过滤器。
+
+    非 `alias.column` 形态的 select_expr（`DATE_TRUNC(...)` 之类）不查——它们
+    本来就没有一个可直接 WHERE 的对应列。
+    """
+    gaps: list[CatalogIssue] = []
+    for metric in catalog.metrics:
+        alias_map = _alias_to_table(metric)
+        filter_columns = {f.column for f in metric.filter_catalog.values()}
+        pinned = {f"{a}.{c}" for a, c in _qualified_refs(*metric.hard_filters)}
+
+        for dim in metric.dim_catalog.values():
+            column = dim.select_expr.strip()
+            if not _PLAIN_COLUMN_RE.match(column):
+                continue
+            if column in filter_columns or column in pinned or column == metric.date_column:
+                continue
+
+            alias, _, name = column.partition(".")
+            ref = f"{alias_map.get(alias, alias)}.{name}"
+            gaps.append(
+                CatalogIssue(
+                    metric_id=metric.id,
+                    ref=ref,
+                    message=(
+                        f"维度 {dim.id} 能按 {column} 分组，却没有同列的过滤器——"
+                        "用户问「某个具体值的本指标」时 prefilter 命中、resolve 拒掉，"
+                        "整条问题落不进语义层"
+                    ),
+                    severity="asymmetry",
+                )
+            )
+    return gaps
