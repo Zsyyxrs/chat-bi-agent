@@ -1198,6 +1198,85 @@ dim/filter 的 `requires_join`，与 `needed_joins` 同源），**没被引用�
 
 ---
 
+**Update 2026-08-28：口径分歧以 catalog 为准；34 题标尺重测；分流必须带值域探针**
+
+三件事，都是这一轮扩 catalog（dim↔filter 对称、ORDER BY/LIMIT、prefilter 双路召回）
+之后才暴露出来的。
+
+**1. gold 与 catalog 的口径分歧，一律以 catalog 为准。**
+
+`example_pool_prod.jsonl` 里「华东大区各省 4 月日均存款余额」那条，gold 用
+`p.product_category = 'DEPOSIT'` 定义存款，catalog 的 governed 定义是
+`da.account_type IN ('CURRENT','SAVING')`。**语义层存在的意义就是终结这种分歧**——
+让两套定义并存，等于把「存款是什么」这个问题留给每条 SQL 各自回答。所以定死：
+catalog 是唯一口径来源，gold 与它冲突时错的是 gold。
+
+实测这次是零代价的：两条 SQL 在真库上返回完全相同的两行（上海 137077.25 /
+江西 99730.64）。合成数据生成器把 `account_type` 与 `product_category` 做了类别级
+双射（`dimension_generator.py:240-246`），DEPOSIT 只对应 CURRENT/SAVING。
+**但别把「这次相等」当成「一直相等」**——真实行内数据没有这个双射，那时这个决策
+才真正花钱，而那正是它该被提前定死的理由。
+
+漂移检测器按字符串字面量比对，看不出两者等价，会一直报。所以 `--migrate` 加了
+`--adjudicated`：人逐条裁决过的漂移才允许带着漂移移出池子，其余漂移一律留下。
+
+**2. 34 题标尺重测：precision 仍是 1.000，但标尺本身改了一条，须知情。**
+
+放宽过滤面之后重跑，**按旧标签算 precision 掉到 0.9444**（唯一假阳性 `mr_n12`
+「存款余额最高的前 5 个分行」）。查它的标注理由——`route_note: "Top-N——spec 无排序/取顶"`
+——**正是本轮 ORDER BY/LIMIT 特性干掉的那个前提**。它生成的 SQL 与 `expected_sql`
+逐字等价，score 1.0、result_match True。按「前提作废的测试要改写，不要删」这条，
+改标为 `metric` 并在 YAML 里留了前因。
+
+| | 08-14 基线 | 本轮/旧标 | 本轮/新标 |
+|---|---:|---:|---:|
+| 路由 precision | 1.000 | 0.9444 | **1.000** |
+| recall | 0.75 | 0.85 | **0.8571** |
+| F1 | 0.8571 | 0.8947 | **0.9231** |
+| TP/FP/FN/TN | 15/0/5/14 | 17/1/3/13 | **18/0/3/13** |
+| avg_score | 0.9436 | 0.9662 | 0.9662 |
+| result_match | 0.7059 | 0.7941 | 0.7941 |
+
+**改标尺去修好看的数字是重罪，所以把判据写死在这里**：只有当标签的理由是一句
+「模板表达不了 X」、而 X 已经实现且生成的 SQL 与 gold 实测等价时才准改；
+凡是理由涉及业务语义的，一个字都不许动。同一轮里 `mr_n09`（argmax 按日）就
+**没有**改标——它的旧理由（无排序）同样作废，但仍该走 nl2sql，因为
+`transaction_amount` 的 `dim_catalog` 没有按日维度，`GROUP BY dt` 表达不了。
+只订正了理由，标签保持 nl2sql。
+
+**遗留风险**：`mr_n12` 的 cosine 是 0.6314，阈值 0.63，余量 0.0014。两轮重跑都
+稳定命中（cosine 是确定性的），但换 embedding 模型或改 alias 都可能把它推下去，
+届时表现为 recall 掉一格而非报错。
+
+**3. 拿分流结果动 few-shot 池，必须带 `--probe`。**
+
+`triage_example_pool.py` 原本不注入 `probe_fn`（string filter 的值域探针，要连 PG），
+上一轮据此判定 idx24「上海分行 5 月反洗钱告警数」由 B 升 A，记作 dim↔filter
+对称性修复的战果。**注入探针后它掉回 B**（`value_out_of_domain`），而且查下去
+发现 gold 自己就是坏的：`dim_branch.city` 根本没有 `'上海'`（真正的「上海分行」
+是 `BR_PROV_0003`，省级行，`city` 为 NULL），gold SQL 实测返回 `alert_count = 0`。
+
+不带探针的分档偏宽松，拿它决定「哪些题移出池子」会**两头落空**——移出去了，
+生产上却被探针拒绝退回 NL2SQL，而此时 few-shot 兜底也已经没了。所以
+`build_router()` 把 probe 提成显式参数，脚本不带 `--probe` 时会打印警告。
+
+**分流执行结果**（`--probe`，31 条生产池）：A 14（干净 13 + 裁决 1）/ B 12 / C 5。
+14 条移出 `data/example_pool_prod.jsonl`（31 → 17），归档到
+`data/example_pool_metric_governed.jsonl`（不删，可回滚、可审计）。移出前逐条拿
+gold 与 governed SQL 在真库上比对结果集，14/14 完全一致。
+
+**没做、但必须知道的坑**：`nightly_promote.sh` → `bootstrap_prod_pool.py` 按
+`example_id` 合并去重，**不认识归档文件**。同一条 (question, sql) 再被 👍 一次就会
+重新灌回池子，这次迁出会静默失效。要不要给 promotion 加归档排除名单，是 pipeline
+的设计决定（也可能反过来——重新出现恰恰说明语义层退化了，值得当信号），留给后续。
+
+**Trace**：`scripts/triage_example_pool.py` 加 `build_router()` / `split_pool()` /
+`--probe` / `--migrate` / `--adjudicated`；测试 `tests/scripts/test_triage_example_pool.py`
+（10 例）；全量 743 passed / 5 skipped，`ruff check` 干净，
+`check_metric_catalog.py --quiet` 退 0
+
+---
+
 <a id="adr-014"></a>
 
 ### ADR-014: 评测集 gold 的可信度——修哪些、不修哪些，以及行数守门
