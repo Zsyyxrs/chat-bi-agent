@@ -631,25 +631,37 @@ class MetricRouter:
                 (mid, vec) for (mid, _), vec in zip(all_aliases, vecs, strict=True)
             ]
 
-    def try_route(self, question: str) -> RouteResult:
-        """从不抛异常。"""
-        # 1. embed 问题。除整句外再 embed 一遍剥掉时间修饰的版本，两路取 max——
-        #    alias 是短名词，长问题的整句 embedding 会被修饰语稀释（见
-        #    _strip_time_modifiers 的实测数据）。剥完只用于打分，不参与拼 SQL。
+    def rank_metrics(self, question: str) -> list[tuple[str, float]]:
+        """给每个指标打分，按 cosine 倒序返回 (metric_id, cosine)。
+
+        **prefilter 的唯一打分入口。** 线上 `try_route` 和离线
+        `scripts/sweep_prefilter_threshold.py` 都必须走这里——扫阈值的脚本
+        原本自己重算 cosine，加了双路召回之后两边悄悄分叉，而分叉方式是静默的：
+        扫出来的阈值看着正常，只是对不上线上行为。
+
+        除整句外再 embed 一遍剥掉时间修饰的版本，两路取 max——alias 是短名词，
+        长问题的整句 embedding 会被修饰语稀释（见 _strip_time_modifiers 的实测
+        数据）。剥完只用于打分，不参与拼 SQL。
+
+        一个 metric 有多条 alias 时只占一个候选位，取它最像的那条。
+        """
         variants = [question]
         stripped = _strip_time_modifiers(question)
         if stripped != question:
             variants.append(stripped)
         q_vecs = self.embed_fn(variants)
 
-        # 2. 每个 metric 取它最像的那条 alias 的 cosine，再按相似度排名
-        #    （一个 metric 多条 alias 只占一个候选位）
         best_by_metric: dict[str, float] = {}
         for mid, vec in self._alias_index:
             cos = max(_cosine(q_vec, vec) for q_vec in q_vecs)
             if cos > best_by_metric.get(mid, -1.0):
                 best_by_metric[mid] = cos
-        ranked = sorted(best_by_metric.items(), key=lambda kv: kv[1], reverse=True)
+        return sorted(best_by_metric.items(), key=lambda kv: kv[1], reverse=True)
+
+    def try_route(self, question: str) -> RouteResult:
+        """从不抛异常。"""
+        # 1-2. 打分并排名。**离线扫阈值走的是同一个方法**，见 rank_metrics
+        ranked = self.rank_metrics(question)
 
         best_mid: str | None = ranked[0][0] if ranked else None
         best_cos: float = ranked[0][1] if ranked else -1.0

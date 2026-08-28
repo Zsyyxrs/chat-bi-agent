@@ -4,9 +4,12 @@
 **换 embedding 模型后必须重跑这个**——阈值绑定 cosine 尺度，换模型就失效。
 
 为什么可以不跑整轮 eval：prefilter 只依赖"问题 embedding × catalog alias embedding"
-的 cosine，与 LLM 生成 SQL 无关。实测离线算的 cosine 与整轮跑批记录的
-prefilter_cosine 偏差 0.000218。所以这里只花 embedding 的钱（几十秒），
+的 cosine，与 LLM 生成 SQL 无关。所以这里只花 embedding 的钱（几十秒），
 不必为调阈值跑一遍 34 题的完整 eval。
+
+**打分一律走 `MetricRouter.rank_metrics`**，不在本脚本里重算。曾经重算过
+（单路，只 embed 整句），双路召回上线后与线上静默分叉——扫出来的阈值看着
+正常，只是对不上线上行为。
 
 用法：
     python scripts/sweep_prefilter_threshold.py
@@ -31,7 +34,6 @@ load_dotenv()
 from chat_bi_agent.agents.p1.metric_resolver import (  # noqa: E402
     MetricCatalog,
     MetricRouter,
-    _cosine,
 )
 from chat_bi_agent.llm import qwen_client  # noqa: E402
 
@@ -93,16 +95,17 @@ def main() -> int:
     )
     print(f"embedding={qwen_client.EMBED_MODEL}\n")
 
-    # 复用 MetricRouter 的索引构建，保证与线上 prefilter 完全同源
+    # 走 MetricRouter.rank_metrics，保证与线上 prefilter 完全同源。
+    # 别在这里自己重算 cosine：原先那样写过，双路召回上线后两边悄悄分叉，
+    # 扫出来的阈值看着正常、只是对不上线上行为。
     router = MetricRouter(catalog, embed_fn=qwen_client.embed, threshold=0.0)
-    qvecs = qwen_client.embed([q["question"] for q in labeled])
     rows = [
         {
             "id": q["id"],
             "want": q["expected_route"],
-            "cos": max(_cosine(qv, vec) for _, vec in router._alias_index),
+            "cos": router.rank_metrics(q["question"])[0][1],
         }
-        for q, qv in zip(labeled, qvecs, strict=True)
+        for q in labeled
     ]
 
     m = [r["cos"] for r in rows if r["want"] == "metric"]

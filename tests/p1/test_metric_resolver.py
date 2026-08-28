@@ -966,3 +966,40 @@ def test_local_join_kept_even_when_unreferenced(tmp_path):
     yml.write_text(body, encoding="utf-8")
     m = MetricCatalog.from_yaml(yml).get("customer_count")
     assert sorted(m.joins) == ["branch", "odd"]
+
+
+def test_rank_metrics_matches_the_cosine_try_route_gates_on(tmp_path):
+    """离线扫阈值必须与线上 prefilter 同源，否则扫出来的是一个不存在的分布。
+
+    `sweep_prefilter_threshold.py` 原本自己重算 cosine（单路，只 embed 整句）。
+    加了双路召回之后它与 `try_route` 悄悄分叉——脚本注释里「离线与跑批偏差
+    0.000218」那条保证失效，而失效方式是静默的：扫出来的阈值看着正常，
+    只是对不上线上行为。把打分收敛成一个方法，物理上杜绝再次分叉。
+    """
+    catalog = MetricCatalog.from_yaml(
+        Path(__file__).resolve().parents[2] / "config" / "metrics.yaml"
+    )
+    # 带时间修饰的问题——单路与双路在这里必然不同
+    question = "2026 年上半年利息入账总金额是多少？"
+    from chat_bi_agent.agents.p1.metric_resolver import (
+        MetricRouter,
+        _strip_time_modifiers,
+    )
+
+    calls: list[list[str]] = []
+
+    def embed_fn(texts):
+        calls.append(list(texts))
+        # 让「剥掉时间修饰」的那一路明显更像，双路取 max 才看得出差别
+        return [[1.0, 0.0] if "2026" in t else [0.0, 1.0] for t in texts]
+
+    router = MetricRouter(catalog=catalog, embed_fn=embed_fn, threshold=0.0)
+    calls.clear()
+    ranked = router.rank_metrics(question)
+
+    assert calls, "rank_metrics 应该自己 embed"
+    assert len(calls[0]) == 2, f"应该 embed 整句 + 剥完两路，实际 {calls[0]}"
+    assert calls[0][0] == question
+    assert calls[0][1] == _strip_time_modifiers(question)
+    assert ranked == sorted(ranked, key=lambda kv: kv[1], reverse=True), "必须按 cosine 倒序"
+    assert {mid for mid, _ in ranked} == {m.id for m in catalog.metrics}, "每个指标占一个候选位"
