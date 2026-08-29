@@ -379,16 +379,17 @@ evaluation_questions:
       SELECT dt, SUM(amount) AS total FROM fct_transaction
       WHERE dt >= DATE '2026-05-01' AND dt <= DATE '2026-05-31'
       GROUP BY dt ORDER BY total DESC LIMIT 1
-    expected_route: nl2sql
-    # 2026-08-28 换理由（标签不变）：原写「spec 无排序/取顶」，加了 order_by/limit
-    # 之后这条不成立了。仍该走 nl2sql 是因为另一件事——transaction_amount 的
-    # dim_catalog 里没有按日的维度，`GROUP BY dt` 表达不了。补维度前不要改标。
-    route_note: "argmax 按日分组——transaction_amount 无 dt 维度"
+    expected_route: metric
+    # 2026-08-28 改标（第二次，前一次只换了理由没改标）：当时写「补维度前不要
+    # 改标」，现在 transaction_amount 补上了 dt 维度，那个前提也没了。
+    # spec {dims:[dt], order_by:{by:metric,desc:true}, limit:1} 渲染出的 SQL
+    # 与 expected_sql 实测同值（2026-05-29 / 17642228.37）。
+    route_note: "argmax——dims=[dt] + order_by metric desc + limit=1，模板可表达"
     expected_result_columns: ['dt']
     expected_filters: []
     expected_result_count: {min: 1, max: 1}
     evaluation_criteria:
-      - out_of_catalog: "argmax 需按日分组，dim_catalog 无 dt 维度"
+      - top_n: "argmax 需按日分组 + ORDER BY + LIMIT"
 
   - id: mr_n10
     question: "开户时间超过 3 年的客户有多少人？"

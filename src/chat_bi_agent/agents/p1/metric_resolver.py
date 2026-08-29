@@ -69,6 +69,9 @@ class Metric:
     filter_catalog: dict[str, MetricFilter]
     # hard_filters 自身依赖的 join，无条件拼进 FROM（dims/filters 为空时也要）
     hard_filter_joins: list[str] = field(default_factory=list)
+    # "range"（默认，流量指标）或 "point_in_time"（存量指标，时间窗钉到末日快照）。
+    # 存量指标跨日求和是错的：余额 SUM 一个月等于把同一笔钱数 30 遍。
+    time_semantics: str = "range"
 
 
 # 形如 `JOIN dim_branch dbr ON ...`（可带 LEFT/INNER 等前缀）里抓表别名
@@ -171,6 +174,7 @@ class MetricCatalog:
                     dim_catalog=dim_catalog,
                     filter_catalog=filter_catalog,
                     hard_filter_joins=hard_filter_joins,
+                    time_semantics=m.get("time_semantics", "range"),
                 )
             )
         return cls(metrics=ms, joins=global_joins)
@@ -302,10 +306,17 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     if spec.time_window and metric.date_column:
         start = spec.time_window.get("start")
         end = spec.time_window.get("end")
-        if start:
-            where_parts.append(f"{metric.date_column} >= DATE '{start}'")
-        if end:
-            where_parts.append(f"{metric.date_column} <= DATE '{end}'")
+        if metric.time_semantics == "point_in_time":
+            # 存量指标钉到窗口末日的快照。跨日求和是错的——余额 SUM 一个月等于
+            # 把同一笔钱数 30 遍。取末日是财务口径的通行约定（期末余额）。
+            snapshot = end or start
+            if snapshot:
+                where_parts.append(f"{metric.date_column} = DATE '{snapshot}'")
+        else:
+            if start:
+                where_parts.append(f"{metric.date_column} >= DATE '{start}'")
+            if end:
+                where_parts.append(f"{metric.date_column} <= DATE '{end}'")
 
     # 4. 拼 SQL
     lines: list[str] = []
@@ -457,7 +468,10 @@ def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | N
                     filter_desc.append(f"{fid}({f.type})")
             lines.append(f"  可用 filters：{', '.join(filter_desc)}")
         if m.date_column:
-            lines.append("  支持 time_window")
+            if m.time_semantics == "point_in_time":
+                lines.append("  支持 time_window；时点指标：时间窗取末日快照，不跨日求和")
+            else:
+                lines.append("  支持 time_window")
     lines.append("")
     lines.append("输出示例：")
     lines.append("```json")

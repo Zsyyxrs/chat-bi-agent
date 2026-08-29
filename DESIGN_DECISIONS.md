@@ -1351,6 +1351,80 @@ filter 一个库里不存在的值（`dim_branch.city` 没有 `'上海'`）。�
 
 ---
 
+**Update 2026-08-29：存量/流量语义；补指标补维度；idx7 的召回**没有**解决**
+
+**1. 存量指标跨日求和是错的，模板此前无法表达时点口径。**
+
+生产池「华东大区 2026 年 4 月的存款余额总额」prefilter 未命中。原以为是召回
+问题、加个 alias 就行，查完发现完全不是：
+
+    deposit_balance.metric_expr = AVG(fbd.balance)              区间日均
+    该题 gold                   = SUM(...) WHERE dt = '2026-04-30'   末日时点
+
+问的是时点总额，指标建的是区间日均，**两者本来就不是一回事**。给
+`deposit_balance` 加 alias 等于把语义不符的指标拽进阈值，制造一个真正的假阳性。
+
+而直接建个 `SUM` 指标同样不行：模板只会拼 `date_column BETWEEN start AND end`，
+**存量指标跨日 SUM 等于把同一笔钱数 30 遍**。所以先补机制：`time_semantics`
+字段，默认 `range` 保持原语义；标 `point_in_time` 的指标时间窗渲染成
+`date_column = 末日`（期末余额，财务通行约定），抽取 prompt 同步标注。
+
+新建 `deposit_balance_total`，aliases 刻意避开「存款总额」「存款金额」这类与
+`deposit_balance` 太近的说法，必须带「合计/总额/期末/月末」才算它。
+**这个规避是有效的**：标尺上 `mr_m02`「高净值客户的存款余额平均」和 `mr_n12`
+「存款余额最高的前 5 个分行」都留在 `deposit_balance` 上没被抢走。
+
+**2. 按日维度三个 `fct_transaction` 指标都加，不是只给 `transaction_amount`。**
+
+否则「哪天笔数最多」被拒而「哪天金额最高」能答，这种任意的能力缺口正是本项目
+在治理的东西。`dim↔filter` 门禁对 `date_column` 有豁免，不误报。
+据此把 `mr_n09` 改标 `metric`——上一条 Update 里写的「补维度前不要改标」，
+前提已兑现，生成 SQL 与 gold 实测同值（2026-05-29 / 17642228.37）。
+
+**3. 标尺重跑：零假阳性保住了。**
+
+| | 08-28 | 08-29（新 catalog） |
+|---|---:|---:|
+| 路由 precision | 1.000 | **1.000** |
+| recall | 0.8571 | 0.8636 |
+| F1 | 0.9231 | **0.9268** |
+| TP/FP/FN/TN | 18/0/3/13 | 19/**0**/3/12 |
+| avg_score | 0.9662 | 0.952 |
+
+`avg_score` 掉的 0.0142 集中在 `mr_n14`（−0.400）与 `mr_n11`（−0.100），
+**两题都不走 governed 路径**（一个纯 nl2sql，一个回退后由 nl2sql 出 SQL），
+属 ADR-013 记过的 nl2sql 臂跑间噪声。**但没有重复采样证实**，见第 5 条。
+
+**4. idx7 的召回没解决——补指标没有接住它。**
+
+    补指标前 cosine 0.6084 → 补指标后 0.6153（阈值 0.63，仍差 0.0147）
+
+题面里「存款余额总额」与新 alias **逐字相同**，top-1 cosine 却只有 0.6153——
+整句的时间/地域修饰（「华东大区 2026 年 4 月…是多少？」）把相似度稀释掉了，
+双路剥离也没救回来。这与 `_strip_time_modifiers` 要治的是同一个病，只是这条
+剥完仍然不够。
+
+**结论：不为这一条调 alias 或动阈值。** 补指标的长期价值是补上了「时点 vs
+区间」这个真实的口径缺口（`SUM` 存量指标本来就没法正确渲染），而单题召回是
+prefilter 的老问题，靠给单题喂 alias 去解决等于拿标尺喂阈值。留作待办。
+
+**5. 两项验证没做完——API 配额耗尽（403 Free quota exhausted）。**
+
+- **few-shot 复测的基线臂（旧池 31 条）没跑完**，「16 条 vs 31 条」的对比不存在。
+  另外这轮暴露出**标尺选错了**：34 题标尺上 few-shot 只命中 5/34 题且全是
+  `mr_n*` 非指标题，这个分布本来就几乎吃不到生产池的 few-shot，就算基线臂跑完
+  也说明不了池子缩水的影响。要测该用同分布的
+  `precision_retrieval_evaluation.yaml`，或对生产池自己做留一验证。
+- **分流快照 `docs/triage/triage_fix7_newmetric.json` 不可用**：16 条里 11 条
+  报 403，那 11 条全被记成 C 档，是假象不是真分档。配额恢复后必须重跑覆盖。
+
+**Trace**：`Metric.time_semantics`；`config/metrics.yaml` 加
+`deposit_balance_total` + 三个交易指标的 `dt` 维度；测试
+`test_point_in_time_metric_pins_to_one_day_not_a_range` 等 4 例；
+全量 755 passed / 5 skipped，`ruff` 干净，`check_metric_catalog.py --quiet` 退 0
+
+---
+
 <a id="adr-014"></a>
 
 ### ADR-014: 评测集 gold 的可信度——修哪些、不修哪些，以及行数守门
