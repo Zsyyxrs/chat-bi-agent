@@ -1081,3 +1081,83 @@ def test_extractor_prompt_marks_point_in_time_metrics(tmp_path):
     # 不能拿 display_name 里的「时点」二字充数——那是指标名，不是给 LLM 的说明
     marker = "时点指标：时间窗取末日快照，不跨日求和"
     assert marker in prompt, prompt
+
+
+# --- op 白名单：governed 模板不能让 LLM 控制 SQL 结构 ---------------------------
+
+
+def test_operator_must_be_whitelisted():
+    """`op` 此前是自由文本直拼进 SQL，等于把结构控制权交回 LLM。
+
+    实测过的注入形态：op = "= 'X' OR 1=1 --" 渲染成
+    `region = 'X' OR 1=1 -- '华东'`，整条过滤器被中和。governed 模板的立身之本
+    就是 LLM 只能填值、不能改结构，所以 op 必须白名单。
+    """
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="deposit_balance",
+        dims=[],
+        filters=[{"col": "region", "op": "= 'X' OR 1=1 --", "val": "华东"}],
+    )
+    with pytest.raises(MetricResolverError, match="unsupported_op"):
+        render_sql_from_spec(spec, cat)
+
+
+@pytest.mark.parametrize("op", ["=", "!=", ">", ">=", "<", "<=", "IN"])
+def test_whitelisted_operators_still_work(op):
+    cat = _get_cat()
+    val = ["华东"] if op == "IN" else "华东"
+    sql = render_sql_from_spec(
+        MetricSpec(
+            metric_id="deposit_balance", dims=[], filters=[{"col": "region", "op": op, "val": val}]
+        ),
+        cat,
+    )
+    assert "dbr.region" in sql
+
+
+_NUMERIC_YAML = """
+metrics:
+  - id: m
+    display_name: 数值过滤器测试
+    aliases: ["x"]
+    fact_table: t
+    fact_alias: t
+    metric_expr: COUNT(*)
+    metric_alias: n
+    hard_filters: []
+    date_column: null
+    dim_catalog: {}
+    filter_catalog:
+      amt: {column: "t.amt", type: numeric}
+"""
+
+
+def _numeric_cat(tmp_path):
+    p = tmp_path / "numeric.yaml"
+    p.write_text(_NUMERIC_YAML, encoding="utf-8")
+    return MetricCatalog.from_yaml(p)
+
+
+def test_numeric_filter_rejects_non_numeric_value(tmp_path):
+    """numeric 的 val 也是不加引号直拼的——不校验就是第二个注入口。"""
+    spec = MetricSpec(
+        metric_id="m", dims=[], filters=[{"col": "amt", "op": ">", "val": "0 OR 1=1"}]
+    )
+    with pytest.raises(MetricResolverError, match="numeric"):
+        render_sql_from_spec(spec, _numeric_cat(tmp_path))
+
+
+def test_numeric_filter_rejects_bool(tmp_path):
+    """bool 是 int 子类——不单独排除的话 True 会渲染成 `amt > True`。与 limit 同一个坑。"""
+    spec = MetricSpec(metric_id="m", dims=[], filters=[{"col": "amt", "op": ">", "val": True}])
+    with pytest.raises(MetricResolverError, match="numeric"):
+        render_sql_from_spec(spec, _numeric_cat(tmp_path))
+
+
+def test_numeric_filter_accepts_real_numbers(tmp_path):
+    sql = render_sql_from_spec(
+        MetricSpec(metric_id="m", dims=[], filters=[{"col": "amt", "op": ">", "val": 0}]),
+        _numeric_cat(tmp_path),
+    )
+    assert "t.amt > 0" in sql, sql

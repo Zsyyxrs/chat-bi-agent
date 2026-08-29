@@ -205,6 +205,12 @@ class MetricSpec:
 _PLAIN_COLUMN_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?")
 
 
+# `op` 直接拼进 SQL 文本，所以必须白名单。实测过的注入形态：
+# op = "= 'X' OR 1=1 --" 渲染成 `region = 'X' OR 1=1 -- '华东'`，整条过滤器被中和。
+# governed 模板的立身之本就是 LLM 只能填值、不能改结构。
+_ALLOWED_OPS = frozenset({"=", "!=", "<>", ">", ">=", "<", "<=", "IN"})
+
+
 def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
     """把一条 filter 渲染成 WHERE 谓词。所有值校验都在这里。
 
@@ -212,6 +218,11 @@ def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
     """
     op = f.get("op", "=")
     val = f.get("val")
+
+    if op not in _ALLOWED_OPS:
+        raise MetricResolverError(
+            f"unsupported_op: {op!r} for filter {f.get('col')!r}; 只允许 {sorted(_ALLOWED_OPS)}"
+        )
 
     if op == "IN":
         if not isinstance(val, list):
@@ -247,6 +258,10 @@ def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
         safe = str(val).replace("'", "''")
         return f"{fdef.column} {op} '{safe}'"
     if fdef.type == "numeric":
+        # val 不加引号直拼，所以必须是真数字。bool 是 int 子类，单独排除——
+        # 与 limit 那里同一个坑。
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise MetricResolverError(f"numeric filter {f['col']!r} val 必须是数字，收到 {val!r}")
         return f"{fdef.column} {op} {val}"
     if fdef.type == "boolean":
         if isinstance(val, str):
