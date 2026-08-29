@@ -12,7 +12,6 @@ embedding 是模型的确定性产物，随时可以重算。
 from __future__ import annotations
 
 import importlib.util
-import json
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "pool_snapshot.py"
