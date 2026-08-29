@@ -1500,6 +1500,41 @@ prefilter 的老问题，靠给单题喂 alias 去解决等于拿标尺喂阈值
 
 ---
 
+**Update 2026-08-29（三）：池子台账进 git——治理决策此前只存在于一台机器上**
+
+`data/example_pool*.jsonl` 因为 embedding blob 被 gitignore（~4MB/1k 行）。于是
+本轮分流的全部成果只活在一台机器的磁盘上：16 条生产池 / 14 条已交给语义层的
+归档 / 1 条隔离，以及「idx14 的口径以 catalog 为准」这类**人工裁决**。换机器或
+重建容器就全没了，重建要重跑分流（打 LLM）再让人重新裁决一遍。
+
+**embedding 占了 98% 的体积**——去掉之后三个池子总共 13KB，进 git 毫无压力，
+而 embedding 是模型的确定性产物，随时可重算。所以固化的是内容 + 决策，不是文件。
+
+`data/pool_snapshot.jsonl`（**刻意不叫 `example_pool*`，否则被 gitignore 吃掉**）
+一行一条，`bucket` 字段记的就是治理决定：`prod` / `metric_governed` /
+`quarantine`。按 `(bucket, example_id)` 排序，否则每次重存都产生一坨与内容无关
+的行移动，评审时看不出真正改了什么。
+
+    python scripts/pool_snapshot.py --save      # 池子 → 台账（改完池子就跑，然后提交）
+    python scripts/pool_snapshot.py --check     # 比对，有漂移退 1（不打 LLM，随时可跑）
+    python scripts/pool_snapshot.py --restore   # 台账 → 重建池子（重算 embedding）
+
+`--check` 报三类漂移，**「换桶」是最隐蔽的一种**：条数对得上，但某条题从生产池
+挪到了「已交给语义层」，治理含义完全不同。nightly promote 灌进新样本时也会在
+这里显形（按上一条 Update 的决定，promotion 不加排除名单，所以漂移是预期内的，
+`--check` 的作用是让它可见而不是拦截）。
+
+**往返验证**（真删掉三个池子再 restore）：非 embedding 字段逐字一致；embedding
+重算为 1024 维；34 题检索命中的 example_id **全部相同**，仅 2 题的 cosine 在小数
+点后第 3 位有差（embedding API ~1e-3 抖动）。另量了边界余量：检索的两条硬边界
+（`min_similarity` 0.7、`leak_guard` 0.9）附近 0.005 内**没有任何条目**，
+所以这点抖动不可能改变检索集合。
+
+**Trace**：`scripts/pool_snapshot.py`；测试 `tests/scripts/test_pool_snapshot.py`
+（6 例）；`data/pool_snapshot.jsonl` 31 条 / 15.7KB 入库
+
+---
+
 <a id="adr-014"></a>
 
 ### ADR-014: 评测集 gold 的可信度——修哪些、不修哪些，以及行数守门
