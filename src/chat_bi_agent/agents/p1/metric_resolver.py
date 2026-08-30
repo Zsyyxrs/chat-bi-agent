@@ -458,7 +458,12 @@ def _build_extractor_prompt(catalog: MetricCatalog, candidate_ids: list[str] | N
         "time_window（对象或 null）",
         "3. 如果没有任何 metric 匹配问题（例如题目是要列出明细、事件流、单条记录），",
         "   **必须**返回 metric_id=null，其他字段留空——不要硬凑",
-        "4. filters 元素形如 {col, op, val}；op 支持 '=' 与 'IN'",
+        "4. filters 元素形如 {col, op, val}；op 只能取 "
+        "'='、'!='、'>'、'>='、'<'、'<='、'IN' 之一（其它一律拒绝）",
+        "   - 比较运算符只用于 numeric 类型的过滤器（列描述里标着 (numeric)）。"
+        "「为正」→ op '>' val 0；「大于 1 万」→ op '>' val 10000。"
+        "**别拿 '=' 顶替**——「浮盈为正」填成 op '=' val 0 会变成「浮盈为零」，"
+        "SQL 照样合法、结果照样非空，错得看不出来",
         "   - 单值用 {col, op: '=', val: 'X'}",
         "   - **多值必须用** {col, op: 'IN', val: ['X', 'Y']}——val 是数组",
         "   - 例：「杭州和南京两个分行」→ {col: 'branch_id', op: 'IN', "
