@@ -1032,11 +1032,15 @@ def _stock_catalog(tmp_path):
     return MetricCatalog.from_yaml(p)
 
 
-def test_point_in_time_metric_pins_to_one_day_not_a_range(tmp_path):
+def test_point_in_time_metric_pins_to_one_snapshot_not_a_range(tmp_path):
     """存量指标跨日求和是错的——余额 SUM 一个月等于把同一笔钱数 30 遍。
 
     区间聚合对流量指标（交易额）成立，对存量指标（余额、市值、持仓）不成立。
-    时点指标取窗口末日的快照，这是财务口径的通行约定（期末余额）。
+
+    2026-08-29 改写：原先断言的是钉字面末日 `dt = DATE '2026-04-30'`，那个前提
+    已作废——fct_holding 是月末快照表，问「2026 年」时 12/31 根本没有快照，
+    钉字面末日会返回空。现在取窗口内最后一个有数据的快照，两种表都成立。
+    不跨日求和这条本意不变。
     """
     cat = _stock_catalog(tmp_path)
     spec = MetricSpec(
@@ -1046,8 +1050,10 @@ def test_point_in_time_metric_pins_to_one_day_not_a_range(tmp_path):
         time_window={"start": "2026-04-01", "end": "2026-04-30"},
     )
     sql = render_sql_from_spec(spec, cat)
-    assert "fbd.dt = DATE '2026-04-30'" in sql, sql
-    assert ">=" not in sql and "<=" not in sql, f"时点指标不该拼区间：{sql}"
+    assert "fbd.dt = (SELECT MAX(_pit.dt)" in sql, sql
+    # 区间条件只该出现在挑快照的子查询里，不该约束外层聚合
+    assert sql.count(">= DATE '2026-04-01'") == 1, sql
+    assert "GROUP BY DATE_TRUNC" not in sql, sql
 
 
 def test_range_metric_still_renders_a_range(tmp_path):
@@ -1063,13 +1069,15 @@ def test_range_metric_still_renders_a_range(tmp_path):
     assert ">= DATE '2026-04-01'" in sql and "<= DATE '2026-04-30'" in sql, sql
 
 
-def test_point_in_time_falls_back_to_start_when_only_start_given(tmp_path):
+def test_point_in_time_with_only_start_bounds_the_snapshot_search_from_below(tmp_path):
+    """只给 start 时，快照仍要挑出来——下界约束进子查询，不退化成区间。"""
     cat = _stock_catalog(tmp_path)
     spec = MetricSpec(
         metric_id="balance_total", dims=[], filters=[], time_window={"start": "2026-04-30"}
     )
     sql = render_sql_from_spec(spec, cat)
-    assert "fbd.dt = DATE '2026-04-30'" in sql, sql
+    assert "fbd.dt = (SELECT MAX(_pit.dt)" in sql, sql
+    assert "_pit.dt >= DATE '2026-04-30'" in sql, sql
 
 
 def test_extractor_prompt_marks_point_in_time_metrics(tmp_path):
@@ -1081,3 +1089,160 @@ def test_extractor_prompt_marks_point_in_time_metrics(tmp_path):
     # 不能拿 display_name 里的「时点」二字充数——那是指标名，不是给 LLM 的说明
     marker = "时点指标：时间窗取末日快照，不跨日求和"
     assert marker in prompt, prompt
+
+
+# --- op 白名单：governed 模板不能让 LLM 控制 SQL 结构 ---------------------------
+
+
+def test_operator_must_be_whitelisted():
+    """`op` 此前是自由文本直拼进 SQL，等于把结构控制权交回 LLM。
+
+    实测过的注入形态：op = "= 'X' OR 1=1 --" 渲染成
+    `region = 'X' OR 1=1 -- '华东'`，整条过滤器被中和。governed 模板的立身之本
+    就是 LLM 只能填值、不能改结构，所以 op 必须白名单。
+    """
+    cat = _get_cat()
+    spec = MetricSpec(
+        metric_id="deposit_balance",
+        dims=[],
+        filters=[{"col": "region", "op": "= 'X' OR 1=1 --", "val": "华东"}],
+    )
+    with pytest.raises(MetricResolverError, match="unsupported_op"):
+        render_sql_from_spec(spec, cat)
+
+
+@pytest.mark.parametrize("op", ["=", "!=", ">", ">=", "<", "<=", "IN"])
+def test_whitelisted_operators_still_work(op):
+    cat = _get_cat()
+    val = ["华东"] if op == "IN" else "华东"
+    sql = render_sql_from_spec(
+        MetricSpec(
+            metric_id="deposit_balance", dims=[], filters=[{"col": "region", "op": op, "val": val}]
+        ),
+        cat,
+    )
+    assert "dbr.region" in sql
+
+
+_NUMERIC_YAML = """
+metrics:
+  - id: m
+    display_name: 数值过滤器测试
+    aliases: ["x"]
+    fact_table: t
+    fact_alias: t
+    metric_expr: COUNT(*)
+    metric_alias: n
+    hard_filters: []
+    date_column: null
+    dim_catalog: {}
+    filter_catalog:
+      amt: {column: "t.amt", type: numeric}
+"""
+
+
+def _numeric_cat(tmp_path):
+    p = tmp_path / "numeric.yaml"
+    p.write_text(_NUMERIC_YAML, encoding="utf-8")
+    return MetricCatalog.from_yaml(p)
+
+
+def test_numeric_filter_rejects_non_numeric_value(tmp_path):
+    """numeric 的 val 也是不加引号直拼的——不校验就是第二个注入口。"""
+    spec = MetricSpec(
+        metric_id="m", dims=[], filters=[{"col": "amt", "op": ">", "val": "0 OR 1=1"}]
+    )
+    with pytest.raises(MetricResolverError, match="numeric"):
+        render_sql_from_spec(spec, _numeric_cat(tmp_path))
+
+
+def test_numeric_filter_rejects_bool(tmp_path):
+    """bool 是 int 子类——不单独排除的话 True 会渲染成 `amt > True`。与 limit 同一个坑。"""
+    spec = MetricSpec(metric_id="m", dims=[], filters=[{"col": "amt", "op": ">", "val": True}])
+    with pytest.raises(MetricResolverError, match="numeric"):
+        render_sql_from_spec(spec, _numeric_cat(tmp_path))
+
+
+def test_numeric_filter_accepts_real_numbers(tmp_path):
+    sql = render_sql_from_spec(
+        MetricSpec(metric_id="m", dims=[], filters=[{"col": "amt", "op": ">", "val": 0}]),
+        _numeric_cat(tmp_path),
+    )
+    assert "t.amt > 0" in sql, sql
+
+
+# --- 时点指标 × 周期分组：每个周期取一个快照 -----------------------------------
+
+_ROLLING_YAML = """
+metrics:
+  - id: bal_total
+    display_name: 余额合计（时点）
+    aliases: ["余额合计"]
+    fact_table: fct_balance_daily
+    fact_alias: fbd
+    metric_expr: SUM(fbd.balance)
+    metric_alias: total_balance
+    time_semantics: point_in_time
+    hard_filters: []
+    date_column: fbd.dt
+    dim_catalog:
+      branch_id: {select_expr: "fbd.branch_id", alias: branch_id}
+      month:     {select_expr: "DATE_TRUNC('month', fbd.dt)", alias: month, period_grain: month}
+    filter_catalog:
+      branch_id: {column: "fbd.branch_id", type: string}
+"""
+
+
+def _rolling_catalog(tmp_path):
+    p = tmp_path / "rolling.yaml"
+    p.write_text(_ROLLING_YAML, encoding="utf-8")
+    return MetricCatalog.from_yaml(p)
+
+
+def test_point_in_time_uses_latest_snapshot_in_window_not_the_literal_end_date(tmp_path):
+    """时点应取「窗口内最后一个有数据的快照」，不是字面末日。
+
+    fct_holding 是月末快照表——问「2026 年 4 月」时 4/30 有数据，但问「2026 年」
+    时 12/31 根本没有快照，钉字面末日会返回空。取 MAX 两种表都对。
+    """
+    cat = _rolling_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="bal_total",
+        dims=[],
+        filters=[],
+        time_window={"start": "2026-01-01", "end": "2026-12-31"},
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "SELECT MAX(" in sql, sql
+    assert "GROUP BY DATE_TRUNC" not in sql, f"没按周期分组时不该分组取快照：{sql}"
+
+
+def test_point_in_time_takes_one_snapshot_per_period_when_grouped_by_period_dim(tmp_path):
+    """按月分组时必须每月取一个快照——否则整段窗口只剩一个快照，其余月份是空的。
+
+    grain 不能做成指标的静态属性：同一个指标，「5 月末余额」要单个快照，
+    「每月末余额」要每月一个。所以它由 spec 选中的周期维度决定。
+    """
+    cat = _rolling_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="bal_total",
+        dims=["month"],
+        filters=[],
+        time_window={"start": "2026-01-01", "end": "2026-12-31"},
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "GROUP BY DATE_TRUNC('month'" in sql, sql
+    assert " IN (SELECT MAX(" in sql, sql
+
+
+def test_non_period_dim_does_not_trigger_per_period_snapshots(tmp_path):
+    """按分行分组不该影响快照选取——分行不是周期。"""
+    cat = _rolling_catalog(tmp_path)
+    spec = MetricSpec(
+        metric_id="bal_total",
+        dims=["branch_id"],
+        filters=[],
+        time_window={"start": "2026-01-01", "end": "2026-12-31"},
+    )
+    sql = render_sql_from_spec(spec, cat)
+    assert "GROUP BY DATE_TRUNC" not in sql, sql

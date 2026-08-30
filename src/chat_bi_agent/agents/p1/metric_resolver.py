@@ -42,6 +42,10 @@ class MetricDim:
     select_expr: str
     alias: str
     requires_join: list[str] = field(default_factory=list)
+    # "month" / "quarter" / "year" 等。标了的维度是「周期维度」，时点指标按它分组时
+    # 每个周期各取一个快照。grain 不能做成指标的静态属性——同一个指标，
+    # 「5 月末余额」要单个快照，「每月末余额」要每月一个。
+    period_grain: str | None = None
 
 
 @dataclass
@@ -137,6 +141,7 @@ class MetricCatalog:
                     select_expr=v["select_expr"],
                     alias=v.get("alias", dim_id),
                     requires_join=v.get("requires_join") or [],
+                    period_grain=v.get("period_grain"),
                 )
                 for dim_id, v in (m.get("dim_catalog") or {}).items()
             }
@@ -205,6 +210,12 @@ class MetricSpec:
 _PLAIN_COLUMN_RE = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?")
 
 
+# `op` 直接拼进 SQL 文本，所以必须白名单。实测过的注入形态：
+# op = "= 'X' OR 1=1 --" 渲染成 `region = 'X' OR 1=1 -- '华东'`，整条过滤器被中和。
+# governed 模板的立身之本就是 LLM 只能填值、不能改结构。
+_ALLOWED_OPS = frozenset({"=", "!=", "<>", ">", ">=", "<", "<=", "IN"})
+
+
 def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
     """把一条 filter 渲染成 WHERE 谓词。所有值校验都在这里。
 
@@ -212,6 +223,11 @@ def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
     """
     op = f.get("op", "=")
     val = f.get("val")
+
+    if op not in _ALLOWED_OPS:
+        raise MetricResolverError(
+            f"unsupported_op: {op!r} for filter {f.get('col')!r}; 只允许 {sorted(_ALLOWED_OPS)}"
+        )
 
     if op == "IN":
         if not isinstance(val, list):
@@ -247,6 +263,10 @@ def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
         safe = str(val).replace("'", "''")
         return f"{fdef.column} {op} '{safe}'"
     if fdef.type == "numeric":
+        # val 不加引号直拼，所以必须是真数字。bool 是 int 子类，单独排除——
+        # 与 limit 那里同一个坑。
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            raise MetricResolverError(f"numeric filter {f['col']!r} val 必须是数字，收到 {val!r}")
         return f"{fdef.column} {op} {val}"
     if fdef.type == "boolean":
         if isinstance(val, str):
@@ -306,12 +326,37 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     if spec.time_window and metric.date_column:
         start = spec.time_window.get("start")
         end = spec.time_window.get("end")
+        # 子查询用自己的别名 _pit，所以要剥掉 date_column 上的事实表别名
+        bare_date = metric.date_column.split(".")[-1]
         if metric.time_semantics == "point_in_time":
-            # 存量指标钉到窗口末日的快照。跨日求和是错的——余额 SUM 一个月等于
-            # 把同一笔钱数 30 遍。取末日是财务口径的通行约定（期末余额）。
-            snapshot = end or start
-            if snapshot:
-                where_parts.append(f"{metric.date_column} = DATE '{snapshot}'")
+            # 存量指标取窗口内**最后一个有数据的快照**，不是字面末日：
+            # fct_holding 是月末快照表，问「2026 年」时 12/31 根本没有快照，
+            # 钉字面末日会返回空；取 MAX 对日快照表和月末快照表都成立。
+            bounds = []
+            if start:
+                bounds.append(f"_pit.{bare_date} >= DATE '{start}'")
+            if end:
+                bounds.append(f"_pit.{bare_date} <= DATE '{end}'")
+            if bounds:
+                # 选中了周期维度就每个周期各取一个快照，否则整窗口只取一个。
+                # 否则「每月末余额，按月分组」会只剩最后一个月有数。
+                grain = next(
+                    (
+                        metric.dim_catalog[d].period_grain
+                        for d in spec.dims
+                        if metric.dim_catalog[d].period_grain
+                    ),
+                    None,
+                )
+                sub = (
+                    f"SELECT MAX(_pit.{bare_date}) FROM {metric.fact_table} _pit "
+                    f"WHERE {' AND '.join(bounds)}"
+                )
+                if grain:
+                    sub += f" GROUP BY DATE_TRUNC('{grain}', _pit.{bare_date})"
+                    where_parts.append(f"{metric.date_column} IN ({sub})")
+                else:
+                    where_parts.append(f"{metric.date_column} = ({sub})")
         else:
             if start:
                 where_parts.append(f"{metric.date_column} >= DATE '{start}'")

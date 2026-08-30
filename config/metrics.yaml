@@ -46,10 +46,11 @@ metrics:
   - id: deposit_balance
     display_name: 存款余额（日均，活期+储蓄）
     aliases:
+      # 别把「活期存款」「储蓄存款」写回来：本指标 hard_filter 是 CURRENT+SAVING
+      # 两者之和，拿窄口径的名字指宽口径的指标，用户问「活期存款」会拿到 2 倍的数，
+      # 而 SQL 合法、结果非空，执行反馈永远抓不到。窄口径见 current_deposit_* 系列。
       - 存款余额
       - 存款
-      - 活期存款
-      - 储蓄存款
       - 日均存款
       - 存款规模
       - 存款金额
@@ -88,6 +89,10 @@ metrics:
   # 标了 time_semantics: point_in_time，渲染时时间窗会被钉成 `dt = 末日`。
   # aliases 刻意避开「存款总额」「存款金额」这类与 deposit_balance 太近的说法——
   # 必须带「合计/总额/期末/月末」这种明确的时点信号才算它。
+  # 刻意不给它 month 周期维度：加上之后「对比 4 月和 5 月的存款余额变化」会从
+  # 安全回退变成「自信地用错口径回答」——问的是按月余额变化（gold 用日均 AVG），
+  # 它给的是月末 SUM，数值口径不同而 SQL 完全合法。按月末合计的需求走
+  # current_deposit_balance_total（题面会明说「月末」）。
   - id: deposit_balance_total
     display_name: 存款余额合计（时点，活期+储蓄）
     aliases:
@@ -106,6 +111,50 @@ metrics:
     hard_filter_joins: [account]
     date_column: fbd.dt
     dim_catalog:
+      branch_id:      {select_expr: "fbd.branch_id",      alias: "branch_id"}
+      branch_name:    {select_expr: "dbr.branch_name",    alias: "branch_name",    requires_join: [branch]}
+      branch_city:    {select_expr: "dbr.city",           alias: "city",           requires_join: [branch]}
+      region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
+      province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
+      customer_tier:  {select_expr: "dc.customer_tier",   alias: "customer_tier",  requires_join: [customer]}
+    filter_catalog:
+      branch_id:      {column: "fbd.branch_id",     type: string}
+      branch_city:    {column: "dbr.city",          type: string,  requires_join: [branch]}
+      region:       {column: "dbr.region",   type: string, requires_join: [branch]}
+      province:     {column: "dbr.province", type: string, requires_join: [branch]}
+      branch_name:    {column: "dbr.branch_name",   type: string,  requires_join: [branch]}
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
+
+  # -------------------- 活期存款余额合计（时点） --------------------
+  # 「活期存款」是比 deposit_balance（CURRENT+SAVING）窄的口径，必须单独建指标。
+  # 为什么不做成 deposit_balance 上的 account_type 过滤器：那个指标已经把
+  # account_type 写死在 hard_filters 里了，再开一个过滤器等于让 LLM 去覆盖
+  # governed 口径。为什么不用无 hard_filter 的通用指标 + 过滤器：LLM 漏填过滤器
+  # 时会退化成「全部账户」，比现在错得更多，而且同样静默。
+  # 显式具名指标是唯一「填错就会被门禁/枚举挡下、而不是悄悄给个错数」的写法。
+  - id: current_deposit_balance_total
+    display_name: 活期存款余额合计（时点，仅 CURRENT）
+    aliases:
+      - 活期存款余额合计
+      - 活期存款余额总额
+      - 活期存款加总
+      - 月末活期存款余额
+      - 期末活期存款余额
+    fact_table: fct_balance_daily
+    fact_alias: fbd
+    metric_expr: SUM(fbd.balance)
+    metric_alias: total_current_balance
+    time_semantics: point_in_time
+    hard_filters:
+      - "da.account_type = 'CURRENT'"
+    hard_filter_joins: [account]
+    date_column: fbd.dt
+    dim_catalog:
+      month:          {select_expr: "DATE_TRUNC('month', fbd.dt)", alias: month, period_grain: month}
       branch_id:      {select_expr: "fbd.branch_id",      alias: "branch_id"}
       branch_name:    {select_expr: "dbr.branch_name",    alias: "branch_name",    requires_join: [branch]}
       branch_city:    {select_expr: "dbr.city",           alias: "city",           requires_join: [branch]}
@@ -421,7 +470,9 @@ metrics:
     metric_alias: total_market_value
     hard_filters: []
     date_column: fh.snapshot_dt
+    time_semantics: point_in_time
     dim_catalog:
+      month:          {select_expr: "DATE_TRUNC('month', fh.snapshot_dt)", alias: month, period_grain: month}
       branch_id:        {select_expr: "fh.branch_id",           alias: "branch_id"}
       branch_city:      {select_expr: "dbr.city",               alias: "city",              requires_join: [branch]}
       region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
@@ -429,6 +480,7 @@ metrics:
       customer_tier:    {select_expr: "dc.customer_tier",       alias: "customer_tier",     requires_join: [customer]}
       product_category: {select_expr: "dp.product_category",    alias: "product_category",  requires_join: [product]}
     filter_catalog:
+      pnl:            {column: "fh.pnl", type: numeric}
       branch_id: {column: "fh.branch_id", type: string}
       customer_tier:
         column: "dc.customer_tier"
@@ -445,6 +497,48 @@ metrics:
       province:     {column: "dbr.province", type: string, requires_join: [branch]}
 
   # -------------------- 持仓盈亏 --------------------
+  # -------------------- 持仓笔数（时点） --------------------
+  # fct_holding 是月末快照表，所以和另外两个 holding 指标一样是时点语义。
+  # COUNT 跨快照求和同样是错的——2026 全年会把 9 个月末的持仓各数一遍。
+  - id: holding_count
+    display_name: 持仓笔数（时点）
+    aliases:
+      - 持仓笔数
+      - 持仓数量
+      - 持仓记录数
+      - 持仓户数
+    fact_table: fct_holding
+    fact_alias: fh
+    metric_expr: COUNT(*)
+    metric_alias: holding_count
+    time_semantics: point_in_time
+    hard_filters: []
+    date_column: fh.snapshot_dt
+    dim_catalog:
+      month:          {select_expr: "DATE_TRUNC('month', fh.snapshot_dt)", alias: month, period_grain: month}
+      branch_id:      {select_expr: "fh.branch_id",      alias: branch_id}
+      branch_city:    {select_expr: "dbr.city",          alias: city,      requires_join: [branch]}
+      region:         {select_expr: "dbr.region",        alias: region,    requires_join: [branch]}
+      province:       {select_expr: "dbr.province",      alias: province,  requires_join: [branch]}
+      customer_tier:  {select_expr: "dc.customer_tier",  alias: customer_tier, requires_join: [customer]}
+      product_category: {select_expr: "dp.product_category", alias: product_category, requires_join: [product]}
+    filter_catalog:
+      pnl:            {column: "fh.pnl", type: numeric}
+      branch_id:      {column: "fh.branch_id",  type: string}
+      branch_city:    {column: "dbr.city",      type: string, requires_join: [branch]}
+      region:         {column: "dbr.region",    type: string, requires_join: [branch]}
+      province:       {column: "dbr.province",  type: string, requires_join: [branch]}
+      product_category:
+        column: "dp.product_category"
+        type: enum
+        enum_values: [DEPOSIT, LOAN, WEALTH, FUND, INSURANCE, CARD]
+        requires_join: [product]
+      customer_tier:
+        column: "dc.customer_tier"
+        type: enum
+        enum_values: [HIGH_NET_WORTH, AFFLUENT, MASS, BASIC]
+        requires_join: [customer]
+
   - id: holding_pnl
     display_name: 持仓盈亏
     aliases:
@@ -459,7 +553,9 @@ metrics:
     metric_alias: total_pnl
     hard_filters: []
     date_column: fh.snapshot_dt
+    time_semantics: point_in_time
     dim_catalog:
+      month:          {select_expr: "DATE_TRUNC('month', fh.snapshot_dt)", alias: month, period_grain: month}
       branch_id:        {select_expr: "fh.branch_id",        alias: "branch_id"}
       customer_tier:    {select_expr: "dc.customer_tier",    alias: "customer_tier",    requires_join: [customer]}
       product_category: {select_expr: "dp.product_category", alias: "product_category", requires_join: [product]}
@@ -467,6 +563,7 @@ metrics:
       region:       {select_expr: "dbr.region",   alias: "region",   requires_join: [branch]}
       province:     {select_expr: "dbr.province", alias: "province", requires_join: [branch]}
     filter_catalog:
+      pnl:            {column: "fh.pnl", type: numeric}
       branch_id: {column: "fh.branch_id", type: string}
       customer_tier:
         column: "dc.customer_tier"
