@@ -1246,3 +1246,23 @@ def test_non_period_dim_does_not_trigger_per_period_snapshots(tmp_path):
     )
     sql = render_sql_from_spec(spec, cat)
     assert "GROUP BY DATE_TRUNC" not in sql, sql
+
+
+def test_extractor_prompt_teaches_comparison_ops_for_numeric_filters():
+    """prompt 说「op 支持 '=' 与 'IN'」，但 numeric 过滤器要的是比较运算符。
+
+    实测 LLM 靠推断填对了 `pnl > 0`，但那是运气：照 prompt 字面执行会填
+    `{col: pnl, op: '=', val: 0}`，渲染成 `fh.pnl = 0`——「浮盈为零」而不是
+    「为正」。SQL 合法、结果非空，又一个静默错答。
+
+    白名单收的运算符必须在 prompt 里教全，否则「能用」只是碰巧。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import (
+        _ALLOWED_OPS,
+        _build_extractor_prompt,
+    )
+
+    prompt = _build_extractor_prompt(_get_cat())
+    for op in sorted(_ALLOWED_OPS - {"<>"}):  # <> 与 != 等价，教一个就够
+        assert f"'{op}'" in prompt, f"白名单收 {op!r} 但 prompt 没教：{prompt[:0]}"
+    assert "numeric" in prompt
