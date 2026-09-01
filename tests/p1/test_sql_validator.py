@@ -84,3 +84,51 @@ def test_validation_result_dataclass():
     r = ValidationResult(ok=True, error=None)
     assert r.ok is True
     assert r.error is None
+
+
+# ── 数据读取型函数黑名单 ──────────────────────────────────────────────
+# 顶层白名单只管「语句类型」，管不到「SELECT 里调了什么函数」。
+# 这类函数从 MDL/catalog 之外读字节：本地文件（路径穿越）、对象存储/URL
+# （SSRF、数据外泄）、其它库（横向移动）。参考 WrenAI policy.py 的同类防护。
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM dblink('host=evil', 'SELECT 1') AS t(x int)",
+        "SELECT pg_read_file('/etc/passwd')",
+        "SELECT pg_read_binary_file('/etc/shadow')",
+        "SELECT lo_import('/etc/passwd')",
+        "SELECT lo_export(1, '/tmp/leak')",
+        "SELECT * FROM pg_ls_dir('/')",
+    ],
+)
+def test_rejects_data_reader_functions(validator, sql):
+    r = validator.validate(sql)
+    assert r.ok is False
+    assert "禁止函数" in (r.error or "")
+
+
+def test_data_reader_rejected_case_insensitively(validator):
+    r = validator.validate("SELECT PG_READ_FILE('/etc/passwd')")
+    assert r.ok is False
+
+
+def test_data_reader_rejected_in_nested_position(validator):
+    """非 FROM 位置也要拦——投影、WHERE、子查询里都算。"""
+    sql = "SELECT id FROM dim_customer WHERE name = pg_read_file('/etc/passwd')"
+    assert validator.validate(sql).ok is False
+
+
+def test_data_reader_rejected_inside_subquery(validator):
+    sql = "SELECT * FROM (SELECT dblink('h', 'SELECT 1') AS c) t"
+    assert validator.validate(sql).ok is False
+
+
+def test_ordinary_functions_still_allowed(validator):
+    """别误伤正常聚合/日期函数。"""
+    sql = (
+        "SELECT AVG(balance), DATE_TRUNC('month', dt), COUNT(DISTINCT customer_id) "
+        "FROM fct_balance_daily GROUP BY 2"
+    )
+    assert validator.validate(sql).ok is True
