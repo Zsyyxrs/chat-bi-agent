@@ -25,6 +25,14 @@ from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.schema.loader import SchemaLoader
 
 
+def _tag_step_span(**metadata) -> None:
+    """把 step 粒度元数据挂到当前 span。Langfuse 未配置时静默跳过，不阻塞分析。"""
+    try:
+        get_client().update_current_span(metadata=metadata)
+    except Exception:
+        pass
+
+
 class P2MultiStepAnalysisAgent:
     """Plan-and-Execute multi-step analysis agent.
 
@@ -69,6 +77,15 @@ class P2MultiStepAnalysisAgent:
             enriched = inject_context(step, prior_results)
             sub_qid = f"{question_id}__{step.id}"
 
+            # 「第 i 步 / 共 n 步 / 已 replan 几次」——replan 会改写 plan.steps，
+            # 光看 sub_qid 无法还原当时走到哪一步、总共几步。
+            _tag_step_span(
+                step_index=i,
+                total_steps=len(plan.steps),
+                step_id=step.id,
+                replan_count=replan_count,
+                sub_question_id=sub_qid,
+            )
             p1_result = self.p1.run(question_id=sub_qid, question=enriched)
 
             sr = _p1_result_to_step_result(step, p1_result)

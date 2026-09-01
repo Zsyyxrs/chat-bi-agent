@@ -1,9 +1,12 @@
 """P3 drill-down executor: per-dimension P1 call + Pareto TopN contribution."""
 
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from numbers import Real
 from typing import Any
+
+from langfuse import get_client, observe
 
 from chat_bi_agent.agents.p3.types import DrillRequest, DrillResult
 
@@ -131,15 +134,32 @@ _DRILL_AUGMENT = (
 )
 
 
+def _tag_drill_span(**metadata) -> None:
+    """把 action 粒度元数据挂到当前 span。Langfuse 未配置时静默跳过，不阻塞 drill。"""
+    try:
+        get_client().update_current_span(metadata=metadata)
+    except Exception:
+        pass
+
+
+@observe(name="p3_drill")
 def _execute_single_drill(
     question_id: str,
     i: int,
     req: DrillRequest,
     p1_agent: Any,
     expected_sign: int = 0,
+    total_drills: int | None = None,
 ) -> DrillResult:
     """Execute one drill in isolation; safe for parallel use (no shared state)."""
     sub_qid = f"{question_id}__drill_{i}"
+    # 「第 i 个 / 共 n 个」——排查「多步里第几步崩的」时不用再靠 sub_qid 反推
+    _tag_drill_span(
+        drill_index=i,
+        total_drills=total_drills,
+        dimension=req.dimension,
+        sub_question_id=sub_qid,
+    )
     p1_result = p1_agent.run(sub_qid, req.nl_question + _DRILL_AUGMENT)
 
     if p1_result.rows is None or p1_result.sql is None or not p1_result.rows:
@@ -197,13 +217,28 @@ def run_drill_down(
     if not requests:
         return []
 
+    # ThreadPoolExecutor 默认不把 contextvars 传给 worker 线程，而 Langfuse v3 的
+    # trace 上下文正是靠 contextvars（OTel context）传的。不显式拷贝的话，每个 drill
+    # 的 p1_nl2sql_run 会变成独立 root trace，P3 的 trace 树是断的。
+    #
+    # 必须**每个任务各拷一份**：共用同一个 Context 对象时，两个线程同时进入会抛
+    # "cannot enter context: ... is already entered"。快任务不重叠时看不出来，
+    # 真实 drill 是 30-60s 的 LLM 往返、必然重叠。
+    ctxs = [contextvars.copy_context() for _ in requests]
+
     with ThreadPoolExecutor(max_workers=len(requests)) as pool:
         results = list(
             pool.map(
-                lambda pair: _execute_single_drill(
-                    question_id, pair[0], pair[1], p1_agent, expected_sign=expected_sign
+                lambda triple: triple[0].run(
+                    _execute_single_drill,
+                    question_id,
+                    triple[1],
+                    triple[2],
+                    p1_agent,
+                    expected_sign,
+                    len(requests),
                 ),
-                enumerate(requests),
+                zip(ctxs, range(len(requests)), requests),
             )
         )
     return results
