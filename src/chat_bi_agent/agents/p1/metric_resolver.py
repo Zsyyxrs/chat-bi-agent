@@ -58,6 +58,24 @@ class MetricFilter:
 
 
 @dataclass
+class RowPolicy:
+    """行级权限规则（RLAC）：渲染期注入的 WHERE 条件。
+
+    ``condition`` 里用 ``@name`` 占位，name 必须出现在 ``requires`` 里；
+    渲染时从调用方传入的 session_props 绑值。**LLM 全程看不到这个对象**——
+    它不进 extractor prompt，模型不知道有权限过滤，也就无从绕过。
+
+    fail-closed：metric 声明了 row_policies 但没拿到所需 session 属性，
+    直接拒绝渲染，绝不静默放行全表。
+    """
+
+    name: str
+    requires: list[str]
+    condition: str
+    requires_join: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Metric:
     id: str
     display_name: str
@@ -76,6 +94,8 @@ class Metric:
     # "range"（默认，流量指标）或 "point_in_time"（存量指标，时间窗钉到末日快照）。
     # 存量指标跨日求和是错的：余额 SUM 一个月等于把同一笔钱数 30 遍。
     time_semantics: str = "range"
+    # 行级权限规则。空 = 该指标不做行级管控（向后兼容默认）
+    row_policies: list[RowPolicy] = field(default_factory=list)
 
 
 # 形如 `JOIN dim_branch dbr ON ...`（可带 LEFT/INNER 等前缀）里抓表别名
@@ -155,8 +175,19 @@ class MetricCatalog:
                 )
                 for fid, v in (m.get("filter_catalog") or {}).items()
             }
+            row_policies = [
+                RowPolicy(
+                    name=rp["name"],
+                    requires=rp.get("requires") or [],
+                    condition=rp["condition"],
+                    requires_join=rp.get("requires_join") or [],
+                )
+                for rp in (m.get("row_policies") or [])
+            ]
             hard_filter_joins = m.get("hard_filter_joins") or []
             referenced = set(hard_filter_joins)
+            for rp_ in row_policies:
+                referenced |= set(rp_.requires_join)
             for d in dim_catalog.values():
                 referenced |= set(d.requires_join)
             for f in filter_catalog.values():
@@ -180,6 +211,7 @@ class MetricCatalog:
                     filter_catalog=filter_catalog,
                     hard_filter_joins=hard_filter_joins,
                     time_semantics=m.get("time_semantics", "range"),
+                    row_policies=row_policies,
                 )
             )
         return cls(metrics=ms, joins=global_joins)
@@ -277,30 +309,112 @@ def _render_filter_predicate(f: dict[str, Any], fdef: MetricFilter) -> str:
     raise MetricResolverError(f"unsupported filter type {fdef.type!r}")
 
 
-def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
+def _sql_literal(val: object, policy_name: str) -> str:
+    """把 session 属性值渲染成 SQL 字面量。
+
+    值来自应用会话而非 LLM，但仍然转义——权限条件是最不该出注入的地方。
+    类型白名单：只放行 str / int / float / bool，其余（list、dict、None）一律拒绝。
+    """
+    if isinstance(val, bool):
+        return "TRUE" if val else "FALSE"
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, str):
+        return "'" + val.replace("'", "''") + "'"
+    raise MetricResolverError(
+        f"row_policy {policy_name!r} 的 session 属性类型不支持："
+        f"{type(val).__name__}（只接受 str/int/float/bool）"
+    )
+
+
+_POLICY_PLACEHOLDER_RE = re.compile(r"@([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _render_row_policies(
+    metric: Metric, session_props: dict[str, object] | None
+) -> list[str]:
+    """把 metric 的 row_policies 渲染成 WHERE 条件片段。
+
+    fail-closed：任一 required 属性缺失就抛错。没有 row_policies 则返回空表，
+    session_props 传不传都不影响结果。
+    """
+    if not metric.row_policies:
+        return []
+    props = session_props or {}
+    out: list[str] = []
+    for pol in metric.row_policies:
+        missing = [k for k in pol.requires if k not in props]
+        if missing:
+            raise MetricResolverError(
+                f"metric {metric.id} 的 row_policy {pol.name!r} 需要 session 属性 "
+                f"{missing}，但调用方没有提供——拒绝渲染（fail-closed）"
+            )
+
+        def _sub(m: re.Match[str]) -> str:
+            key = m.group(1)
+            if key not in props:
+                raise MetricResolverError(
+                    f"row_policy {pol.name!r} 的 condition 用了 @{key}，"
+                    f"但它不在 requires 声明里"
+                )
+            return _sql_literal(props[key], pol.name)
+
+        out.append(_POLICY_PLACEHOLDER_RE.sub(_sub, pol.condition))
+    return out
+
+
+def _fmt_available(names: list[str], limit: int = 12) -> str:
+    """把可选值列成一行，供错误消息回灌给 extractor 用。
+
+    错误消息会进重试 prompt，所以要有上界——维度多的指标全列出来会挤掉
+    真正的上下文。超过 ``limit`` 就截断并标 ``...``。
+    """
+    shown = sorted(names)[:limit]
+    tail = " ..." if len(names) > limit else ""
+    return "可选：" + ", ".join(shown) + tail
+
+
+def render_sql_from_spec(
+    spec: MetricSpec,
+    catalog: MetricCatalog,
+    session_props: dict[str, object] | None = None,
+) -> str:
     """把 MetricSpec 套上 metric 模板生成 SQL。所有验证都在这里做。"""
     metric = catalog.get(spec.metric_id)
 
     # 1. 收集需要的 join。hard_filters 的 join 先入队：它们无条件需要，
     #    且排在前面能保证 FROM 后的 join 顺序稳定。
     needed_joins: list[str] = list(metric.hard_filter_joins)
+    for pol in metric.row_policies:
+        for j in pol.requires_join:
+            if j not in needed_joins:
+                needed_joins.append(j)
     for dim_id in spec.dims:
         if dim_id not in metric.dim_catalog:
-            raise MetricResolverError(f"unknown dim {dim_id!r} for metric {metric.id}")
+            raise MetricResolverError(
+                f"unknown dim {dim_id!r} for metric {metric.id}。"
+                + _fmt_available(list(metric.dim_catalog))
+            )
         for j in metric.dim_catalog[dim_id].requires_join:
             if j not in needed_joins:
                 needed_joins.append(j)
     for f in spec.filters:
         col_id = f.get("col")
         if col_id not in metric.filter_catalog:
-            raise MetricResolverError(f"unknown filter {col_id!r} for metric {metric.id}")
+            raise MetricResolverError(
+                f"unknown filter {col_id!r} for metric {metric.id}。"
+                + _fmt_available(list(metric.filter_catalog))
+            )
         for j in metric.filter_catalog[col_id].requires_join:
             if j not in needed_joins:
                 needed_joins.append(j)
 
     for j in needed_joins:
         if j not in metric.joins:
-            raise MetricResolverError(f"metric {metric.id} 声明 join={j!r} 但 joins 里没定义")
+            raise MetricResolverError(
+                f"metric {metric.id} 声明 join={j!r} 但 joins 里没定义。"
+                + _fmt_available(list(metric.joins))
+            )
 
     # 2. SELECT 列表
     select_parts: list[str] = []
@@ -319,7 +433,9 @@ def render_sql_from_spec(spec: MetricSpec, catalog: MetricCatalog) -> str:
     select_parts.append(f"{metric.metric_expr} AS {metric.metric_alias}")
 
     # 3. WHERE 子句 = hard_filters + user filters + time_window
-    where_parts: list[str] = list(metric.hard_filters)
+    #    row_policies 排在最前：权限条件永远先于用户条件，读 SQL 时一眼看到
+    where_parts: list[str] = _render_row_policies(metric, session_props)
+    where_parts += list(metric.hard_filters)
     for f in spec.filters:
         where_parts.append(_render_filter_predicate(f, metric.filter_catalog[f["col"]]))
 

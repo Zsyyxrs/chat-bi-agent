@@ -483,3 +483,100 @@ def test_real_catalog_has_no_dim_filter_gaps():
     """
     gaps = dim_filter_gaps(MetricCatalog.from_yaml(METRICS_YAML))
     assert gaps == [], "\n".join(f"{g.metric_id}: {g.ref} — {g.message}" for g in gaps)
+
+
+# ---------------------- row_policy 静态校验 ----------------------
+# RLAC 的条件是渲染期才展开的，写错要到「某个特定权限的用户来查」才炸。
+# 静态化到 gate 里，改完 metrics.yaml 就能发现。
+
+
+def _policy_cat(tmp_path, policies: str, joins: str = "{}"):
+    from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog
+
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(
+        f"""
+version: 1
+metrics:
+  - id: customer_count
+    display_name: 客户数
+    aliases: [客户数]
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    joins: {joins}
+    dim_catalog: {{}}
+    filter_catalog: {{}}
+    row_policies:
+{policies}
+""",
+        encoding="utf-8",
+    )
+    return MetricCatalog.from_yaml(yml)
+
+
+def test_policy_placeholder_not_declared_is_error(tmp_path):
+    from chat_bi_agent.agents.p1.metric_lineage import row_policy_issues
+
+    cat = _policy_cat(
+        tmp_path,
+        '      - name: p1\n'
+        '        requires: [branch_id]\n'
+        '        condition: "dc.branch_id = @branch_id AND dc.city = @city"\n',
+    )
+    issues = row_policy_issues(cat)
+    assert any(i.severity == "error" and "city" in i.message for i in issues)
+
+
+def test_policy_declared_but_unused_is_latent(tmp_path):
+    from chat_bi_agent.agents.p1.metric_lineage import row_policy_issues
+
+    cat = _policy_cat(
+        tmp_path,
+        '      - name: p1\n'
+        '        requires: [branch_id, unused_prop]\n'
+        '        condition: "dc.branch_id = @branch_id"\n',
+    )
+    issues = row_policy_issues(cat)
+    assert any(i.severity == "latent" and "unused_prop" in i.message for i in issues)
+
+
+def test_policy_requires_join_must_exist(tmp_path):
+    from chat_bi_agent.agents.p1.metric_lineage import row_policy_issues
+
+    cat = _policy_cat(
+        tmp_path,
+        '      - name: p1\n'
+        '        requires: [region]\n'
+        '        condition: "dbr.region = @region"\n'
+        '        requires_join: [no_such_join]\n',
+    )
+    issues = row_policy_issues(cat)
+    assert any(i.severity == "error" and "no_such_join" in i.message for i in issues)
+
+
+def test_wellformed_policy_has_no_issues(tmp_path):
+    from chat_bi_agent.agents.p1.metric_lineage import row_policy_issues
+
+    cat = _policy_cat(
+        tmp_path,
+        '      - name: p1\n'
+        '        requires: [branch_id]\n'
+        '        condition: "dc.branch_id = @branch_id"\n',
+    )
+    assert row_policy_issues(cat) == []
+
+
+def test_real_catalog_row_policies_clean():
+    """生产 catalog 现在没有 row_policies，加了之后这条会替我们守住。"""
+    from pathlib import Path
+
+    from chat_bi_agent.agents.p1.metric_lineage import row_policy_issues
+    from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog
+
+    root = Path(__file__).resolve().parents[2]
+    cat = MetricCatalog.from_yaml(root / "config" / "metrics.yaml")
+    errs = [i for i in row_policy_issues(cat) if i.severity == "error"]
+    assert errs == [], errs

@@ -37,6 +37,7 @@ from pathlib import Path
 from chat_bi_agent.agents.p1.metric_lineage import (
     dim_filter_gaps,
     metric_lineage,
+    row_policy_issues,
     sibling_filter_gaps,
     validate_catalog,
 )
@@ -91,6 +92,21 @@ def main() -> int:
     elif not args.quiet:
         print("✓ 同表指标的可选过滤器与枚举值全部对齐")
 
+    pol_issues = row_policy_issues(catalog)
+    pol_errors = [i for i in pol_issues if i.severity == "error"]
+    pol_latent = [i for i in pol_issues if i.severity == "latent"]
+    if pol_errors:
+        print(f"\n✗ {len(pol_errors)} 处行级权限规则写错——渲染到该权限的用户就会炸：")
+        for i in pol_errors:
+            print(f"    {i.metric_id:28s} {i.ref:42s} {i.message}")
+    elif not args.quiet:
+        n = sum(len(getattr(m, "row_policies", [])) for m in catalog.metrics)
+        print(f"✓ {n} 条行级权限规则（RLAC）占位符与 join 全部自洽")
+    if pol_latent and not args.quiet:
+        print(f"\n· {len(pol_latent)} 处行级权限规则声明了用不上的 session 属性：")
+        for i in pol_latent:
+            print(f"    {i.metric_id:28s} {i.ref:42s} {i.message}")
+
     dim_gaps = dim_filter_gaps(catalog)
     if dim_gaps:
         print(
@@ -105,7 +121,7 @@ def main() -> int:
         print()
         _print_lineage(catalog)
 
-    return 1 if errors or gaps or dim_gaps else 0
+    return 1 if errors or gaps or dim_gaps or pol_errors else 0
 
 
 def _print_lineage(catalog: MetricCatalog) -> None:

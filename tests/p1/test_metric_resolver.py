@@ -189,6 +189,46 @@ def test_render_unknown_filter_raises():
         render_sql_from_spec(spec, _get_cat())
 
 
+# ── 错误信息要带上可选值 ─────────────────────────────────────────────
+# 参考 WrenAI dry-plan 的设计：列名错了就返回「可选列有哪些」，而不是只说错了。
+# 这类消息会经 _classify 回灌给 extractor 重试，光说「不认识」等于没给线索。
+
+
+def test_unknown_dim_error_lists_available_dims():
+    spec = MetricSpec(
+        metric_id="deposit_balance", dims=["not_a_dim"], filters=[], time_window=None
+    )
+    with pytest.raises(MetricResolverError) as ei:
+        render_sql_from_spec(spec, _get_cat())
+    msg = str(ei.value)
+    assert "unknown dim" in msg          # 前缀不能变，_classify 依赖它
+    assert "可选" in msg
+    assert "branch_id" in msg            # 该 metric 真实存在的维度
+
+
+def test_unknown_filter_error_lists_available_filters():
+    spec = MetricSpec(
+        metric_id="deposit_balance",
+        dims=[],
+        filters=[{"col": "not_a_field", "op": "=", "val": "x"}],
+        time_window=None,
+    )
+    with pytest.raises(MetricResolverError) as ei:
+        render_sql_from_spec(spec, _get_cat())
+    msg = str(ei.value)
+    assert "unknown filter" in msg
+    assert "可选" in msg
+
+
+def test_available_list_is_bounded():
+    """可选值再多也不能把错误消息撑爆——超过阈值要截断。"""
+    from chat_bi_agent.agents.p1.metric_resolver import _fmt_available
+
+    out = _fmt_available([f"c{i}" for i in range(50)])
+    assert len(out) < 400
+    assert "..." in out
+
+
 # ---------------------- resolve() — end-to-end with mocked LLM ----------------------
 
 
@@ -1266,3 +1306,133 @@ def test_extractor_prompt_teaches_comparison_ops_for_numeric_filters():
     for op in sorted(_ALLOWED_OPS - {"<>"}):  # <> 与 != 等价，教一个就够
         assert f"'{op}'" in prompt, f"白名单收 {op!r} 但 prompt 没教：{prompt[:0]}"
     assert "numeric" in prompt
+
+
+# ---------------------- 行级权限 row_policies (RLAC) ----------------------
+# 参考 WrenAI 的 RowLevelAccessControl：条件在**渲染期**注入，
+# 绑定的是调用方传入的 session 属性，LLM 全程看不到也就无从绕过。
+
+
+def _rlac_catalog(tmp_path):
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(
+        """
+version: 1
+metrics:
+  - id: customer_count
+    display_name: 客户数
+    aliases: [客户数]
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    joins:
+      branch: JOIN dim_branch dbr ON dc.branch_id = dbr.branch_id
+    dim_catalog: {}
+    filter_catalog:
+      customer_tier:
+        column: dc.customer_tier
+        type: enum
+        enum_values: [HIGH_NET_WORTH, MASS]
+    row_policies:
+      - name: branch_scope
+        requires: [branch_id]
+        condition: "dc.branch_id = @branch_id"
+  - id: product_count
+    display_name: 产品数
+    aliases: [产品数]
+    fact_table: dim_product
+    fact_alias: dp
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    joins: {}
+    dim_catalog: {}
+    filter_catalog: {}
+""",
+        encoding="utf-8",
+    )
+    return MetricCatalog.from_yaml(yml)
+
+
+def _spec(metric_id="customer_count", **kw):
+    return MetricSpec(
+        metric_id=metric_id,
+        dims=kw.get("dims", []),
+        filters=kw.get("filters", []),
+        time_window=kw.get("time_window"),
+    )
+
+
+def test_rlac_condition_injected_into_where(tmp_path):
+    sql = render_sql_from_spec(
+        _spec(), _rlac_catalog(tmp_path), session_props={"branch_id": "BR001"}
+    )
+    assert "dc.branch_id = 'BR001'" in sql
+    assert "@branch_id" not in sql
+
+
+def test_rlac_missing_session_props_is_fail_closed(tmp_path):
+    """声明了 row_policies 却没给 session 属性 → 拒绝，不能静默放行全表。"""
+    with pytest.raises(MetricResolverError, match="row_policy"):
+        render_sql_from_spec(_spec(), _rlac_catalog(tmp_path), session_props=None)
+
+
+def test_rlac_incomplete_session_props_is_fail_closed(tmp_path):
+    with pytest.raises(MetricResolverError, match="row_policy"):
+        render_sql_from_spec(
+            _spec(), _rlac_catalog(tmp_path), session_props={"other": "x"}
+        )
+
+
+def test_metric_without_policy_unaffected(tmp_path):
+    """没声明 row_policies 的指标不受影响——向后兼容。"""
+    sql = render_sql_from_spec(_spec("product_count"), _rlac_catalog(tmp_path))
+    assert "SELECT" in sql
+    sql2 = render_sql_from_spec(
+        _spec("product_count"), _rlac_catalog(tmp_path), session_props={"branch_id": "X"}
+    )
+    assert sql == sql2
+
+
+def test_rlac_string_value_is_escaped(tmp_path):
+    """session 属性是应用传的，但仍要转义——别给注入留门。"""
+    sql = render_sql_from_spec(
+        _spec(), _rlac_catalog(tmp_path), session_props={"branch_id": "a' OR '1'='1"}
+    )
+    assert "'a'' OR ''1''=''1'" in sql
+
+
+def test_rlac_numeric_value_not_quoted(tmp_path):
+    sql = render_sql_from_spec(
+        _spec(), _rlac_catalog(tmp_path), session_props={"branch_id": 42}
+    )
+    assert "dc.branch_id = 42" in sql
+
+
+def test_rlac_rejects_unsupported_value_type(tmp_path):
+    with pytest.raises(MetricResolverError, match="row_policy"):
+        render_sql_from_spec(
+            _spec(), _rlac_catalog(tmp_path), session_props={"branch_id": ["a", "b"]}
+        )
+
+
+def test_rlac_coexists_with_user_filters(tmp_path):
+    sql = render_sql_from_spec(
+        _spec(filters=[{"col": "customer_tier", "op": "=", "val": "MASS"}]),
+        _rlac_catalog(tmp_path),
+        session_props={"branch_id": "BR001"},
+    )
+    assert "dc.branch_id = 'BR001'" in sql
+    assert "MASS" in sql
+
+
+def test_rlac_never_reaches_the_llm_prompt(tmp_path):
+    """权限条件绝不能进 extractor prompt——模型不该知道它存在。"""
+    from chat_bi_agent.agents.p1.metric_resolver import _build_extractor_prompt
+
+    prompt = _build_extractor_prompt(_rlac_catalog(tmp_path))
+    assert "branch_scope" not in prompt
+    assert "row_polic" not in prompt.lower()
+    assert "@branch_id" not in prompt

@@ -15,7 +15,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from chat_bi_agent.agents.p1.metric_resolver import Metric, MetricCatalog
+from chat_bi_agent.agents.p1.metric_resolver import (
+    _POLICY_PLACEHOLDER_RE,
+    Metric,
+    MetricCatalog,
+)
 from chat_bi_agent.schema.loader import SchemaLoader
 
 # 形如 `JOIN dim_branch dbr ON ...`（可带 LEFT/INNER 等前缀），同时抓表名与别名。
@@ -270,6 +274,65 @@ def sibling_filter_gaps(catalog: MetricCatalog) -> list[CatalogIssue]:
                         )
                     )
     return gaps
+
+
+def row_policy_issues(catalog: MetricCatalog) -> list[CatalogIssue]:
+    """校验 row_policies（RLAC）自身的自洽性。
+
+    RLAC 的条件是**渲染期**才展开的：占位符写错、requires 漏声明，都要等到
+    「某个带该权限的用户真的来查」才炸，而那时报的是渲染异常，排查成本很高。
+    这里把它静态化——改完 metrics.yaml 跑 gate 就能发现。
+
+    三类：
+      - error   condition 里的 @占位符没在 requires 里声明 → 渲染必炸
+      - error   requires_join 指向不存在的 join → 渲染必炸
+      - latent  requires 声明了但 condition 没用到 → 不炸，但调用方会被要求
+                提供一个根本用不上的 session 属性，是无谓的耦合
+
+    注意这里**不校验列是否存在**——那由 validate_catalog 统一负责，
+    条件里的列会走同一套 schema 比对。
+    """
+    issues: list[CatalogIssue] = []
+    for m in catalog.metrics:
+        for pol in getattr(m, "row_policies", []):
+            used = set(_POLICY_PLACEHOLDER_RE.findall(pol.condition))
+            declared = set(pol.requires)
+
+            for name in sorted(used - declared):
+                issues.append(
+                    CatalogIssue(
+                        metric_id=m.id,
+                        ref=f"row_policy:{pol.name}",
+                        message=(
+                            f"condition 用了 @{name}，但它不在 requires 里——"
+                            f"渲染时会抛错"
+                        ),
+                        severity="error",
+                    )
+                )
+            for name in sorted(declared - used):
+                issues.append(
+                    CatalogIssue(
+                        metric_id=m.id,
+                        ref=f"row_policy:{pol.name}",
+                        message=(
+                            f"requires 声明了 {name!r} 但 condition 没用到——"
+                            f"调用方被迫提供一个用不上的 session 属性"
+                        ),
+                        severity="latent",
+                    )
+                )
+            for j in pol.requires_join:
+                if j not in m.joins:
+                    issues.append(
+                        CatalogIssue(
+                            metric_id=m.id,
+                            ref=f"row_policy:{pol.name}",
+                            message=f"requires_join={j!r} 在该指标的 joins 里不存在",
+                            severity="error",
+                        )
+                    )
+    return issues
 
 
 def dim_filter_gaps(catalog: MetricCatalog) -> list[CatalogIssue]:
