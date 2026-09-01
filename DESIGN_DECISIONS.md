@@ -170,6 +170,30 @@
 
 **触发重考点**：如果出现真正的动态 workflow（比如根据 P1 结果动态决定是否走 P3），再评估 LangGraph。
 
+**外部对照（2026-09-01，DB-GPT v0.8.2 代码核对）**：
+
+DB-GPT 造了一整套编排 DSL（AWEL，把工作流建模成算子 DAG），官方给出的动机与本 ADR 判断一致：
+
+> 多智能体的自动编排能力被模型能力严重限制，同时对于需要确定性的场景（如 pipeline 类任务）
+> 根本不需要用大模型的自动编排。
+
+更有说服力的是**它自己没用上**：AWEL 是其核心卖点，但经典 NL2SQL scene
+（`ChatWithDbAutoExecute`）的流程 `generate_input_values → prompt → LLM → out_parser
+→ do_action` 是 `base_chat.py` 里硬编码的方法调用顺序，**不是声明式 DAG**；AWEL 在那里
+只被用作「LLM 调用 + 缓存」的封装。此外文档宣称的三层架构（Operator / AgentFream / DSL）
+里，`AgentFream`、DSL、Ray runner 在代码中**全部不存在**（全仓 grep 零命中），
+真实可用的只有 Operator 层 + 单机 runner。
+
+即：一个 19.8k star、以编排框架为卖点的项目，主链路仍然是手写调用顺序，且框架三层里两层是路线图。
+这支持本 ADR 的取舍——固定 DAG 场景下，编排框架的收益主要是**声明式表达**，而非能力，
+其代价（抽象层、trace 语义变差）我们不需要承担。
+
+**评估过、明确不做**：AWEL 的 `BranchOperator` / `BranchJoinOperator` 曾被考虑用来显式建模
+Reflector 的重试分支。不做——理由与上表 LangGraph 那行相同（`conditional edges` 即此物），
+且 ADR-006 已定「单次重试」，分支逻辑用 `if/else` 表达完全够；改造对象
+`nl2sql_agent.py:run()` 承载双路由（metric 模板 / LLM 生成 / metric_then_nl2sql 降级），
+是测试覆盖最厚的代码，为零功能收益动它是纯亏。记此一笔以免重复评估。
+
 ---
 
 <a id="adr-003"></a>
@@ -274,6 +298,29 @@ Langfuse v3，全套 self-hosted，随 `docker-compose.yml` 一起起。栈：`l
 - ✅ 多方言支持：未来加 MySQL/SQLite 只改 dialect 参数
 - ⚠️ 覆盖不到所有语义错（如死锁、超时），这些仍需依赖执行时 Reflector 处理（见 ADR-006）
 
+**外部对照（2026-09-01，DB-GPT v0.8.2 代码核对）**：
+
+上表「regex + 黑名单：脆弱」那一行，DB-GPT 提供了实物样本。其新 agentic 路径的
+`sql_query` 工具是全项目唯一的 SQL 防线，实现为**对原始字符串的首关键字黑名单**：
+
+```python
+sql_upper = sql_stripped.upper().lstrip()
+forbidden = ["INSERT","UPDATE","DELETE","DROP","ALTER","TRUNCATE","CREATE","GRANT","REVOKE"]
+for kw in forbidden:
+    if sql_upper.startswith(kw):   # 只看开头
+        return "安全限制: 仅支持 SELECT 查询。"
+```
+
+`WITH x AS (...) DELETE ...`、`/* c */ DROP ...`、`(DELETE ...)`、`SELECT 1; DROP TABLE t`
+全部放行；而 `SELECT pg_read_file(...)` 这类**首词是 SELECT 的数据读取函数**整类不在防护范围内
+——正是本项目 2026-09-01「函数黑名单」提交（顶层白名单管不到 SELECT 里调了什么）要堵的洞。
+
+且放行后调用的 `run()`（`datasource/rdbms/base.py:620`）对非 SELECT 语句会
+`self._write(command)` 并显式 `session.commit()`，DDL 走 else 分支直接 `session.execute()`。
+其经典 scene 路径连这层字符串检查都没有，prompt 里也未约束 SELECT-only。
+即：**默认配置下 LLM 生成的 DELETE/DROP 会落到库上，唯一防线是数据库账号权限**
+（这也从反面支持 ADR-010 的双用户隔离）。
+
 ---
 
 <a id="adr-006"></a>
@@ -327,6 +374,26 @@ reflect 路径一次都没触发——这轮只能证明没引入回归，**不�
 依据仍是上表的历史统计。要真正验证需构造必然触发 reflect 的用例，另计。
 
 守门 `tests/p1/test_reflect_budget_matches_adr.py` 钉住预算数值，改之前先更新本 ADR。
+
+**外部对照（2026-09-01，DB-GPT v0.8.2 代码核对）**：
+
+DB-GPT 的 `DataScientistAgent` 走的是相反路线：`max_retry_count = 5`，且校验方式是
+**执行验错**而非静态校验——`correctness_check` 把 SQL 真跑一遍，看有没有返回行。
+两个后果值得记下，都印证本 ADR 与 ADR-005 的取舍：
+
+1. **空结果集被判为失败**：`if not values or len(values) <= 0: return (False, ...)`。
+   一个语义正确、业务上本就该返回 0 行的查询会被判错并触发重试，模型被反复施压
+   「改写 SQL 直到出数」——把「无数据」和「SQL 错」混为一谈，是结构性的幻觉诱因。
+2. **校验发生在副作用之后**：`ChartAction.run()` 先 `query_to_df(sql)` 出图，
+   `correctness_check` 再跑一遍验证，同一条 SQL 每轮执行两遍；若该 SQL 有写副作用，
+   等「校验」完已经晚了。
+
+而它的经典 scene 路径 (`base_chat.py`) 的重试是 `@async_retry`，默认 `retries=1`
+（即实际不重试），且**不把错误信息回喂模型**——纯粹重摇一次，与本项目
+Reflector 基于错误分类拼 repair hint 的做法不是一回事。
+
+结论：重试预算的大小不是关键，**校验在执行前还是执行后**才是。本项目
+「sqlglot 静态校验（ADR-005）+ 单次带 hint 重试」的组合方向正确，维持不变。
 
 ---
 
