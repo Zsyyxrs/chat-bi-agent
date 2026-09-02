@@ -4,13 +4,12 @@ import json
 import re
 from dataclasses import asdict
 
-from langfuse import observe
-
 from chat_bi_agent.agents.p2.prompts.insight_synthesizer_system import (
     INSIGHT_SYNTHESIZER_SYSTEM_PROMPT,
 )
 from chat_bi_agent.agents.p2.types import Fact, Insight
 from chat_bi_agent.llm import qwen_client
+from chat_bi_agent.obs.span_kind import observe_llm
 
 JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
@@ -22,7 +21,7 @@ class InsightParseError(Exception):
 class InsightSynthesizer:
     """Synthesize business insights from extracted Facts."""
 
-    @observe(name="p2_insight_synthesizer")
+    @observe_llm(name="p2_insight_synthesizer")
     def synthesize(self, question: str, facts: list[Fact]) -> list[Insight]:
         if not facts:
             return []

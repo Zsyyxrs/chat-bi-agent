@@ -3,19 +3,18 @@
 import json
 from dataclasses import asdict
 
-from langfuse import observe
-
 from chat_bi_agent.agents.p2.prompts.report_writer_system import (
     REPORT_WRITER_SYSTEM_PROMPT,
 )
 from chat_bi_agent.agents.p2.types import Fact, Insight, P2Plan
 from chat_bi_agent.llm import qwen_client
+from chat_bi_agent.obs.span_kind import observe_llm
 
 
 class ReportWriter:
     """Produce the final natural-language report (the evaluator's agent_response)."""
 
-    @observe(name="p2_report_writer")
+    @observe_llm(name="p2_report_writer")
     def write(
         self,
         question: str,

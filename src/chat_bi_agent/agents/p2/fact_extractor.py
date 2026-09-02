@@ -3,13 +3,12 @@
 import json
 import re
 
-from langfuse import observe
-
 from chat_bi_agent.agents.p2.prompts.fact_extractor_system import (
     FACT_EXTRACTOR_SYSTEM_PROMPT,
 )
 from chat_bi_agent.agents.p2.types import Fact, StepResult
 from chat_bi_agent.llm import qwen_client
+from chat_bi_agent.obs.span_kind import observe_llm
 
 JSON_FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
 
@@ -23,7 +22,7 @@ class FactParseError(Exception):
 class FactExtractor:
     """Extract structured Facts from executed step results."""
 
-    @observe(name="p2_fact_extractor")
+    @observe_llm(name="p2_fact_extractor")
     def extract(self, step_results: list[StepResult]) -> list[Fact]:
         usable = [s for s in step_results if not s.skipped]
         if not usable:

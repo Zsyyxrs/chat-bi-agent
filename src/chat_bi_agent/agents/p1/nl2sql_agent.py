@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from langfuse import get_client, observe
+from langfuse import get_client
 
 from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
 from chat_bi_agent.agents.p1.reflector import ReflectAction, Reflector
@@ -16,6 +16,7 @@ from chat_bi_agent.agents.shared.example_retriever import ExampleRetriever
 from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass, SQLExecutor
 from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS, TOP_K_NL2SQL
+from chat_bi_agent.obs.span_kind import observe_llm
 from chat_bi_agent.schema.loader import SchemaLoader
 from chat_bi_agent.schema.value_index import DEFAULT_CACHE_PATH, ValueIndex
 
@@ -96,7 +97,7 @@ class P1NL2SQLAgent:
         # 破坏性操作让调用方显式开，不靠默认值兜。
         self.tag_route_on_trace = tag_route_on_trace
 
-    @observe(name="p1_nl2sql_run")
+    @observe_llm(name="p1_nl2sql_run")
     def run(self, question_id: str, question: str) -> P1AgentResult:
         start = time.perf_counter()
 

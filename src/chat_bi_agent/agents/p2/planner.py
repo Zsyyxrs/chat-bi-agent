@@ -7,8 +7,6 @@ after a step failure. Both share JSON-fence parsing and structural validation.
 import json
 import re
 
-from langfuse import observe
-
 from chat_bi_agent.agents.p2.prompts.planner_few_shots import FEW_SHOTS
 from chat_bi_agent.agents.p2.prompts.planner_system import PLANNER_SYSTEM_PROMPT
 from chat_bi_agent.agents.p2.prompts.replanner_system import REPLANNER_SYSTEM_PROMPT
@@ -17,6 +15,7 @@ from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
 from chat_bi_agent.agents.shared.sql_executor import SQLErrorClass
 from chat_bi_agent.config import TOP_K_PLANNER
 from chat_bi_agent.llm import qwen_client
+from chat_bi_agent.obs.span_kind import observe_llm
 from chat_bi_agent.schema.loader import SchemaLoader
 
 MIN_STEPS = 2
@@ -107,7 +106,7 @@ class Planner:
         self.loader = loader
         self.top_k = top_k
 
-    @observe(name="p2_planner")
+    @observe_llm(name="p2_planner")
     def plan(self, question: str) -> P2Plan:
         matches = self.schema_linker.link(question)
         top_names = [m.name for m in matches[: self.top_k]]
@@ -162,7 +161,7 @@ class Replanner:
         self.loader = loader
         self.top_k = top_k
 
-    @observe(name="p2_replanner")
+    @observe_llm(name="p2_replanner")
     def replan(
         self,
         original_plan: P2Plan,

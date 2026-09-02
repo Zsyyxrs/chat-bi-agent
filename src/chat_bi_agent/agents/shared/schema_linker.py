@@ -3,9 +3,8 @@
 import math
 from dataclasses import dataclass
 
-from langfuse import observe
-
 from chat_bi_agent.llm import qwen_client
+from chat_bi_agent.obs.span_kind import observe_llm
 from chat_bi_agent.schema.loader import SchemaLoader
 
 
@@ -33,7 +32,7 @@ class SchemaLinker:
         if not loader.docs or loader.docs[0].embedding is None:
             raise RuntimeError("SchemaLoader 需要先 load() + build_index()")
 
-    @observe(name="schema_linking")
+    @observe_llm(name="schema_linking")
     def link(self, question: str) -> list[TableMatch]:
         q_vec = qwen_client.embed([question])[0]
         scored = [

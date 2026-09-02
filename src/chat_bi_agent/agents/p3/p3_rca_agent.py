@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from langfuse import get_client, observe
+from langfuse import get_client
 
 from chat_bi_agent.agents.p3.drill_executor import run_drill_down
 from chat_bi_agent.agents.p3.drilldown_selector import (
@@ -15,6 +15,7 @@ from chat_bi_agent.agents.p3.event_matcher import match_events
 from chat_bi_agent.agents.p3.fact_anchor import run_fact_anchor
 from chat_bi_agent.agents.p3.synthesizer import synthesize
 from chat_bi_agent.agents.p3.types import FactAnchor, RCAReport
+from chat_bi_agent.obs.span_kind import observe_llm
 
 
 class P3RootCauseAnalysisAgent:
@@ -38,7 +39,7 @@ class P3RootCauseAnalysisAgent:
         self.llm_client = llm_client
         self.events_dir = events_dir
 
-    @observe(name="p3_rca_run")
+    @observe_llm(name="p3_rca_run")
     def run(self, question_id: str, question: str) -> RCAReport:
         t0 = time.time()
 

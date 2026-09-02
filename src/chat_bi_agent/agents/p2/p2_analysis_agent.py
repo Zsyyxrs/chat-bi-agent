@@ -2,7 +2,7 @@
 
 import time
 
-from langfuse import get_client, observe
+from langfuse import get_client
 
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent
 from chat_bi_agent.agents.p2.context_injector import inject_context
@@ -22,6 +22,7 @@ from chat_bi_agent.agents.p2.types import (
     StepResult,
 )
 from chat_bi_agent.agents.shared.schema_linker import SchemaLinker
+from chat_bi_agent.obs.span_kind import observe_llm
 from chat_bi_agent.schema.loader import SchemaLoader
 
 
@@ -55,7 +56,7 @@ class P2MultiStepAnalysisAgent:
         self.insight_synthesizer = InsightSynthesizer()
         self.report_writer = ReportWriter()
 
-    @observe(name="p2_step")
+    @observe_llm(name="p2_step")
     def _run_step(
         self,
         sub_qid: str,
@@ -83,7 +84,7 @@ class P2MultiStepAnalysisAgent:
         )
         return self.p1.run(question_id=sub_qid, question=enriched)
 
-    @observe(name="p2_analysis_run")
+    @observe_llm(name="p2_analysis_run")
     def run(self, question_id: str, question: str) -> AnalysisReport:
         t0 = time.perf_counter()
 

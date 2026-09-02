@@ -6,9 +6,10 @@ from decimal import Decimal
 from numbers import Real
 from typing import Any
 
-from langfuse import get_client, observe
+from langfuse import get_client
 
 from chat_bi_agent.agents.p3.types import DrillRequest, DrillResult
+from chat_bi_agent.obs.span_kind import observe_llm
 
 # 注意：Decimal 不是 numbers.Real 的子类（Python 标准库历史遗留），
 # psycopg2 把 NUMERIC 列还原成 Decimal，所以必须显式纳入。
@@ -142,7 +143,7 @@ def _tag_drill_span(**metadata) -> None:
         pass
 
 
-@observe(name="p3_drill")
+@observe_llm(name="p3_drill")
 def _execute_single_drill(
     question_id: str,
     i: int,

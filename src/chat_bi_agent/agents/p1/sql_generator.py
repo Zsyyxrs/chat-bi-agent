@@ -11,9 +11,8 @@ import json
 import re
 from dataclasses import dataclass
 
-from langfuse import observe
-
 from chat_bi_agent.llm import qwen_client
+from chat_bi_agent.obs.span_kind import observe_llm
 
 _SYSTEM_PROMPT_TEMPLATE = (
     "你是一个银行业务 NL2SQL 助手。根据用户的中文问题和给定的表 schema，"
@@ -198,7 +197,7 @@ class SQLGenerator:
             parts.append(f"\n{repair_hint}\n\n请重新输出 JSON。")
         return "\n".join(parts)
 
-    @observe(name="sql_generation")
+    @observe_llm(name="sql_generation")
     def generate(
         self,
         question: str,

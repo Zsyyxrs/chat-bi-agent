@@ -6,10 +6,10 @@ from decimal import Decimal
 from enum import Enum
 
 import psycopg2
-from langfuse import observe
 from psycopg2.extras import RealDictCursor
 
 from chat_bi_agent.config import PG_STATEMENT_TIMEOUT_MS
+from chat_bi_agent.obs.span_kind import observe_local
 
 
 def _pyify_value(v: object) -> object:
@@ -61,7 +61,7 @@ class SQLExecutor:
         stripped = sql.strip().lower()
         return stripped.startswith("select") or stripped.startswith("with")
 
-    @observe(name="sql_execution")
+    @observe_local(name="sql_execution")
     def execute(self, sql: str) -> tuple[list[dict] | None, str | None]:
         """执行 SQL。返回 (rows, error)：
         - 成功：(rows, None)

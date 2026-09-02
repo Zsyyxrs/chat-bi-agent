@@ -24,9 +24,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from langfuse import observe
 
 from chat_bi_agent.llm import qwen_client
+from chat_bi_agent.obs.span_kind import observe_llm
 
 
 class MetricResolverError(Exception):
@@ -692,7 +692,7 @@ def _resolve_to_spec_and_sql(
     return spec, sql
 
 
-@observe(name="metric_resolve")
+@observe_llm(name="metric_resolve")
 def resolve(question: str, catalog: MetricCatalog) -> str:
     """端到端：question → SQL；失败抛 MetricResolverError（调用方兜底走 NL2SQL）。"""
     _, sql = _resolve_to_spec_and_sql(question, catalog)

@@ -27,7 +27,7 @@ import dashscope  # noqa: E402
 import openai  # noqa: E402
 import requests  # noqa: E402
 from dashscope import TextEmbedding  # noqa: E402
-from langfuse import get_client, observe  # noqa: E402
+from langfuse import get_client  # noqa: E402
 
 from chat_bi_agent.config import (  # noqa: E402
     CHAT_MODEL,
@@ -35,6 +35,7 @@ from chat_bi_agent.config import (  # noqa: E402
     EMBED_DIM,
     EMBED_MODEL,
 )
+from chat_bi_agent.obs.span_kind import observe_llm  # noqa: E402
 
 __all__ = ["CHAT_MODEL", "EMBED_MODEL", "EMBED_DIM", "ChatResult", "chat", "embed"]
 
@@ -161,7 +162,7 @@ def _usage_details(usage) -> dict[str, int]:
     return details
 
 
-@observe(as_type="generation", name="qwen_chat")
+@observe_llm(as_type="generation", name="qwen_chat")
 def chat(
     system_prompt: str,
     user_prompt: str,
@@ -227,7 +228,7 @@ def preflight_chat_model() -> None:
 EMBED_MAX_BATCH = 10
 
 
-@observe(as_type="embedding", name="qwen_embed")
+@observe_llm(as_type="embedding", name="qwen_embed")
 def embed(texts: list[str]) -> list[list[float]]:
     """批量 embedding。返回 list of 1024-dim 向量，顺序与入参一致。
 

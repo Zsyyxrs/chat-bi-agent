@@ -24,8 +24,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from langfuse import observe  # noqa: E402
-
 from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog, MetricRouter  # noqa: E402
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent  # noqa: E402
 from chat_bi_agent.agents.shared.example_retriever import (  # noqa: E402
@@ -40,6 +38,7 @@ from chat_bi_agent.eval.precision_retrieval_evaluator import (  # noqa: E402
 )
 from chat_bi_agent.llm import qwen_client  # noqa: E402
 from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
+from chat_bi_agent.obs.span_kind import observe_llm  # noqa: E402
 from chat_bi_agent.schema.value_index import ValueIndex  # noqa: E402
 
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "precision_retrieval_evaluation.yaml"
@@ -298,7 +297,7 @@ def _summarize_metric_router(
     }
 
 
-@observe(name="p1_eval_batch")
+@observe_llm(name="p1_eval_batch")
 def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = parse_args()

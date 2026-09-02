@@ -20,8 +20,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from langfuse import observe  # noqa: E402
-
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent  # noqa: E402
 from chat_bi_agent.agents.p2 import P2MultiStepAnalysisAgent  # noqa: E402
 from chat_bi_agent.eval.multi_step_analysis_evaluator import (  # noqa: E402
@@ -30,6 +28,7 @@ from chat_bi_agent.eval.multi_step_analysis_evaluator import (  # noqa: E402
     MultiStepAnalysisEvaluator,
 )
 from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
+from chat_bi_agent.obs.span_kind import observe_llm  # noqa: E402
 
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "multi_step_analysis_evaluation.yaml"
 
@@ -128,7 +127,7 @@ def load_questions() -> dict[str, dict]:
     return {q["id"]: q for q in data["evaluation_questions"]}
 
 
-@observe(name="p2_eval_batch")
+@observe_llm(name="p2_eval_batch")
 def main(limit: int | None = None, only_qid: str | None = None) -> int:
     get_client()
     questions = load_questions()

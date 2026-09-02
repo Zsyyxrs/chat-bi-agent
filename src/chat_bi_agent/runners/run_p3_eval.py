@@ -20,13 +20,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from langfuse import observe  # noqa: E402
-
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent  # noqa: E402
 from chat_bi_agent.agents.p3 import P3RootCauseAnalysisAgent  # noqa: E402
 from chat_bi_agent.eval.rca_evaluator import RCAEvaluator  # noqa: E402
 from chat_bi_agent.llm import qwen_client  # noqa: E402
 from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
+from chat_bi_agent.obs.span_kind import observe_llm  # noqa: E402
 
 DATA_YAML = Path(__file__).resolve().parents[1] / "data" / "attribution_evaluation.yaml"
 EVENTS_DIR = Path(__file__).resolve().parents[1] / "data" / "events"
@@ -41,7 +40,7 @@ def load_questions() -> list[dict]:
     return data.get("evaluation_questions", [])
 
 
-@observe(name="p3_eval_batch")
+@observe_llm(name="p3_eval_batch")
 def main(limit: int | None = None, only_qid: str | None = None) -> int:
     get_client()
     questions = load_questions()
