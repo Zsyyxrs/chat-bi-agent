@@ -278,5 +278,6 @@ def run_fact_anchor(
         change_pct=change_pct,
         direction=direction,
         sql=p1_result.sql,
+        metric_id=getattr(p1_result, "metric_id", None),
         rows=rows,
     )

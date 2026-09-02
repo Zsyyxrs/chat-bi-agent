@@ -16,6 +16,9 @@ class FactAnchor:
     direction: Literal["up", "down", "flat"]
     sql: str
     rows: list[dict]
+    # 命中语义层时带出来，供下钻按该指标的 dim_catalog 取候选维度；
+    # 走 nl2sql 路径时为 None
+    metric_id: str | None = None
 
 
 @dataclass

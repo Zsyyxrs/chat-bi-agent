@@ -7,7 +7,10 @@ from typing import Any
 from langfuse import get_client, observe
 
 from chat_bi_agent.agents.p3.drill_executor import run_drill_down
-from chat_bi_agent.agents.p3.drilldown_selector import select_drilldown_dims
+from chat_bi_agent.agents.p3.drilldown_selector import (
+    catalog_dims,
+    select_drilldown_dims,
+)
 from chat_bi_agent.agents.p3.event_matcher import match_events
 from chat_bi_agent.agents.p3.fact_anchor import run_fact_anchor
 from chat_bi_agent.agents.p3.synthesizer import synthesize
@@ -77,10 +80,15 @@ class P3RootCauseAnalysisAgent:
             )
 
         # Step 2: select drill-down dimensions
+        # 候选维度优先取该指标 dim_catalog 声明过的；拿不到（nl2sql 路径 /
+        # 未挂 router）才退回全局 DEFAULT_DIMS
         requests = select_drilldown_dims(
             question=question,
             fact_anchor=anchor,
             llm_client=self.llm_client,
+            available_dims=catalog_dims(
+                getattr(self.p1_agent, "metric_router", None), anchor.metric_id
+            ),
         )
 
         # Step 3: drill down per dimension

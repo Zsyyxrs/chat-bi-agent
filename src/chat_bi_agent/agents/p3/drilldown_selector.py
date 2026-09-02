@@ -24,6 +24,28 @@ MAX_COUNT = 4
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
+def catalog_dims(metric_router: Any, metric_id: str | None) -> list[str] | None:
+    """取该指标 dim_catalog 里声明过的维度作为下钻候选集。
+
+    拿不到就返回 None，调用方退回 DEFAULT_DIMS——归因链路不该因为 catalog 查不到
+    就整体崩掉（走 nl2sql 路径时本来就没有 metric_id）。
+
+    比全局白名单强的地方：LLM 只能在该指标真实声明过的维度里选，选不出来是
+    「没有合适维度」，而不是编一个该指标根本没有的维度让 P1 去硬凑 SQL。
+    """
+    if metric_router is None or not metric_id:
+        return None
+    catalog = getattr(metric_router, "catalog", None)
+    if catalog is None:
+        return None
+    try:
+        metric = catalog.get(metric_id)
+    except Exception:
+        return None
+    dims = list(getattr(metric, "dim_catalog", {}) or {})
+    return dims or None
+
+
 def _parse_selector_json(raw: str) -> list[DrillRequest]:
     """Parse LLM output into DrillRequest list. Raises ValueError on malformed JSON."""
     if not raw:
