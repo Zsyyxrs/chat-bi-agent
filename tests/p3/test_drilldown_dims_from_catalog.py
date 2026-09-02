@@ -54,7 +54,6 @@ def test_未知_metric_id_返回None_而不是抛错():
 
 def test_P3_把_catalog_维度传给选择器_而非全局默认(fake_events_dir, monkeypatch):
     """接线守门：catalog_dims 单测再绿，调用方没接上也是白搭。"""
-    from dataclasses import replace
 
     from chat_bi_agent.agents.p3 import p3_rca_agent as mod
     from chat_bi_agent.agents.p3.drilldown_selector import DEFAULT_DIMS
