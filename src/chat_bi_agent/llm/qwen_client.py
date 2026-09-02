@@ -118,6 +118,49 @@ def _call_with_retry(fn, **kwargs):
     raise last
 
 
+def _sub_token_count(details, field: str) -> int | None:
+    """从 *_tokens_details 里取一个整数字段；缺失/非整数一律当没有。
+
+    MagicMock 和 SDK 版本差异都可能让这里拿到非 int，写进 usage_details 会污染
+    服务端统计，所以只认真正的 int。
+    """
+    value = getattr(details, field, None) if details is not None else None
+    return value if isinstance(value, int) else None
+
+
+def _usage_details(usage) -> dict[str, int]:
+    """拼 Langfuse usage_details。
+
+    兼容端点用 prompt_tokens/completion_tokens，与 dashscope 原生的
+    input_tokens/output_tokens 不同名。照抄旧字段名不会报错，只会让 Langfuse
+    的成本统计恒为 0——又一处静默失效，所以在此显式映射。
+
+    **必须显式给 total**：2026-09-02 实测本地 Langfuse v3，服务端把所有非 total
+    键求和当作 total。而 reasoning_tokens 是 completion 的子集、cached_tokens 是
+    prompt 的子集，不给 total 的话 353 会变成 692——token 凭空翻倍且不报错。
+    （改用嵌套 prompt_tokens_details 则不双计，但细分数据会被静默丢弃。）
+
+    细分维度值得记：当前 flash 模型实测 reasoning 占 completion 的 97%，
+    只看 output 完全看不出钱花在思维链上。
+    """
+    prompt_tokens = usage.prompt_tokens
+    completion_tokens = usage.completion_tokens
+    details: dict[str, int] = {
+        "input": prompt_tokens,
+        "output": completion_tokens,
+        "total": prompt_tokens + completion_tokens,
+    }
+    cached = _sub_token_count(getattr(usage, "prompt_tokens_details", None), "cached_tokens")
+    if cached is not None:
+        details["input_cached_tokens"] = cached
+    reasoning = _sub_token_count(
+        getattr(usage, "completion_tokens_details", None), "reasoning_tokens"
+    )
+    if reasoning is not None:
+        details["output_reasoning_tokens"] = reasoning
+    return details
+
+
 @observe(as_type="generation", name="qwen_chat")
 def chat(
     system_prompt: str,
@@ -140,13 +183,7 @@ def chat(
     get_client().update_current_generation(
         model=CHAT_MODEL,
         model_parameters={"temperature": temperature},
-        # 兼容端点用 prompt_tokens/completion_tokens，与 dashscope 原生的
-        # input_tokens/output_tokens 不同名。照抄旧字段名不会报错，只会让 Langfuse
-        # 的成本统计恒为 0——又一处静默失效，所以在此显式映射。
-        usage_details={
-            "input": resp.usage.prompt_tokens,
-            "output": resp.usage.completion_tokens,
-        },
+        usage_details=_usage_details(resp.usage),
     )
     # 推理模型（如 qwen3.7-max-2026-06-08）会另外给一个 reasoning_content 字段，
     # 里面是思维链。SQL 解析只要最终答案，thinking 不参与，故只取 content。
