@@ -3,8 +3,9 @@
 from dataclasses import dataclass
 
 import sqlglot
-from langfuse import observe
 from sqlglot import expressions as exp
+
+from chat_bi_agent.obs.span_kind import observe_local
 
 
 @dataclass
@@ -65,8 +66,70 @@ _FORBIDDEN_FUNCS = frozenset(
         "readfile",
         "writefile",
         "load_extension",
+        # ── 以下为 2026-09-02 对照 SQLBot 分库危险函数表补齐 ──
+        # （SQLBot backend/apps/db/db.py:1025 `DS_SPECIFIC_DANGEROUS_FUNCTIONS`）
+        # MySQL — 读本地文件
+        "load_file",
+        # SQL Server — 命令执行 / 动态 SQL / 外部数据源
+        "xp_cmdshell",
+        "xp_dirtree",
+        "xp_fileexist",
+        "sp_executesql",
+        "openrowset",
+        "opendatasource",
+        "openquery",
+        # PostgreSQL — 原黑名单漏掉的文件面与进程面
+        "pg_ls_logdir",
+        "pg_ls_waldir",
+        "pg_ls_tmpdir",
+        "pg_logdir_ls",
+        "pg_file_read",
+        "pg_file_write",
+        "pg_file_unlink",
+        "pg_current_logfile",
+        "pg_reload_conf",
+        "pg_terminate_backend",
+        "dblink_connect",
+        # 侦察类：对指标口径驱动的 BI 查询零业务价值，只泄露库版本/账号/网络面。
+        # 注意 `user` / `session_user` 裸写会被 sqlglot 解析成 Column 而非 Func，
+        # 这里拦不到——放进来只会误伤名为 user 的业务列，故**有意不收**。
+        "version",
+        "current_user",
+        "current_database",
+        "current_schema",
+        "pg_backend_pid",
+        "inet_server_addr",
+        "inet_server_port",
     }
 )
+
+# Oracle/MSSQL 风格的 `包名.函数名` 调用，在 sqlglot 里是 Dot(Identifier, Anonymous)，
+# Anonymous 只带方法名（`utl_http.request` → `request`）。按函数名匹配必然漏，
+# 而 `request` / `sleep` 这类通用词进黑名单又会大面积误伤——只能按**包名前缀**拦。
+_FORBIDDEN_QUALIFIERS = frozenset(
+    {
+        "utl_http",  # 外发 HTTP → 数据外泄 / SSRF
+        "utl_file",  # 读写服务器文件
+        "utl_tcp",
+        "utl_smtp",
+        "utl_inaddr",  # DNS 外带
+        "dbms_pipe",
+        "dbms_lock",  # sleep → 时间盲注 / DoS
+        "dbms_scheduler",
+        "dbms_java",
+        "dbms_xmlgen",
+    }
+)
+
+
+def _leftmost_identifier(node: exp.Dot) -> str:
+    """取 Dot 链最左端的标识符名（`a.b.c()` → `a`），小写。"""
+    cur: exp.Expression = node
+    while isinstance(cur, exp.Dot):
+        cur = cur.this
+    if isinstance(cur, exp.Identifier):
+        return (cur.name or "").lower()
+    return ""
 
 
 class SQLValidator:
@@ -79,7 +142,7 @@ class SQLValidator:
     def __init__(self, dialect: str = "postgres"):
         self.dialect = dialect
 
-    @observe(name="sql_validation")
+    @observe_local(name="sql_validation")
     def validate(self, sql: str) -> ValidationResult:
         try:
             parsed = sqlglot.parse(sql, dialect=self.dialect)
@@ -103,6 +166,13 @@ class SQLValidator:
                         ok=False,
                         error=f"包含禁止操作：{type(node).__name__}",
                     )
+                if isinstance(node, exp.Dot):
+                    qualifier = _leftmost_identifier(node)
+                    if qualifier in _FORBIDDEN_QUALIFIERS:
+                        return ValidationResult(
+                            ok=False,
+                            error=f"包含禁止函数包：{qualifier}",
+                        )
                 if isinstance(node, exp.Func):
                     name = (node.name or node.sql_name() or "").lower()
                     if name in _FORBIDDEN_FUNCS:

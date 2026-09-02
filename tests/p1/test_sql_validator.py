@@ -132,3 +132,79 @@ def test_ordinary_functions_still_allowed(validator):
         "FROM fct_balance_daily GROUP BY 2"
     )
     assert validator.validate(sql).ok is True
+
+
+# ── 跨方言执行/外泄型函数 ────────────────────────────────────────────
+# 2026-09-02：对照 SQLBot 的分库危险函数表（backend/apps/db/db.py:1025）
+# 补齐我们缺的三类。原有黑名单偏 PG/DuckDB，MySQL/MSSQL/Oracle 一个没有——
+# `dialect` 是构造参数，将来指到别的库时那几类就是裸奔。
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # MySQL —— 读本地文件
+        "SELECT load_file('/etc/passwd')",
+        # SQL Server —— 命令执行 / 动态 SQL / 外部数据源
+        "SELECT xp_cmdshell('whoami')",
+        "SELECT sp_executesql('SELECT 1')",
+        "SELECT * FROM openrowset('SQLNCLI', 'server=evil', 'SELECT 1')",
+        "SELECT * FROM opendatasource('SQLNCLI', 'server=evil').db.dbo.t",
+        "SELECT * FROM openquery(linked, 'SELECT 1')",
+        # PostgreSQL —— 原黑名单漏掉的文件/进程面
+        "SELECT pg_ls_logdir()",
+        "SELECT pg_file_read('/etc/passwd', 0, 100)",
+        "SELECT pg_terminate_backend(123)",
+    ],
+)
+def test_rejects_cross_dialect_dangerous_functions(validator, sql):
+    r = validator.validate(sql)
+    assert r.ok is False
+    assert "禁止函数" in (r.error or "")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT utl_http.request('http://evil/x') FROM dual",
+        "SELECT utl_file.fopen('D', 'f', 'r') FROM dual",
+        "SELECT dbms_pipe.receive_message('x') FROM dual",
+        "SELECT dbms_lock.sleep(10) FROM dual",
+    ],
+)
+def test_rejects_oracle_package_calls(validator, sql):
+    """Oracle 的 `包名.函数名` 在 sqlglot 里是 Dot(Identifier, Anonymous)。
+
+    按函数名匹配拦不到——`utl_http.request` 的 Anonymous 只叫 `request`，
+    而 `request` 本身不能进黑名单（误伤面太大）。必须按**包名前缀**拦。
+    """
+    r = validator.validate(sql)
+    assert r.ok is False
+    assert "禁止" in (r.error or "")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT version()",
+        "SELECT current_user",
+        "SELECT current_database()",
+        "SELECT inet_server_addr()",
+    ],
+)
+def test_rejects_recon_functions(validator, sql):
+    """侦察类函数：对指标口径驱动的 BI 查询零业务价值，但会泄露库版本/账号/网络面。
+
+    SQLBot 把 version/current_user/user/database 一并列为危险函数，同一判断。
+    """
+    assert validator.validate(sql).ok is False
+
+
+def test_user_column_still_allowed(validator):
+    """`user` / `session_user` 裸写在 sqlglot 里解析成 Column 而非 Func。
+
+    即：这两个词我们**拦不到**，也不该假装拦得到——把它们塞进函数黑名单
+    只会误伤名为 user 的业务列。这条测试锁死「不过度拦截」。
+    """
+    assert validator.validate("SELECT user FROM dim_customer").ok is True
+    assert validator.validate("SELECT session_user FROM dim_customer").ok is True
