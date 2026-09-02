@@ -55,6 +55,34 @@ class P2MultiStepAnalysisAgent:
         self.insight_synthesizer = InsightSynthesizer()
         self.report_writer = ReportWriter()
 
+    @observe(name="p2_step")
+    def _run_step(
+        self,
+        sub_qid: str,
+        enriched: str,
+        *,
+        step_index: int,
+        total_steps: int,
+        step_id: str,
+        replan_count: int,
+    ):
+        """单步执行，独立成 span。
+
+        必须有自己的 @observe：元数据若挂在 p2_analysis_run 上，循环每轮都会
+        覆写，只剩最后一步。对齐 P3 的 `_execute_single_drill`。
+
+        「第 i 步 / 共 n 步 / 已 replan 几次」——replan 会改写 plan.steps，
+        光看 sub_qid 无法还原当时走到哪一步、总共几步。
+        """
+        _tag_step_span(
+            step_index=step_index,
+            total_steps=total_steps,
+            step_id=step_id,
+            replan_count=replan_count,
+            sub_question_id=sub_qid,
+        )
+        return self.p1.run(question_id=sub_qid, question=enriched)
+
     @observe(name="p2_analysis_run")
     def run(self, question_id: str, question: str) -> AnalysisReport:
         t0 = time.perf_counter()
@@ -77,16 +105,14 @@ class P2MultiStepAnalysisAgent:
             enriched = inject_context(step, prior_results)
             sub_qid = f"{question_id}__{step.id}"
 
-            # 「第 i 步 / 共 n 步 / 已 replan 几次」——replan 会改写 plan.steps，
-            # 光看 sub_qid 无法还原当时走到哪一步、总共几步。
-            _tag_step_span(
+            p1_result = self._run_step(
+                sub_qid,
+                enriched,
                 step_index=i,
                 total_steps=len(plan.steps),
                 step_id=step.id,
                 replan_count=replan_count,
-                sub_question_id=sub_qid,
             )
-            p1_result = self.p1.run(question_id=sub_qid, question=enriched)
 
             sr = _p1_result_to_step_result(step, p1_result)
 
