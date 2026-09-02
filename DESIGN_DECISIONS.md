@@ -603,6 +603,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-014](#adr-014) | 评测集 gold 的可信度守门 | Accepted |
 | [ADR-015](#adr-015) | P2 评分器中文分词修复 | Accepted（三个饱和维度待决） |
 | [ADR-016](#adr-016) | P2 rubric LLM judge | Accepted |
+| [ADR-017](#adr-017) | RLAC session 属性注册表与值域门禁 | Proposed |
 
 新增 ADR 命名 `ADR-013`、`ADR-014` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
@@ -2270,4 +2271,106 @@ q003 最清楚：分子分母都查出来了却从没相除算出赎回率、续
 
 ---
 
-**最后更新**：2026-08-17
+<a id="adr-017"></a>
+
+### ADR-017: RLAC 从「运行时约定」升级为「带值域的 session 属性注册表」
+
+**Status**: Proposed · 2026-09-02
+
+**Context**:
+
+RLAC 的**执行面**已经完整且方向正确（`metric_resolver.py:60` `RowPolicy`）：
+
+- 条件在 `_render_row_policies` 渲染期注入，排在 `where_parts` 最前
+- `RowPolicy` 不进 extractor prompt，**LLM 全程看不到**，也就无从绕过
+- fail-closed：`requires` 里的属性没拿到就抛 `MetricResolverError`，绝不静默放行全表
+- `metric_lineage.row_policy_issues()` 已做静态自洽性校验，进了 catalog 门禁
+
+但**管理面完全不存在**，且这个机制目前是休眠的：
+
+```
+config/metrics.yaml 里声明 row_policies 的指标数： 0
+src/ 下传 session_props 的调用方数量：            0（除 metric_resolver 自身）
+```
+
+具体缺的三件事：
+
+1. **属性没有注册表**。`requires: ["branch_id"]` 是一句隐式约定——没有任何地方
+   声明 `branch_id` 存在、是什么类型、合法取值是什么。写错一个名字，症状是
+   运行期 fail-closed 报错，而不是 catalog 门禁在 CI 里拦下。
+2. **值没有值域校验**。`_sql_literal`（`metric_resolver.py:315`）只校验 Python
+   **类型**（str/int/float/bool）并做引号转义，不校验**取值范围**。调用方传
+   `session_props={"branch_id": "BR_ALL"}` 会原样拼进 WHERE——越权与否完全取决于
+   调用方自觉。这是当前设计里唯一没有 fail-closed 兜底的环节。
+3. **赋值链路没有定义**。session_props 从哪来（SSO claim？组织架构同步？人工配？）、
+   谁能改、改了怎么审计——一条都没写。银行落地时这是必答题。
+
+**Decision**:
+
+引入 **session 属性注册表**，把三件事显式化。参考 SQLBot 的三表拆分
+（规则本体 / 绑定关系 / 系统变量），但保留我们渲染期 fail-closed 的执行方式。
+
+1. **注册表**（新文件 `config/session_properties.yaml`）：每个属性声明
+   `name` / `type` / `domain`（枚举列表、数值区间或 `source: sso_claim` 这类外部来源）
+   / `description`。
+2. **catalog 门禁扩展**：`scripts/check_metric_catalog.py` 增加一条——
+   任何 `row_policies[].requires` 里的属性名必须在注册表中存在，否则 CI 失败。
+   把「写错属性名」从运行期错误提前成 CI 错误。
+3. **渲染期值域校验**：`_sql_literal` 之前加一道——传入值必须落在注册表声明的
+   `domain` 内，否则抛 `MetricResolverError`。**越权值 fail-closed，不是拼进 SQL**。
+4. **赋值链路**：明确 session_props 只允许由认证层构造（从已验证的身份令牌派生），
+   业务代码不得直接构造或覆写；这条先写进文档约束，接入认证时再落成代码。
+
+**Alternatives considered**:
+
+| 候选 | 为什么没选 |
+|---|---|
+| **维持现状（隐式约定）** | 值域缺口是实打实的越权面；且零调用方意味着这套机制上线时才第一次被真实使用，风险后置 |
+| **像 SQLBot 那样把用户 ID 数组直接绑进规则**（`ds_rules.user_list` JSONB） | 一家分行 3000 人就是往数组里塞 3000 个 id，人员调动要改数组；没有按角色/组织架构绑定这一层，规模化不了 |
+| **把权限条件交给 LLM 改写 SQL** | 见下方外部对照——SQLBot 就是这么做的，是 fail-open |
+| **在数据库侧做 RLS（Postgres Row Level Security）** | 更强，但要求每个查询会话带上正确的 DB role；与我们「双用户隔离」（ADR-010）的连接池模型冲突，且跨库方言不通。**可作为后续叠加层，不替代本 ADR** |
+
+**Consequences**:
+
+- ✅ 属性名拼写错误从「上线后 fail-closed 报错」提前到 CI 失败
+- ✅ 补上唯一的非 fail-closed 环节（越权取值）
+- ✅ 给出银行场景可回答的治理链路：属性定义 → 值域 → 赋值来源 → 审计
+- ⚠️ 注册表是新的一份需维护的元数据，和 metrics.yaml 一样会有漂移风险——
+  靠第 2 条门禁兜住
+- ⚠️ 本 ADR 只覆盖**指标模板路径**。P1 的 LLM 生成 SQL 兜底路径不走
+  `_render_row_policies`，那条路径上 RLAC 是**不生效的**——这是已知缺口，
+  需要单独决策（要么该路径禁用于带 row_policies 的指标域，要么在 SQL 改写层补）
+
+**外部对照（2026-09-02，SQLBot v1.10.1 代码核对）**：
+
+SQLBot 是这批 NL2SQL 开源项目里唯一把企业级数据权限做成产品的，正好给出正反两面。
+
+**值得借鉴的（本 ADR 第 1、4 条的来源）——「系统变量」抽象**
+（`backend/apps/datasource/crud/row_permission.py:88`）：管理员定义变量（含 `var_type`
+text/number/datetime/kv 与值域）→ 给用户赋值 → 权限规则引用变量。关键是它**校验值域**：
+用户被赋的值要和变量定义求交集，交集为空则该条件失效（`row_permission.py:120-136`）。
+这正是我们缺的第 2 条。
+
+**明确不抄的——它的行权限执行点**：SQLBot 取到过滤条件后，不是在渲染期注入，而是
+**再发一次 LLM 调用请模型改写 SQL**（`apps/chat/task/llm.py:898` `build_table_filter`）。
+那次调用的 prompt（`backend/templates/template.yaml:729`）写着：
+
+```
+- 如果过滤条件不为空但找不到匹配的表 → {"success":true,"sql":"原SQL"}
+```
+
+即「模型没匹配上表名就原样返回未过滤的 SQL，且 success=true」——**一个写进 prompt 的
+fail-open 出口**，下游无任何告警。另外三处缺口：改写后的 SQL 不再过表名白名单
+（`llm.py:1333` 的校验在改写之前）；嵌入式小助手（assistant type 0/2）整个跳过行权限分支
+（`llm.py:1348`）；喂给模型的样例数据 `SELECT ... LIMIT 3` 不带 WHERE
+（`apps/datasource/crud/datasource.py:445`），同一份规则在「给人看」的 preview 路径上生效、
+在「给模型看」的路径上不生效。
+
+→ 一个 6.7k star、主打企业级数据权限的 ChatBI 产品，其行级权限是**一次可以被模型静默跳过的
+对话**。这是「权限边界必须是确定性代码」最直接的外部佐证，也是本 ADR 保留渲染期注入、
+只补管理面的理由。
+
+
+---
+
+**最后更新**：2026-09-02
