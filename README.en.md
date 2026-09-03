@@ -240,7 +240,9 @@ python scripts/eval_diff.py --phase p3       # diff latest two P3 baselines
   rather than blowing up when a user with that attribute finally runs a query. The test that
   matters most is `test_rlac_never_reaches_the_llm_prompt` — the model never sees the policy
   condition, so it cannot be talked into bypassing it. The registry and value-domain gate for
-  session attributes are [ADR-017](./DESIGN_DECISIONS.md#adr-017) (Proposed).
+  session attributes are [ADR-017](./DESIGN_DECISIONS.md#adr-017) (Proposed). **Stated plainly: this
+  path has zero real usage today** — no metric declares `row_policies` and no caller passes
+  `session_props`. Fully implemented and tested, never exercised by a real query.
 
 - **SQL validation gained a function-level blacklist.** "SELECT only" was a check on the
   **top-level statement type** and said nothing about what the SELECT calls —
@@ -432,7 +434,7 @@ chat-bi-agent/
 │
 ├── config/
 │   ├── local.yaml             # Runtime config (model names, retrieval top_k, PG timeout, ...)
-│   └── metrics.yaml           # Semantic-layer metric catalog (21 metrics + row_policies)
+│   └── metrics.yaml           # Semantic-layer metric catalog (21 metrics)
 ├── tests/                     # 847 tests, organized by p1/p2/p3/shared/data/viz/eval/schema
 ├── results/                   # Evaluation baseline JSONs + markdown reports
 ├── docker-compose.yml         # Postgres + Langfuse stack + App + Seed

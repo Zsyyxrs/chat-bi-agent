@@ -232,7 +232,9 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
   `test_rlac_never_reaches_the_llm_prompt`——**权限条件不出现在抽取 prompt 里**，模型不
   知道有权限过滤，也就无从被诱导绕过。session 属性的注册表与值域门禁见
   [ADR-017](./DESIGN_DECISIONS.md#adr-017)（Proposed；执行面已完整，缺的是「谁有权声明
-  哪些属性、取值合法域是什么」）。
+  哪些属性、取值合法域是什么」）。**如实标注：这条路径目前零实际使用**——21 个指标里
+  没有一个声明了 `row_policies`，也没有任何调用方传 `session_props`。实现完整、测试覆盖，
+  但从未在真实查询里跑过。
 
 - **SQL 校验补函数级黑名单**：原有「只有 SELECT」是**顶层语句类型**检查，管不到 SELECT
   里调了什么——`SELECT pg_read_file(...)` 顶层是 SELECT、表列检查也过。补 AST 级函数
@@ -422,7 +424,7 @@ chat-bi-agent/
 │
 ├── config/
 │   ├── local.yaml             # 运行时配置（模型名、检索 top_k、PG 超时等）
-│   └── metrics.yaml           # 语义层指标 catalog（21 指标 + row_policies）
+│   └── metrics.yaml           # 语义层指标 catalog（21 指标）
 ├── tests/                     # 847 测试，按 p1/p2/p3/shared/data/viz/eval/schema 分目录
 ├── results/                   # 评估 baseline JSON + markdown 报告
 ├── docker-compose.yml         # Postgres + Langfuse 全套 + App + Seed
