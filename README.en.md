@@ -211,6 +211,56 @@ python scripts/eval_diff.py --phase p3       # diff latest two P3 baselines
   defective gold" ends and "fitting gold to the agent" begins — are documented in
   [ADR-014](./DESIGN_DECISIONS.md#adr-014).
 
+### Recent work (2026-08-20 → 09-02)
+
+- **Metric catalog grew 6 → 21, and "calibration" became statically checkable.** The three silent
+  wrong answers found along the way are all the same shape — SQL valid, query runs, number wrong:
+  "current deposits" was computed as current + savings (**2×**); balance, a **stock** metric, was
+  summed across daily snapshots (27× the true month-end figure); holdings had the same bug. Metrics
+  now carry `semantic: stock | flow`, and point-in-time semantics support one-snapshot-per-period,
+  taking the latest snapshot in the window. Three static gates back this
+  (`scripts/check_metric_catalog.py`): column existence (previously only a real DB hit exposed a
+  typo), **dim↔filter symmetry** (a column you can GROUP BY must also be filterable), and joins
+  attached only where referenced. Also added `ORDER BY / LIMIT` (ranking questions no longer fall
+  back to NL2SQL), `op='IN'`, value retrieval (nothing had told the model that "Shanghai" lives in
+  a `province` column), and dual-path prefilter recall (whole-sentence embeddings get diluted by
+  time modifiers). See the ADR-013 updates.
+
+- **P3 drill-down candidate dimensions now come from the metric catalog** instead of a global
+  hardcoded allowlist — the allowlist knows nothing about whether a given metric can be split by a
+  given dimension, and the catalog already holds that answer.
+
+- **Row-level access control (RLAC)**: `row_policies` are declared on a metric and injected **at
+  render time** via `render_sql_from_spec(spec, catalog, session_props={"branch_id": "BR001"})`,
+  which is what "a branch sees only itself, HQ sees everything" actually requires — the previous
+  option was static modeling-time pruning, identical for everyone. Three deliberate departures from
+  the reference implementation (WrenAI): **fail-closed** (a declared policy with a missing session
+  property raises, never silently returns the full table), the policy condition sorts first in the
+  `WHERE` clause so a human can spot it, and policies are checked by the **static catalog gate**
+  rather than blowing up when a user with that attribute finally runs a query. The test that
+  matters most is `test_rlac_never_reaches_the_llm_prompt` — the model never sees the policy
+  condition, so it cannot be talked into bypassing it. The registry and value-domain gate for
+  session attributes are [ADR-017](./DESIGN_DECISIONS.md#adr-017) (Proposed).
+
+- **SQL validation gained a function-level blacklist.** "SELECT only" was a check on the
+  **top-level statement type** and said nothing about what the SELECT calls —
+  `SELECT pg_read_file(...)` passed both it and the table/column check. Coverage was then extended
+  from PG/DuckDB to MySQL/MSSQL/Oracle (`dialect` is a constructor argument, so those were
+  unguarded the moment it pointed elsewhere), plus a qualifier-prefix rule for Oracle's
+  `utl_http.request(...)`, which sqlglot parses as `Dot(Identifier, Anonymous)` and which
+  name-based matching structurally cannot catch. See the ADR-005 update.
+
+- **Observability: from "instrumented" to "instrumentation you can trust."** None of these four
+  raised an error or moved a score — the traces were there and the numbers came out, just wrong:
+  P3's parallel drills had always been disconnected traces (`ThreadPoolExecutor` does not propagate
+  contextvars, so each drill became its own root trace); P2's step metadata was overwritten every
+  round (no per-step span, so only the last step survived); adding breakdown keys to
+  `usage_details` made the server double-count `reasoning`/`cached` against their parents, doubling
+  token counts; and spans gained a `local_operation` dimension separating model time from local
+  time (total duration alone could not say whether to optimize the prompt or the SQL). All 20 bare
+  `@observe` decorators moved to `observe_local` / `observe_llm`, with a guard test that turns
+  "new path forgot to wire the gate" into a CI failure. See the ADR-003 update.
+
 ---
 
 ## 🏗 Architecture
@@ -356,6 +406,7 @@ chat-bi-agent/
 │   │   └── shared/            #   schema_linker · sql_executor
 │   ├── runners/               # P1/P2/P3 evaluation runners
 │   ├── llm/                   # qwen_client.py + langfuse_setup.py
+│   ├── obs/                   # span_kind.py (observe_local / observe_llm decorators)
 │   ├── viz/                   # chart_inference (rule-based) + plotly_renderer
 │   ├── eval/                  # precision / multi-step / rca evaluators
 │   ├── data/
@@ -374,10 +425,15 @@ chat-bi-agent/
 │   ├── eval_diff.py           # Baseline regression detector
 │   ├── verify_events.py       # Verify event propagation
 │   ├── rejudge_baseline.py    # Re-run LLM judge
+│   ├── check_metric_catalog.py     # metrics.yaml static gate (columns/symmetry/joins/RLAC)
+│   ├── sweep_prefilter_threshold.py # Re-sweep routing threshold (mandatory after an embedding model swap)
+│   ├── verify_ab.py           # A/B guard (commit/model treated as CRITICAL fields)
 │   └── calibrate_magnitudes.py
 │
-├── config/local.yaml          # Runtime config (model names, retrieval top_k, PG timeout, ...)
-├── tests/                     # 316+ tests, organized by p1/p2/p3/shared/data/viz/eval/schema
+├── config/
+│   ├── local.yaml             # Runtime config (model names, retrieval top_k, PG timeout, ...)
+│   └── metrics.yaml           # Semantic-layer metric catalog (21 metrics + row_policies)
+├── tests/                     # 847 tests, organized by p1/p2/p3/shared/data/viz/eval/schema
 ├── results/                   # Evaluation baseline JSONs + markdown reports
 ├── docker-compose.yml         # Postgres + Langfuse stack + App + Seed
 ├── Dockerfile                 # Streamlit image
@@ -394,14 +450,14 @@ chat-bi-agent/
 |---|---|---|
 | LLM (generation + judge) | currently `qwen3.7-max` (DashScope; ADR-001 was written for Qwen3.6-max-preview) | Single source, Chinese banking domain → ADR-001 |
 | Embeddings | text-embedding-v4 (DashScope, dim=1024) | For schema retrieval |
-| Observability | Langfuse v3 (self-hosted) | Full trace tree + LLM judge score writeback → ADR-003 |
+| Observability | Langfuse v3 (self-hosted) | Full trace tree + LLM judge score writeback; spans split `local_operation` from model time → ADR-003 |
 | Agent orchestration | In-house function chain + `@observe` | Fixed flow, no LangGraph → ADR-002 |
 | SQL parse/validate | sqlglot | AST rewriting + multi-dialect |
 | Chinese tokenization | jieba | Preprocessing for schema retrieval |
 | Database | PostgreSQL 16 | Isolated read-only user (chatbi_readonly) |
 | Web UI | Streamlit | Demo-oriented, ~3× dev speed → ADR-009 |
 | Visualization | Plotly | 6 chart types auto-inferred (rule-based) |
-| Testing | pytest (316+ tests) + ruff | CI on GitHub Actions |
+| Testing | pytest (847 tests) + ruff | CI on GitHub Actions |
 
 Full rationale and alternatives in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 
@@ -409,7 +465,7 @@ Full rationale and alternatives in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 
 ## 📖 Documentation
 
-- [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) — Tech-choice comparison, architecture evolution, 10 ADRs (Chinese)
+- [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) — Tech-choice comparison, architecture evolution, 17 ADRs (Chinese)
 - [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md) — Three-track methodology, question sets, rubrics, ground truth (Chinese)
 - [金融 data agent 架构设计](./docs/金融data%20agent架构设计.md) — Original business-domain design (Chinese)
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — Dev environment and contribution flow
@@ -428,7 +484,7 @@ ruff check src/ tests/ streamlit_app/ scripts/
 ruff format src/ tests/ streamlit_app/ scripts/
 ```
 
-Integration tests (`@pytest.mark.integration`, 46 of them) need a **running Postgres with the
+Integration tests (`@pytest.mark.integration`, 50 of them) need a **running Postgres with the
 full seed data**. The gate is an actual `SELECT 1` probe, **not the presence of `PG_HOST`** — that
 variable is always set in `.env`, so using it as the switch makes anyone without Docker hit a pile
 of connection errors instead of a clean skip.
@@ -438,7 +494,7 @@ of connection errors instead of a clean skip.
 | job | What it does |
 |---|---|
 | `test` | ruff + unit tests on a Python 3.11/3.12 matrix, coverage gate `--cov-fail-under=72` (actual 76) |
-| `integration` | Starts a `postgres:16-alpine` service → applies schema → `seed --rows 100000 --seed 42 --with-events` → runs the 46 integration tests |
+| `integration` | Starts a `postgres:16-alpine` service → applies schema → `seed --rows 100000 --seed 42 --with-events` → runs the 50 integration tests |
 | `audit` | `pip-audit --skip-editable` dependency vulnerability audit |
 
 `--seed 42` is a hard requirement: 43 gold-SQL row-count guards assert **exact row counts**
@@ -461,4 +517,4 @@ Questions or feedback welcome via email or Issue.
 
 ---
 
-**Last updated**: 2026-06-30
+**Last updated**: 2026-09-02

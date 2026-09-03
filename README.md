@@ -200,11 +200,56 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 
   结果 JSON 里 `result_match` 段是**结果集比对**诊断：它抓的是分数看不见的"语义不忠实"（丢约束、丢 Top-N、值域塞错——SQL 合法、表/过滤/聚合全对，但答的是另一个问题）。`mismatched_ids` 直接点名是哪几题。刻意不计入 `combined_score`，以免废掉历史 baseline 的可比性。
 
-  catalog 改动后请跑一遍全组合回归（18 metric × 全部 dim/filter 真打 PG），模板里的列名只有真正 execute 才会被校验：
+  catalog 改动后请跑一遍全组合回归（21 metric × 全部 dim/filter 真打 PG），模板里的列名只有真正 execute 才会被校验：
 
   ```bash
   pytest tests/p1/test_p1_agent_routing_integration.py -m integration  # 需 chatbi-pg up
   ```
+
+### 近期演进（2026-08-20 → 09-02）
+
+- **指标 catalog 扩容 6 → 21，并把「口径」变成可静态检查的东西**。扩容路上挖出的三个
+  静默错答都属同一类——SQL 合法、跑得出数、数是错的：①「活期存款」被算成「活期+储蓄」
+  （**2 倍**）；② 余额这类**存量**指标被跨日快照求和（月末真值的 27 倍）；③ holding 同样
+  的跨快照求和。因此给 metric 补 `semantic: stock | flow` 区分存量/流量，时点语义支持
+  「每周期一个快照」并取窗口内最新快照。配套三道静态门禁（`scripts/check_metric_catalog.py`）：
+  列名存在性（此前只有真打 DB 才暴露）、**dim↔filter 对称性**（能 GROUP BY 的列必须也能
+  WHERE）、以及全局 join 只挂被引用的表。另补 `ORDER BY / LIMIT`（排序题不必再退回
+  NL2SQL）、`op='IN'` 多值过滤、值检索（问题里的「上海」此前没人告诉模型它存在于
+  `province` 列）、以及 prefilter 双路召回（整句 embedding 会被时间修饰语稀释）。
+  详见 [ADR-013](./DESIGN_DECISIONS.md#adr-013) 的历次 Update。
+
+- **P3 下钻候选维度改为取自 metric catalog**，不再用全局硬编码白名单——白名单对
+  「这个指标能不能按这个维度拆」一无所知，catalog 里本来就有答案。
+
+- **行级权限 RLAC（`416debe`）**：`row_policies` 声明在 metric 上，
+  `render_sql_from_spec(spec, catalog, session_props={"branch_id": "BR001"})`
+  在**渲染期**注入——满足「分行只看本行、总行看全行」，而此前唯一手段是建模期静态裁剪
+  （一刀切、不能按人区分）。三条与参照实现（WrenAI）刻意不同的取舍：**fail-closed**
+  （声明了 `row_policies` 却没拿到所需 session 属性就抛错，绝不静默放行全表）、权限条件
+  排在 `WHERE` 最前便于肉眼核对、以及**静态化进 catalog 门禁**（写错不必等某个带该权限的
+  用户真的来查才炸）。最要紧的一条测试是
+  `test_rlac_never_reaches_the_llm_prompt`——**权限条件不出现在抽取 prompt 里**，模型不
+  知道有权限过滤，也就无从被诱导绕过。session 属性的注册表与值域门禁见
+  [ADR-017](./DESIGN_DECISIONS.md#adr-017)（Proposed；执行面已完整，缺的是「谁有权声明
+  哪些属性、取值合法域是什么」）。
+
+- **SQL 校验补函数级黑名单**：原有「只有 SELECT」是**顶层语句类型**检查，管不到 SELECT
+  里调了什么——`SELECT pg_read_file(...)` 顶层是 SELECT、表列检查也过。补 AST 级函数
+  黑名单，并把覆盖面从 PG/DuckDB 扩到 MySQL/MSSQL/Oracle（`dialect` 是构造参数，指向别的
+  库时那几类原本是裸奔），另加一条按包名前缀的规则拦 Oracle 的 `utl_http.request(...)`
+  ——它在 sqlglot 里是 `Dot(Identifier, Anonymous)`，按函数名匹配结构上必然漏。
+  见 [ADR-005 Update](./DESIGN_DECISIONS.md#adr-005)。
+
+- **可观测性：从「有埋点」到「埋点可信」**。四个洞都不报错、也不影响分数——trace 照样有、
+  数字照样出，只是错的：① P3 并行 drill 的 trace 一直是断的（`ThreadPoolExecutor` 不传
+  contextvars，每个 drill 各自成了 root trace）；② P2 的 step 元数据被逐轮覆写（缺
+  per-step span，只有最后一步留得下来）；③ `usage_details` 加细分键会让服务端把
+  `reasoning`/`cached` 与父项**重复求和**，token 凭空翻倍；④ span 新增
+  `local_operation` 维度区分模型耗时与本地耗时（此前看总耗时分不出该优化 prompt 还是
+  该优化 SQL），20 处裸 `@observe` 统一迁到 `observe_local` / `observe_llm`，并加守门
+  测试让「新增路径忘了接闸」成为 CI 失败。见
+  [ADR-003 Update](./DESIGN_DECISIONS.md#adr-003)。
 
 ---
 
@@ -251,6 +296,7 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 - **编排是函数链 + Langfuse `@observe` 装饰器**，**没用 LangGraph**（流程固定不需要图）
 - **LLM 单源**（Qwen 既做生成也做评分），**没有独立 judge 模型**
 - **P3 ground truth 用 YAML 事件库 + 传播引擎埋雷**（可控、可重放、可量化）
+- **权限两层**：数据库只读用户隔离（连接层）+ 渲染期注入的行级权限 RLAC（语义层，fail-closed，LLM 看不到）
 
 完整设计取舍见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。
 
@@ -350,6 +396,7 @@ chat-bi-agent/
 │   │   └── shared/            #   schema_linker · sql_executor
 │   ├── runners/               # P1/P2/P3 evaluation runners
 │   ├── llm/                   # qwen_client.py + langfuse_setup.py
+│   ├── obs/                   # span_kind.py（observe_local / observe_llm 装饰器）
 │   ├── viz/                   # chart_inference (rule-based) + plotly_renderer
 │   ├── eval/                  # precision / multi-step / rca evaluators
 │   ├── data/
@@ -368,10 +415,15 @@ chat-bi-agent/
 │   ├── eval_diff.py           # baseline 回归检测
 │   ├── verify_events.py       # 埋雷事件传播验证
 │   ├── rejudge_baseline.py    # 重新跑 LLM judge
+│   ├── check_metric_catalog.py     # metrics.yaml 静态门禁（列名/对称性/join/RLAC）
+│   ├── sweep_prefilter_threshold.py # 指标路由阈值重扫（换 embedding 模型后必跑）
+│   ├── verify_ab.py           # A/B 两轮的守门（commit/model 当 CRITICAL 字段）
 │   └── calibrate_magnitudes.py
 │
-├── config/local.yaml          # 运行时配置（模型名、检索 top_k、PG 超时等）
-├── tests/                     # 316+ 测试，按 p1/p2/p3/shared/data/viz/eval/schema 分目录
+├── config/
+│   ├── local.yaml             # 运行时配置（模型名、检索 top_k、PG 超时等）
+│   └── metrics.yaml           # 语义层指标 catalog（21 指标 + row_policies）
+├── tests/                     # 847 测试，按 p1/p2/p3/shared/data/viz/eval/schema 分目录
 ├── results/                   # 评估 baseline JSON + markdown 报告
 ├── docker-compose.yml         # Postgres + Langfuse 全套 + App + Seed
 ├── Dockerfile                 # Streamlit 镜像
@@ -388,14 +440,14 @@ chat-bi-agent/
 |---|---|---|
 | LLM（生成 + 评分） | 当前 `qwen3.7-max`（DashScope；ADR-001 立项时为 Qwen3.6-max-preview） | 单源，中文银行场景 → ADR-001 |
 | 嵌入 | text-embedding-v4（DashScope，dim=1024） | schema 检索用 |
-| 可观测性 | Langfuse v3（self-hosted） | 全链路 trace + LLM judge 评分回流 → ADR-003 |
+| 可观测性 | Langfuse v3（self-hosted） | 全链路 trace + LLM judge 评分回流；span 分 `local_operation` 与模型侧 → ADR-003 |
 | Agent 编排 | 自研函数链 + `@observe` 装饰器 | 流程固定，未用 LangGraph → ADR-002 |
 | SQL 解析/校验 | sqlglot | AST 改写 + 多方言 |
 | 中文分词 | jieba | schema 检索预处理 |
-| 数据库 | PostgreSQL 16 | 只读用户隔离（chatbi_readonly） |
+| 数据库 | PostgreSQL 16 | 只读用户隔离（chatbi_readonly）+ 渲染期行级权限 RLAC → ADR-010 / ADR-017 |
 | Web UI | Streamlit | Demo 取向，3 倍开发速度 → ADR-009 |
 | 可视化 | Plotly | 6 种图表自动推断（rule-based） |
-| 测试 | pytest（316+ 项） + ruff | CI on GitHub Actions |
+| 测试 | pytest（847 项） + ruff | CI on GitHub Actions |
 
 完整决策理由与替代方案对比见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。
 
@@ -403,7 +455,7 @@ chat-bi-agent/
 
 ## 📖 文档导航
 
-- [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) —— 技术选型对比 + 架构演进史 + 10 条 ADR
+- [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) —— 技术选型对比 + 架构演进史 + 17 条 ADR
 - [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md) —— 三路径评估方法、问题集、rubric、ground truth
 - [金融 data agent 架构设计](./docs/金融data%20agent架构设计.md) —— 业务背景与原始设计稿
 - [CONTRIBUTING.md](./CONTRIBUTING.md) —— 开发环境与贡献流程
@@ -422,7 +474,7 @@ ruff check src/ tests/ streamlit_app/ scripts/
 ruff format src/ tests/ streamlit_app/ scripts/
 ```
 
-集成测试（`@pytest.mark.integration`，46 个）需要**跑着的 Postgres + 完整种子数据**。
+集成测试（`@pytest.mark.integration`，50 个）需要**跑着的 Postgres + 完整种子数据**。
 判断依据是真打一次 `SELECT 1`，**不是看 `PG_HOST` 有没有值**——`.env` 里它恒有值，
 拿它当开关会让没起 docker 的人撞一堆连接错误而不是跳过。
 
@@ -431,7 +483,7 @@ ruff format src/ tests/ streamlit_app/ scripts/
 | job | 内容 |
 |---|---|
 | `test` | ruff + 单元测试，Python 3.11/3.12 矩阵，覆盖率门槛 `--cov-fail-under=72`（实测 76） |
-| `integration` | 起 `postgres:16-alpine` service → 建表 → `seed --rows 100000 --seed 42 --with-events` → 跑 46 个集成测试 |
+| `integration` | 起 `postgres:16-alpine` service → 建表 → `seed --rows 100000 --seed 42 --with-events` → 跑 50 个集成测试 |
 | `audit` | `pip-audit --skip-editable`，依赖漏洞审计 |
 
 `--seed 42` 是硬要求：43 个 gold SQL 行数守门断言的是**具体行数**（如 674 行），
@@ -453,4 +505,4 @@ MIT License · Shangyi Zhu · zhusayi1994@gmail.com
 
 ---
 
-**最后更新**：2026-07-06
+**最后更新**：2026-09-02

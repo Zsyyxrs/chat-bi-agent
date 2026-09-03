@@ -226,6 +226,50 @@ Langfuse v3，全套 self-hosted，随 `docker-compose.yml` 一起起。栈：`l
 - ⚠️ 6 个服务的栈很重，本地跑内存占 ~2GB。缓解：本地开发时可以 `docker compose up -d postgres` 单起 Postgres，agent 会自动 fallback 到无 tracing 模式
 - ⚠️ 首次启动需要在 UI 里手动创建 API Key 回填 .env（README 已注明）
 
+**Update 2026-09-02：trace 从「有埋点」到「埋点可信」——四个各自独立的洞**
+
+上面写的「trace tree 精确到 span」在两条路径上其实不成立，且都不报错。集中修一轮：
+
+1. **P3 并行 drill 的 trace 是断的**（`82e0708`）。Langfuse v3 的上下文靠
+   contextvars（OTel context）传，`ThreadPoolExecutor` 默认不传给 worker 线程
+   ——每个 drill 各自成了 root trace，P3 的树从来没连上过。改为每个任务各拷一份
+   `Context`（共用一份会在两线程同时进入时抛 `cannot enter context: already entered`，
+   而真实 drill 是 30–60s 的 LLM 往返、必然重叠）。测试用 `Barrier` 强制并发重叠，
+   断言底层 contextvar 继承而非 `trace_id`——测试环境未必配 key，两边都是 `None`
+   会让断言空过。
+2. **P2 的 step 元数据被逐轮覆写**（`30caa22`）。没有 per-step span 时，
+   `update_current_span` 每轮都在改写 `p2_analysis_run` 自身的 metadata，只有最后
+   一步留得下来——加了元数据但不生效。抽出 `_run_step` 挂 `@observe(name="p2_step")`，
+   与 P3 早就有的 `_execute_single_drill` 对齐。
+3. **`usage_details` 补 cache / reasoning，并显式给 `total`**（`51ce65b`）。
+   实测本地 Langfuse v3：服务端把 `usage_details` 里所有非 `total` 键**求和**当作
+   total。而 `reasoning_tokens` 是 completion 的子集、`cached_tokens` 是 prompt 的
+   子集，直接加细分键会让 353 变成 692——**token 凭空翻倍且不报错**。改用嵌套
+   `prompt_tokens_details` 则不双计，但细分数据被服务端静默丢弃。最终取显式写
+   `total` 压住服务端求和。
+4. **span 增加 `local_operation` 维度**（`5b97b60`，外部对照：SQLBot `chat_log`
+   的同名布尔量）。`sql_generation` 与 `sql_execution` 在 trace 里并排躺着，看总耗时
+   分不出该优化 prompt 还是该优化 SQL。判据取严：`local_operation=True` ⟺ 该 span
+   耗时里不含任何模型推理（chat 与 embedding 都算），据此 `schema_linking` 归 LLM 侧
+   （它内部调 `qwen_client.embed`），只有 `sql_validation` / `sql_execution` 是 local。
+   20 处裸 `@observe` 全部迁到 `observe_local` / `observe_llm`（`obs/span_kind.py`），
+   并加守门测试：`src/` 下再出现裸 `@observe(` 就 CI 失败——与 catalog 静态门禁同一
+   思路，「新增路径忘了接闸」必须是 CI 失败而不是线上才发现。
+
+第 4 项踩到一个会**静默毁掉第 3 项成果**的坑，值得单记：Langfuse 3.15 的
+`update_current_span` 会构造 `LangfuseSpan(as_type="span")`，而
+`LangfuseObservationWrapper.__init__` 无条件执行
+`otel_span.set_attribute(OBSERVATION_TYPE, as_type)` → 在 generation/embedding
+observation 里调它会把类型**降级成 span**，`qwen_chat` / `qwen_embed` 的 token 与
+cost 归因当场失效（`update_current_generation` 同理会把 embedding 改写成 generation）。
+所以打标直接写 OTel 属性，不碰 observation type。降级在测试里实测复现过
+（`assert 'span' == 'embedding'`），两条防降级断言留在 `tests/shared/test_span_kind.py`。
+
+**共同教训**：这四条没有一条会抛异常、也没有一条会让分数变化——trace 照样有、
+数字照样出，只是错的。可观测性本身缺乏可观测性，唯一的办法是给埋点写断言
+（并发重叠、per-step 计数、token 不双计、observation type 不降级），而不是靠肉眼看 UI。
+
+
 ---
 
 <a id="adr-004"></a>
@@ -320,6 +364,30 @@ for kw in forbidden:
 其经典 scene 路径连这层字符串检查都没有，prompt 里也未约束 SELECT-only。
 即：**默认配置下 LLM 生成的 DELETE/DROP 会落到库上，唯一防线是数据库账号权限**
 （这也从反面支持 ADR-010 的双用户隔离）。
+
+**Update 2026-09-01 / 09-02：函数级黑名单，以及一条按包名前缀的规则**
+
+原决策的第 2 步「只有 SELECT」是**顶层语句类型**检查，管不到 SELECT 里调了什么
+（`13d9359`）。`SELECT pg_read_file('/etc/passwd')` 顶层是 SELECT，表/列检查也过
+——上面 DB-GPT 那段拿来当反面样本的洞，本项目自己同样敞着。补 AST 级函数黑名单：
+遍历 `exp.Anonymous` / `exp.Func` 节点比对函数名。
+
+随后（`a512a52`，对照 SQLBot v1.10.1 的分库危险函数表）发现黑名单只覆盖 PG/DuckDB
+——而 `dialect` 是构造参数，**将来指向别的库时 MySQL/MSSQL/Oracle 那几类就是裸奔**。
+补三类：MySQL `load_file`；MSSQL `xp_cmdshell` / `sp_executesql` / `openrowset` /
+`opendatasource` / `openquery`；PG 原先漏掉的文件面与进程面（`pg_file_read` /
+`pg_ls_logdir` / `pg_terminate_backend` 等）。另收侦察类 `version` /
+`current_user` / `current_database`——对指标口径驱动的 BI 查询零业务价值，只泄露
+库版本、账号与网络面。
+
+**新增一条按包名前缀的规则 `_FORBIDDEN_QUALIFIERS`**，因为按函数名匹配对 Oracle
+结构上失效：`utl_http.request(...)` 在 sqlglot 里是 `Dot(Identifier, Anonymous)`，
+`Anonymous` 只带方法名 `request`。而 `request` / `sleep` 这类通用词进黑名单又会大面积
+误伤业务列名，只能拦包名。
+
+**有意不收 `user` / `session_user`**：实测二者裸写会被 sqlglot 解析成 `Column` 而非
+`Func`，放进黑名单只会误伤名为 `user` 的业务列。已加测试锁住这条「不过度拦截」——
+黑名单的失败模式是双向的，只测「拦住了坏的」会让它慢慢变成一个误伤机器。
 
 ---
 
@@ -589,9 +657,9 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 |---|---|---|
 | [ADR-001](#adr-001) | LLM 选 Qwen3.6-max-preview | Accepted |
 | [ADR-002](#adr-002) | 自研函数链编排 | Accepted |
-| [ADR-003](#adr-003) | Langfuse v3 self-hosted | Accepted |
+| [ADR-003](#adr-003) | Langfuse v3 self-hosted | Accepted（2026-09-02 埋点可信度四修，见 Update） |
 | [ADR-004](#adr-004) | LLM-as-judge 评分 | Accepted |
-| [ADR-005](#adr-005) | sqlglot AST 校验 | Accepted |
+| [ADR-005](#adr-005) | sqlglot AST 校验 | Accepted（2026-09-01/02 补函数级黑名单，见 Update） |
 | [ADR-006](#adr-006) | Reflector 单次重试 | Accepted |
 | [ADR-007](#adr-007) | YAML 事件库埋雷 | Accepted |
 | [ADR-008](#adr-008) | Embedding + jieba schema 检索 | Accepted |
@@ -605,7 +673,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-016](#adr-016) | P2 rubric LLM judge | Accepted |
 | [ADR-017](#adr-017) | RLAC session 属性注册表与值域门禁 | Proposed |
 
-新增 ADR 命名 `ADR-013`、`ADR-014` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
+新增 ADR 从 `ADR-018` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
 ---
 
