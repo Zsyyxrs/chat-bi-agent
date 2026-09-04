@@ -671,7 +671,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-014](#adr-014) | 评测集 gold 的可信度守门 | Accepted |
 | [ADR-015](#adr-015) | P2 评分器中文分词修复 | Accepted（三个饱和维度待决） |
 | [ADR-016](#adr-016) | P2 rubric LLM judge | Accepted |
-| [ADR-017](#adr-017) | RLAC session 属性注册表与值域门禁 | Proposed |
+| [ADR-017](#adr-017) | RLAC session 属性注册表与值域门禁 | Proposed（2026-09-04 执行面首次真实调用 + 拒绝不再回退，见 Update；注册表本体仍未做） |
 
 新增 ADR 从 `ADR-018` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
@@ -2438,7 +2438,53 @@ fail-open 出口**，下游无任何告警。另外三处缺口：改写后的 S
 对话**。这是「权限边界必须是确定性代码」最直接的外部佐证，也是本 ADR 保留渲染期注入、
 只补管理面的理由。
 
+### Update 2026-09-04：RLAC 第一次被真实调用，顺带堵掉「拒绝后走兜底路径」的口子
+
+上面 Context 里那两行「声明 row_policies 的指标数 0 / 传 session_props 的调用方 0」
+不再成立。这次做的是**接线**，不是本 ADR 提的注册表（那条仍是 Proposed）：
+
+- `config/metrics.yaml`：`campaign_response_count` / `campaign_conversion_amount`
+  两个指标声明 `row_policies`。条件写成
+  `(@branch_scope = 'ALL' OR fcr.branch_id = @branch_id)`——总行用 `branch_scope=ALL`
+  **显式**越界，而不是靠「不传属性」绕过（不传是拒绝，不是放行）。
+- 选这两个指标做首发，是因为它们不在 P1 评测集的命中范围内。fail-closed 是全局
+  开关：挂在 `deposit_balance` / `customer_count` 上，任何没传身份的批处理都会
+  静默退回 NL2SQL，把已发布的 P1 baseline 一起改掉。
+- 穿参链路补齐：`MetricRouter.try_route(question, session_props=...)` →
+  `_resolve_to_spec_and_sql` → `render_sql_from_spec`；`P1NL2SQLAgent.run` 加
+  `session_props` 形参；Streamlit P1 tab 加「当前登录身份」下拉；
+  `run_p1_eval` / `triage_example_pool` 以显式的总行审计身份跑批。
+- `_classify_metric_error` 之前把 fail-closed 拒绝归进兜底桶 `unknown_dim`
+  ——「维度不认识」和「权限不足」混成一个数，看板上永远看不见权限拒绝。
+  新增 `rlac_denied`，并进 `run_p1_eval` 的 `fail_reason_breakdown`。
+
+**首次真实调用的观测**（真 LLM + 真 PG，问「春节储蓄活动一共触达了多少人次？」）：
+
+| 身份 | route | 结果 |
+|---|---|---|
+| 总行（`branch_scope=ALL`） | `metric` | 31992 |
+| 杭州分行（`BR_CITY_0000`） | `metric` | 808 |
+| 南京分行（`BR_CITY_0002`） | `metric` | 754 |
+| 没有身份 | `metric_denied` | 拒答 |
+
+三个数与直接打库核对一致（`SELECT COUNT(*) ... WHERE campaign_name='春节储蓄活动'`
+分别为 31992 / 808 / 754）。
+
+**顺带堵掉的口子**：上面 Consequences 最后一条 ⚠️ 写的「LLM 生成 SQL 兜底路径上
+RLAC 不生效」，第一次跑就以最难看的形式兑现了——无身份时语义层 fail-closed 拒绝
+渲染，`P1NL2SQLAgent` 却把问题交给 NL2SQL 重答一遍，**返回 13618**。这个数是裸查
+出来的：拒绝之后换一条没有权限管控的路把同一个问题答了，等于没有拒绝。
+
+按那条 ⚠️ 里给的两个选项取第一个（**该路径禁用于带 row_policies 的指标域**）：
+`fail_reason == "rlac_denied"` 时 `run()` 直接返回 `route="metric_denied"`，
+不进 Reflect Loop、不调 SchemaLinker、不出 SQL。其余失败原因（`unknown_dim`、
+`no_metric` 等）照旧回退——只关权限这一条路，不牵连降级能力。
+
+留给注册表（本 ADR 主体）的仍然是：属性名的 CI 门禁、取值值域校验、赋值链路。
+现在多了一条现实约束——`branch_scope` 这类「作用域开关」属性一旦进注册表，
+它的值域必须和「谁有权拿到 ALL」绑在一起，否则等于把越界权交给调用方自觉。
+
 
 ---
 
-**最后更新**：2026-09-02
+**最后更新**：2026-09-04

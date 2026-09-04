@@ -232,9 +232,20 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
   `test_rlac_never_reaches_the_llm_prompt`——**权限条件不出现在抽取 prompt 里**，模型不
   知道有权限过滤，也就无从被诱导绕过。session 属性的注册表与值域门禁见
   [ADR-017](./DESIGN_DECISIONS.md#adr-017)（Proposed；执行面已完整，缺的是「谁有权声明
-  哪些属性、取值合法域是什么」）。**如实标注：这条路径目前零实际使用**——21 个指标里
-  没有一个声明了 `row_policies`，也没有任何调用方传 `session_props`。实现完整、测试覆盖，
-  但从未在真实查询里跑过。
+  哪些属性、取值合法域是什么」）。
+
+- **RLAC 接线并第一次真实调用（2026-09-04）**。此前这条路径**零实际使用**——没有指标
+  声明 `row_policies`、没有调用方传 `session_props`，实现完整、测试覆盖，但从未在真实
+  查询里跑过。现在两个营销指标声明了权限规则，`session_props` 从 Streamlit 的「当前登录
+  身份」一路穿到渲染期。问「春节储蓄活动一共触达了多少人次？」：总行 **31992**、杭州分行
+  **808**、南京分行 **754**，与直接打库核对一致；没有身份则拒答。选营销指标做首发是因为
+  fail-closed 是全局开关——挂在 `deposit_balance` 上会让任何没传身份的批处理静默退回
+  NL2SQL，把已发布的 P1 baseline 一起改掉。
+  第一次跑就兑现了 ADR-017 里写着的那条已知缺口：语义层拒绝渲染后，agent 把问题交给
+  NL2SQL 重答，**返回 13618**——那条路径上没有行级权限，拒绝之后换条没管控的路把数给出来
+  等于没拒绝。现在 `rlac_denied` 直接终止查询（`route="metric_denied"`），其余失败原因照旧
+  回退。另外 `_classify_metric_error` 此前把权限拒绝归进兜底桶 `unknown_dim`，
+  看板上永远看不见它，已单独成桶。
 
 - **SQL 校验补函数级黑名单**：原有「只有 SELECT」是**顶层语句类型**检查，管不到 SELECT
   里调了什么——`SELECT pg_read_file(...)` 顶层是 SELECT、表列检查也过。补 AST 级函数

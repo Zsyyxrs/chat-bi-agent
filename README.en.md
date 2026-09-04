@@ -240,9 +240,24 @@ python scripts/eval_diff.py --phase p3       # diff latest two P3 baselines
   rather than blowing up when a user with that attribute finally runs a query. The test that
   matters most is `test_rlac_never_reaches_the_llm_prompt` — the model never sees the policy
   condition, so it cannot be talked into bypassing it. The registry and value-domain gate for
-  session attributes are [ADR-017](./DESIGN_DECISIONS.md#adr-017) (Proposed). **Stated plainly: this
-  path has zero real usage today** — no metric declares `row_policies` and no caller passes
-  `session_props`. Fully implemented and tested, never exercised by a real query.
+  session attributes are [ADR-017](./DESIGN_DECISIONS.md#adr-017) (Proposed).
+
+- **RLAC wired up and exercised for the first time (2026-09-04).** Until then this path had
+  **zero real usage** — no metric declared `row_policies`, no caller passed `session_props`:
+  fully implemented and tested, never run against a real query. Two campaign metrics now declare
+  policies, and `session_props` flows from the Streamlit "current identity" selector all the way
+  to render time. Asking "how many people did the Spring Festival savings campaign reach?" returns
+  **31992** for HQ, **808** for the Hangzhou branch and **754** for Nanjing — all three verified
+  against the database directly — and refuses outright with no identity. Campaign metrics went
+  first because fail-closed is a global switch: putting a policy on `deposit_balance` would make
+  every batch job that passes no identity fall back to NL2SQL silently, moving the published P1
+  baseline with it. The very first run also cashed in the known gap recorded in ADR-017: after the
+  semantic layer refused to render, the agent handed the question to NL2SQL and **answered 13618**
+  — that path has no row-level access control, so refusing and then answering via an unguarded
+  route is not refusing. `rlac_denied` now terminates the query (`route="metric_denied"`) while
+  every other failure reason still falls back. `_classify_metric_error` had also been bucketing
+  permission denials into the catch-all `unknown_dim`, hiding them from every dashboard; they now
+  have their own bucket.
 
 - **SQL validation gained a function-level blacklist.** "SELECT only" was a check on the
   **top-level statement type** and said nothing about what the SELECT calls —
