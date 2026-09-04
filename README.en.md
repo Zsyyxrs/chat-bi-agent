@@ -349,9 +349,9 @@ Full design trade-offs in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 git clone https://github.com/Zsyyxrs/chat-bi-agent.git
 cd chat-bi-agent
 
-# 1. Configure (two files — missing either one breaks startup)
+# 1. Configure
 cp .env.example .env
-cp config/local.example.yaml config/local.yaml
+cp config/local.example.yaml config/local.yaml   # copy it to reproduce the README scores
 # Edit .env and fill in DASHSCOPE_API_KEY (required)
 
 # 2. Bring up the full stack (Postgres + Langfuse stack + Streamlit app)

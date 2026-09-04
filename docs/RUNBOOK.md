@@ -25,11 +25,11 @@ README 的 Quick Start 给的是顺利路径（五条命令）。这份文档补
 
 ## 1. 从零到跑通
 
-### 1.1 配置文件（两个，缺一个就起不来）
+### 1.1 配置文件
 
 ```bash
 cp .env.example .env
-cp config/local.example.yaml config/local.yaml   # ← README 没写这步，但必须做
+cp config/local.example.yaml config/local.yaml   # 强烈建议，理由见下
 ```
 
 编辑 `.env`，**这一步只需要填一个值**：
@@ -41,15 +41,13 @@ DASHSCOPE_API_KEY=sk-你的真实key
 其余（PG 账号密码、端口）`.env.example` 里已是可用默认值，本地跑不用改。
 `LANGFUSE_PUBLIC_KEY` / `SECRET_KEY` 先留占位符，第 1.4 步再回填。
 
-> **为什么 `config/local.yaml` 必须先建**：它被 `.gitignore` 的 `config/local.yaml` 一条排除，全新 clone 没有这个文件，
-> 而 `docker-compose.yml` 的 `app` 和 `seed` 服务都 bind-mount 了它。Docker 遇到不存在的
-> bind 源会在宿主机**建一个同名目录**，容器里 `/app/config/local.yaml` 于是是个目录，
-> `config.py` 的 `path.exists()` 判为 True、`path.open()` 直接抛
-> `IsADirectoryError: [Errno 21] Is a directory: '/app/config/local.yaml'`——
-> 容器 import 期就崩，日志里只有这一行。
+> **为什么建议建 `config/local.yaml`**：它被 `.gitignore` 排除，全新 clone 没有。
+> 缺了不会报错——`config.py` 会静默落到代码里的 `_DEFAULTS`，而 `_DEFAULTS` 的
+> `chat_model` 与 `local.example.yaml` 里那个**不是同一个模型**。
+> 后果是跑得起来但分数对不上 README，且全程没有任何提示
+> （`local.example.yaml` 自己就写着「换模型分数会变，而且不会有任何报错」）。
 >
-> 同理 `data/example_pool_prod.jsonl`（被 `.gitignore` 的 `data/example_pool*.jsonl` 排除）也被 `app` 挂载。它是 few-shot 池，
-> 全新 clone 同样没有。见 §3-F 的处理方式。
+> 想复现 README 的评估成绩，就照抄 `local.example.yaml`；只是想点着玩，缺了也无妨。
 
 ### 1.2 起全栈
 
@@ -177,14 +175,21 @@ Streamlit P1 tab → 点示例问题「杭州分行（BR_CITY_0000）在 2026 �
 
 ### A. `IsADirectoryError: Is a directory: '/app/config/local.yaml'`
 
-**症状**：`chatbi-app` 反复重启，`docker compose logs app` 只有这一行。
-**原因**：漏了 `cp config/local.example.yaml config/local.yaml`，Docker 把缺失的 bind 源建成了目录。
-**处置**：
+**已根治**（2026-09-04）：compose 现在挂的是 `./config` 和 `./data` 两个**目录**，
+不再挂单文件。目录在仓库里必然存在，Docker 不会再凭空造出同名目录。
+
+只有 2026-09-04 之前的 checkout 会撞上这条：那时挂的是被 gitignore 掉的单文件，
+Docker 对不存在的 bind 源**不报错**，而是在宿主机建一个同名目录，
+于是容器里 `/app/config/local.yaml` 是目录，`config.py` 的 `path.exists()` 判为 True、
+`path.open()` 抛 `IsADirectoryError`，import 期就崩，日志里只有这一行。
+
+**如果宿主机上残留了 Docker 建出来的空目录**：
 
 ```bash
 docker compose down
-rmdir config/local.yaml                          # 删掉 Docker 建的空目录
-cp config/local.example.yaml config/local.yaml   # 建成真文件
+rmdir config/local.yaml data/example_pool_prod.jsonl 2>/dev/null
+git pull                                          # 取到目录挂载的版本
+cp config/local.example.yaml config/local.yaml
 docker compose up -d
 ```
 
@@ -234,13 +239,13 @@ docker exec chatbi-app env | grep LANGFUSE_
 
 ### F. P1 结果正常但 few-shot 从不生效 / caption 里 `pool=0`
 
-**原因**：`data/example_pool_prod.jsonl` 被 `.gitignore` 排除，全新 clone 没有，
-Docker 又把它建成了目录（同 §3-A）。
-**处置**：这个池子是可选增强项，不影响正确性。要么忽略，要么生成它：
+**原因**：`data/example_pool_prod.jsonl` 被 `.gitignore` 排除，全新 clone 没有。
+**处置**：这个池子是可选增强项，缺了只是不做 few-shot 检索，不影响正确性
+（`_build_retriever_if_available()` 返回 None，P1 行为等价 few-shot off）。
+想要它就生成一份：
 
 ```bash
-rmdir data/example_pool_prod.jsonl 2>/dev/null   # 如果 Docker 建成了目录
-make bootstrap-pool                              # 需要 .env 里的 key 已配好
+make bootstrap-pool     # 需要 .env 里的 key 已配好；默认 --source both
 ```
 
 ### G. `Agent 执行失败：... DashScope ...` / 401 / 限流

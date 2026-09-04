@@ -332,9 +332,9 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 git clone https://github.com/Zsyyxrs/chat-bi-agent.git
 cd chat-bi-agent
 
-# 1. 配置（两个文件，缺一个起不来）
+# 1. 配置
 cp .env.example .env
-cp config/local.example.yaml config/local.yaml
+cp config/local.example.yaml config/local.yaml   # 想复现 README 的评估成绩就照抄它
 # 编辑 .env，填入 DASHSCOPE_API_KEY（必填）
 
 # 2. 起全栈（Postgres + Langfuse 全套 + Streamlit App）

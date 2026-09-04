@@ -33,7 +33,10 @@ def _repo_root() -> Path:
 
 def _load() -> dict[str, dict[str, Any]]:
     path = _repo_root() / "config" / "local.yaml"
-    if not path.exists():
+    # is_file 而非 exists：路径是目录时 exists() 为 True，接着 open() 抛
+    # IsADirectoryError。Docker 对缺失的 bind 源正会建出这种目录（见 compose
+    # 里 app/seed 的 volumes 注释），此时应当视同「没有本地覆盖」而非崩溃。
+    if not path.is_file():
         return {section: dict(values) for section, values in _DEFAULTS.items()}
     with path.open("r", encoding="utf-8") as f:
         loaded = yaml.safe_load(f) or {}

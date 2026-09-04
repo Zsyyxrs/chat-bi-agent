@@ -68,7 +68,9 @@ def _session_props_for(label: str) -> dict[str, object]:
 
 def _build_retriever_if_available() -> ExampleRetriever | None:
     """池子文件存在且非空才挂 retriever；否则完全跳过（不影响 P1 原有行为）。"""
-    if not _PROD_POOL_PATH.exists():
+    # is_file 而非 exists：目录也满足 exists()，随后 ExamplePool.load 会抛
+    # IsADirectoryError，把「少一个增强项」升级成「P1 整个不可用」。
+    if not _PROD_POOL_PATH.is_file():
         return None
     pool = ExamplePool.load(_PROD_POOL_PATH)
     if len(pool) == 0:

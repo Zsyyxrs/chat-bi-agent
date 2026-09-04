@@ -211,13 +211,21 @@ services:
       # .env 里的 LANGFUSE_HOST=http://localhost:3001 是给宿主机脚本用的；
       # 容器里 localhost 指自己，必须走 compose 网络内的 service name。
       LANGFUSE_HOST: http://langfuse:3000
-    # 挂载生产 few-shot 池：主机 bootstrap/nightly 脚本会追加，
-    # 容器读取时能拿到最新版本；不挂的话 P1 few-shot 检索静默失效。
-    # 挂载 config/local.yaml：镜像里没这个文件（.dockerignore 已排除），
-    # 不挂的话 config.py 会走 _DEFAULTS 的 chat_model，与本地行为不一致。
+    # 挂 data/：里面的 example_pool_prod.jsonl 是生产 few-shot 池，主机
+    # bootstrap/nightly 脚本会追加，容器读取时能拿到最新版本；不挂则 P1
+    # few-shot 检索静默失效。
+    # 挂 config/：local.yaml 不在镜像里（.dockerignore 已排除），不挂的话
+    # config.py 会走 _DEFAULTS 的 chat_model，与本地行为不一致。
+    #
+    # 挂的是**目录**不是单文件，这一点是刻意的：两个文件都被 .gitignore 排除，
+    # 全新 clone 没有它们，而 Docker 对不存在的 bind 源不报错——它在宿主机建
+    # 一个同名目录，容器里于是读到目录而非文件，config.py 直接抛
+    # IsADirectoryError，import 期就崩。目录在仓库里必然存在，不会被凭空造出来；
+    # 文件缺失时退化成「文件不存在」，两边都能优雅降级。
+    # 由 tests/deploy/test_bind_mount_contract.py 守。
     volumes:
-      - ./data/example_pool_prod.jsonl:/app/data/example_pool_prod.jsonl:ro
-      - ./config/local.yaml:/app/config/local.yaml:ro
+      - ./data:/app/data:ro
+      - ./config:/app/config:ro
     ports:
       - "8501:8501"
 
@@ -237,10 +245,10 @@ services:
     environment:
       PG_HOST: postgres
       PG_PORT: 5432
-    # 挂载 config/local.yaml：与 app 服务同理，
+    # 挂 config/：与 app 服务同理（含挂目录而非单文件的理由），
     # 避免走 _DEFAULTS 导致 embed_model 与本地不一致。
     volumes:
-      - ./config/local.yaml:/app/config/local.yaml:ro
+      - ./config:/app/config:ro
     command: >
       python -m chat_bi_agent.data.seed
       --host postgres --port 5432 --truncate --with-events
