@@ -12,6 +12,7 @@ from chat_bi_agent.llm import qwen_client
 from streamlit_app.components.chart_block import render_chart_block
 from streamlit_app.components.dataframe_block import render_dataframe_block
 from streamlit_app.components.feedback_block import render_feedback_block
+from streamlit_app.components.guide_block import render_guide_block
 from streamlit_app.components.insight_block import render_insight_block
 from streamlit_app.components.sql_block import render_sql_block
 
@@ -56,6 +57,7 @@ def _render_fact_anchor(fact_anchor) -> None:
 def render_p3_tab(call_counter: dict) -> None:
     st.subheader("P3：根因分析（RCA）")
     st.caption("自动识别业务指标异动 → 下钻维度 → 匹配业务事件 → 生成归因叙事。")
+    render_guide_block("p3", input_key="p3_question_input")
 
     question = st.text_area(
         "问题",
@@ -68,7 +70,7 @@ def render_p3_tab(call_counter: dict) -> None:
         if not question.strip():
             st.warning("请输入问题")
             return
-        with st.spinner("P3 RCA 执行中（含 LLM 两段式归因，可能耗时 20-40s）..."):
+        with st.spinner("P3 RCA 执行中——含两段式 LLM 归因，实测中位约 8 分钟，请勿刷新页面..."):
             try:
                 report = _get_agent().run(
                     question_id=f"ui_p3_{uuid.uuid4().hex[:8]}",

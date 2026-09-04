@@ -9,6 +9,7 @@ from chat_bi_agent.agents.p2 import P2MultiStepAnalysisAgent
 from streamlit_app.components.chart_block import render_chart_block
 from streamlit_app.components.dataframe_block import render_dataframe_block
 from streamlit_app.components.feedback_block import render_feedback_block
+from streamlit_app.components.guide_block import render_guide_block
 from streamlit_app.components.insight_block import render_insight_block
 from streamlit_app.components.sql_block import render_sql_block
 
@@ -31,6 +32,7 @@ def _get_agent() -> P2MultiStepAnalysisAgent:
 def render_p2_tab(call_counter: dict) -> None:
     st.subheader("P2：多步分析")
     st.caption("把复杂问题拆解为多步 SQL 执行，最后汇总成分析报告。")
+    render_guide_block("p2", input_key="p2_question_input")
 
     question = st.text_area(
         "问题",
@@ -43,7 +45,9 @@ def render_p2_tab(call_counter: dict) -> None:
         if not question.strip():
             st.warning("请输入问题")
             return
-        with st.spinner("P2 多步分析执行中（可能耗时 10-30s）..."):
+        with st.spinner(
+            "P2 多步分析执行中——多条 SQL + 多轮 LLM，实测中位约 8 分钟，请勿刷新页面..."
+        ):
             try:
                 report = _get_agent().run(
                     question_id=f"ui_p2_{uuid.uuid4().hex[:8]}",

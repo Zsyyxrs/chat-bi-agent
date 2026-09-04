@@ -16,6 +16,7 @@ from chat_bi_agent.llm import qwen_client
 from streamlit_app.components.chart_block import render_chart_block
 from streamlit_app.components.dataframe_block import render_dataframe_block
 from streamlit_app.components.feedback_block import render_feedback_block
+from streamlit_app.components.guide_block import render_guide_block
 from streamlit_app.components.sql_block import render_sql_block
 
 _SESSION_KEY = "p1_last_result"
@@ -154,8 +155,7 @@ def _render_route_block(result) -> None:
     if route == "metric_denied":
         # 拒绝就是拒绝：不给 SQL、不给数，也不偷偷换 NL2SQL 重答一遍
         st.error(
-            "当前身份无权查询该指标——语义层已拒绝渲染。"
-            "换一个有权限的身份，或让管理员补齐会话属性。"
+            "当前身份无权查询该指标——语义层已拒绝渲染。换一个有权限的身份，或让管理员补齐会话属性。"
         )
         return
     if route != "metric":
@@ -193,6 +193,7 @@ def _render_route_block(result) -> None:
 def render_p1_tab(call_counter: dict) -> None:
     st.subheader("P1：自然语言 → SQL")
     st.caption("输入业务问题，自动生成并执行 SQL，返回结果数据与图表。")
+    render_guide_block("p1", input_key="p1_question_input")
 
     identity = st.selectbox(
         "当前登录身份",

@@ -47,7 +47,14 @@ def render_feedback_block(
     st.markdown("**这条结果对你有帮助吗？**")
     col_up, col_down, _ = st.columns([1, 1, 6])
     with col_up:
-        if st.button("👍 有用", key=f"{tab_key}_thumb_up_{trace_id}"):
+        if st.button(
+            "👍 有用",
+            key=f"{tab_key}_thumb_up_{trace_id}",
+            help=(
+                "标记为好结果。P1 的 👍 会让这条问答进入 few-shot 示例池候选，"
+                "之后相似问题的生成会参考它；P2/P3 的 👍 计入满意度看板。"
+            ),
+        ):
             if submit_user_feedback(trace_id, value=1.0, comment=f"ui {tab_key} thumbs up"):
                 feedback_map[trace_id] = "1"
                 st.success("反馈已记录")
@@ -55,7 +62,14 @@ def render_feedback_block(
             else:
                 st.warning("反馈提交失败（Langfuse 未就绪？）")
     with col_down:
-        if st.button("👎 不对", key=f"{tab_key}_thumb_down_{trace_id}"):
+        if st.button(
+            "👎 不对",
+            key=f"{tab_key}_thumb_down_{trace_id}",
+            help=(
+                "标记为错结果。这条会进入回归测试集，用来防止同类错误再犯——"
+                "所以结果只是「不够好」时点它比不点更有用。"
+            ),
+        ):
             if submit_user_feedback(trace_id, value=0.0, comment=f"ui {tab_key} thumbs down"):
                 feedback_map[trace_id] = "0"
                 st.success("反馈已记录，将纳入回归测试集")
