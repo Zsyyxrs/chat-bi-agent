@@ -147,7 +147,7 @@
   - P1: SchemaLinker → SQLGen → Validate → Execute → (Reflect × 1 retry)
   - P2: Planner → (P1 × N) → FactExtractor → InsightSynth → ReportWriter
   - P3: fact_anchor → drill_select → drill_run → event_match → synthesize
-- 没有真正的**动态路由**（谁调谁在编写时就确定）
+- 没有真正的**动态路由**（谁调谁在编写时就确定）—— ⚠️ 到 2026-09 已不完全成立，见下方 Update
 - 需要**细粒度 tracing**（每个节点独立 span，便于 debug P3 单题失败）
 
 **Decision**:
@@ -169,6 +169,7 @@
 - ⚠️ 未来如果引入"动态路由"（比如根据问题类型走不同路径）需要自己写 dispatcher，但目前**没有这个需求**
 
 **触发重考点**：如果出现真正的动态 workflow（比如根据 P1 结果动态决定是否走 P3），再评估 LangGraph。
+（⚠️ 这句**已被 2026-09-04 Update 改写成三条更准的触发条件**，以下方为准。）
 
 **外部对照（2026-09-01，DB-GPT v0.8.2 代码核对）**：
 
@@ -191,8 +192,67 @@ DB-GPT 造了一整套编排 DSL（AWEL，把工作流建模成算子 DAG），�
 **评估过、明确不做**：AWEL 的 `BranchOperator` / `BranchJoinOperator` 曾被考虑用来显式建模
 Reflector 的重试分支。不做——理由与上表 LangGraph 那行相同（`conditional edges` 即此物），
 且 ADR-006 已定「单次重试」，分支逻辑用 `if/else` 表达完全够；改造对象
-`nl2sql_agent.py:run()` 承载双路由（metric 模板 / LLM 生成 / metric_then_nl2sql 降级），
+`nl2sql_agent.py:run()` 承载四个终态 route（`metric` 模板 / `nl2sql` LLM 生成 /
+`metric_then_nl2sql` 降级 / `metric_denied` RLAC 拒绝，末一个由 ADR-017 于 2026-09-04 加入），
 是测试覆盖最厚的代码，为零功能收益动它是纯亏。记此一笔以免重复评估。
+
+**Update（2026-09-04）：LangGraph 进阶四件套 / CrewAI / AutoGen 逐项对照（读不做，无代码改动）**
+
+这一段不是重新评估选型，结论不变。补它的原因是：上表那四行是**判断**，不是**机制对照**——
+被追问「LangGraph 的 checkpoint / interrupt / subgraph 具体是什么，你为什么说用不上」时，
+「抽象层太重」不是一个能站住的回答。以下把每个机制写清楚，并逐条对上本项目的现状。
+
+| LangGraph 机制 | 它实际做什么 | 本项目为什么用不上 |
+|---|---|---|
+| **checkpoint** | 以 `thread_id` 为键把每步后的 `StateSnapshot` 落到 checkpointer（`InMemorySaver` / `SqliteSaver` / `PostgresSaver`）。由此派生断点续跑、`get_state_history()` 回看、`update_state()` 改写历史后分叉重放（time travel）。1.0 起可用 `durability` 三档控制写入时机：`"exit"`（只在结束时写，最快，进程崩了中间态全丢）/ `"async"`（异步写，崩溃时有小概率丢）/ `"sync"`（下一步开始前同步写，最 durable） | 一次 `run()` 是**单进程内几十秒跑完的一次性调用**，没有跨请求会话状态，也没有长时人工等待。失败的代价是重跑一题（一次 LLM 调用），不是丢掉一小时的工作。⚠️ 需要显式区分的是：我们**有**持久化的执行记录（Langfuse trace），但那是**只读的事后复盘**，不是可续跑的状态机快照——需求是「查为什么错」，不是「从第 3 步接着跑」。把 trace 当 checkpoint 说是混淆 |
+| **interrupt / HITL** | 节点里调 `interrupt(value)` 抛 `GraphInterrupt`，把 value 交给客户端，客户端用 `Command(resume=...)` 续跑。硬依赖 checkpointer。**坑**：官方明确写「The graph resumes from the start of the node, re-executing all logic」——恢复时整个节点从头重跑，`interrupt` 之前的副作用会执行第二次，所以 interrupt 必须放节点开头或单独节点 | 本项目唯一像 HITL 的位置是「执行 SQL 前让人确认」。这一位置我们**故意用确定性代码而不是人工确认**：sqlglot AST 校验 + 函数级黑名单（ADR-005）、只读用户（ADR-010）、RLAC 渲染期注入且拒绝不回退（ADR-017）。理由与 ADR-017 记的 SQLBot fail-open 教训同源——**权限与安全边界不能靠人点一下确认**。至于「用户看到结果后 👍/👎」，那是 Streamlit 的 request/response，在 UI 层，不需要编排层参与 |
+| **subgraph** | 把编译好的 graph 当节点用。同 state schema 直接 `add_node(subgraph)`；不同 schema 就在外层节点里 `.invoke()` 并手写 state 进出转换。主要收益是团队并行开发与跨项目复用 | 我们**已经在做等价的事**：P2 调 P1 就是「子图当函数调」——`self._run_step()` 一个方法，state 转换是 `inject_context()` + `_p1_result_to_step_result()` 两个纯函数。换成 subgraph 只是给同一件事加仪式，还要额外处理它的 checkpointer 三态（`None` 每次调用新建 / `True` 跟随线程且禁止并发调同一子图 / `False` 不持久化）和 `get_state(config, subgraphs=True)` 的可见性问题 |
+| **Send / map-reduce** | 一个节点向下游 fan-out 出 N 个并行分支并汇总 | **这是唯一一处框架真有而我们没有的能力**，如实记下来。但 P2 的 N 个 step 顺序执行是**故意的**：step *i* 的结果要 `inject_context()` 进 step *i+1*，本来就没有并行度可拿。真要并行的是「多个互不依赖的 step」，那要先改 Planner 产出依赖图——瓶颈在规划，不在编排框架 |
+
+**一处必须自我修正的事实**：本 ADR 的 Context 写「没有真正的动态路由（谁调谁在编写时就确定）」，
+到 2026-09 这句已经**不完全成立**：
+
+- `nl2sql_agent.py:run()` 有四个终态 route：`metric` / `nl2sql` / `metric_then_nl2sql` / `metric_denied`
+- `p2_analysis_agent.py:run()` 是个 `while` 循环，replan 后会**退回到失败的 index 重跑**（`MAX_REPLAN = 1`）
+
+这两处恰恰就是 LangGraph 的 `conditional edges` 和 `Command(goto=...)` 要建模的东西。
+结论仍然不变，但理由要换成更准的那个：**分支目标集合在编写时是封闭的**（4 个取值 / 回到 index *i*），
+**循环有硬上限**（1 次），用 `if/else` + `while` 表达出来是十几行，读代码即读架构；
+换成声明式 edge，要同时付 state schema、checkpointer、trace 语义三份成本，换回来的只有声明式表达。
+
+因此**触发重考点也随之改写**（取代原文那句「如果出现真正的动态 workflow」）：
+
+> 触发条件不是「出现分支」，而是以下任一：
+> ① 路由目标集合在编写时**不封闭**（例如由 LLM 决定下一个调用哪个 agent，且候选集来自注册表而非枚举）；
+> ② 出现**跨进程 / 跨请求需要续跑**的长流程（例如人工审批后隔天继续）；
+> ③ 出现真正需要 fan-out 并行且有依赖图的执行计划。
+> 目前三条都不满足。
+
+**CrewAI（2026-09 复读）**：它现在是两层。`Crew` 是「角色扮演 + 自治协作」，
+我们结构上就不匹配（单 agent 内部多步，不是多角色对话）——这条与原表判断一致。
+`Flow` 是后加的事件驱动层（`@start` / `@listen` / `@router`），官方现在把它定位成生产编排原语，
+「Crew 是工人，Flow 是管事的」。对我们而言 Flow 层退化成「装饰器版的函数调用图」：
+把 `run()` 里 5 行顺序调用改写成 5 个带装饰器的方法加一个 state 类，收益仍然只有声明式表达。
+
+**AutoGen（2026-09 复读，结论比原表强）**：v0.4 换成了事件驱动 actor 模型，本身是像样的设计。
+但 **2025-10 AutoGen 与 Semantic Kernel 双双进入 maintenance mode**（只收 bugfix 与安全补丁），
+团队合并去做 Microsoft Agent Framework，后者 2026-04 发 1.0 GA。
+这条把原表「中文文档少」那个薄弱理由换成一个真实的 ADR 级论据：
+**编排框架层在 18 个月里换了一代**（LangChain LCEL → LangGraph 1.0；AutoGen v0.2 → v0.4 → MAF），
+而「Python 函数按顺序调用」没有迁移成本。这不是「原生比框架好」的空泛主张——
+框架换代对**吃了它抽象**的代码是真金白银的迁移，对只吃了 `@observe` 的代码不是。
+
+**面试口径（三句）**：
+1. 我读了但没做，因为四个机制里三个（checkpoint / interrupt / subgraph）在「单进程、几十秒、无人工等待」的形态下没有对应需求，第四个（Send 并行）我们的瓶颈在 Planner 不在编排层；
+2. 我们确实有分支和重试循环，但目标集合封闭、循环有上限，`if/else` 表达够用，声明式换不来能力只换来表达；
+3. 触发我改主意的条件我写死在 ADR 里了——路由不封闭、需要跨请求续跑、或需要有依赖图的并行。
+
+*参考*：[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)、
+[Durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution)、
+[interrupt reference](https://reference.langchain.com/python/langgraph/types/interrupt)、
+[Subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs)、
+[AutoGen Update discussion](https://github.com/microsoft/autogen/discussions/7066)、
+[Microsoft Agent Framework](https://devblogs.microsoft.com/agent-framework/microsofts-agentic-ai-frameworks-autogen-and-semantic-kernel/)。
 
 ---
 
