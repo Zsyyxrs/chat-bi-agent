@@ -41,6 +41,15 @@ from chat_bi_agent.llm.langfuse_setup import flush, get_client  # noqa: E402
 from chat_bi_agent.obs.span_kind import observe_llm  # noqa: E402
 from chat_bi_agent.schema.value_index import ValueIndex  # noqa: E402
 
+# 评测跑批以「总行审计身份」跑：行级权限（RLAC）是 fail-closed 的——受管控的
+# 指标不给 session 属性就会被拒绝渲染，路由静默退回 NL2SQL，metric_hit_rate
+# 会悄悄变小，跟 ADR-013 的历史数字失去可比性。总行身份用 branch_scope=ALL
+# 显式越界，而不是靠「不传属性」——不传是拒绝，不是放行。
+EVAL_SESSION_PROPS: dict[str, object] = {
+    "branch_scope": "ALL",
+    "branch_id": "__unused_by_hq__",
+}
+
 YAML_PATH = Path(__file__).resolve().parents[1] / "data" / "precision_retrieval_evaluation.yaml"
 
 
@@ -250,7 +259,10 @@ def _summarize_metric_router(
     n_metric = sum(1 for r in per_question if r["route"] == "metric")
     n_fallback = sum(1 for r in per_question if r["route"] == "metric_then_nl2sql")
     n_bypass = sum(1 for r in per_question if r["route"] == "nl2sql")
-    n_prefilter_hit = n_metric + n_fallback
+    # 行级权限拒绝：prefilter 命中、resolve 也认了指标，但调用方没有身份 →
+    # 终止，不回退。单独一档，否则四种结局按三档统计会有差额静默消失。
+    n_denied = sum(1 for r in per_question if r["route"] == "metric_denied")
+    n_prefilter_hit = n_metric + n_fallback + n_denied
 
     def _avg(scores: list[float]) -> float | None:
         return round(sum(scores) / len(scores), 4) if scores else None
@@ -269,6 +281,7 @@ def _summarize_metric_router(
         "value_out_of_domain",
         "validator_fail",
         "executor_fail",
+        "rlac_denied",
     ]
     breakdown = {fr: 0 for fr in fail_reasons}
     for r in per_question:
@@ -287,6 +300,7 @@ def _summarize_metric_router(
         "n_route_metric": n_metric,
         "n_route_metric_then_nl2sql": n_fallback,
         "n_route_nl2sql": n_bypass,
+        "n_route_metric_denied": n_denied,
         "metric_hit_rate": round(n_metric / n_total, 4) if n_total else 0.0,
         "prefilter_hit_rate": round(n_prefilter_hit / n_total, 4) if n_total else 0.0,
         "precision_when_hit": _avg(hit_scores),
@@ -357,7 +371,9 @@ def main(args: argparse.Namespace | None = None) -> int:
         print(f"\n--- {qid} ---")
         print(f"Q: {question_text[:80]}...")
 
-        agent_result = agent.run(question_id=qid, question=question_text)
+        agent_result = agent.run(
+            question_id=qid, question=question_text, session_props=EVAL_SESSION_PROPS
+        )
         print(f"  SQL: {(agent_result.sql or '<NONE>')[:120]}")
         print(f"  Rows: {len(agent_result.rows) if agent_result.rows else 0}")
         print(f"  Attempts: {agent_result.attempts}, Latency: {agent_result.total_latency_ms}ms")

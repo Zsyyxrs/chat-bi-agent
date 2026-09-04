@@ -678,17 +678,22 @@ def _parse_spec(raw: str) -> MetricSpec:
 
 
 def _resolve_to_spec_and_sql(
-    question: str, catalog: MetricCatalog, candidate_ids: list[str] | None = None
+    question: str,
+    catalog: MetricCatalog,
+    candidate_ids: list[str] | None = None,
+    session_props: dict[str, object] | None = None,
 ) -> tuple[MetricSpec, str]:
     """内部：question → (spec, sql)。失败抛 MetricResolverError。
 
     candidate_ids 只裁剪 prompt 里描述的指标；SQL 仍按完整 catalog 渲染。
+
+    session_props 只参与**渲染**，不进 prompt——权限条件对 LLM 不可见。
     """
     system_prompt = _build_extractor_prompt(catalog, candidate_ids=candidate_ids)
     user_prompt = f"用户问题：{question}\n请输出 JSON。"
     chat_result = qwen_client.chat(system_prompt=system_prompt, user_prompt=user_prompt)
     spec = _parse_spec(chat_result.content)
-    sql = render_sql_from_spec(spec, catalog)
+    sql = render_sql_from_spec(spec, catalog, session_props=session_props)
     return spec, sql
 
 
@@ -735,6 +740,9 @@ def _classify_metric_error(msg: str) -> str:
         return "enum_out_of_range"
     if "unsupported_op" in low or "unsupported filter type" in low or "in filter" in low:
         return "unsupported_op"
+    if "fail-closed" in low:
+        # 权限拒绝不是「维度不认识」——混进兜底桶意味着看板上永远看不见它
+        return "rlac_denied"
     if "unknown filter" in low or "unknown metric_id" in low:
         return "unknown_dim"  # 归到最相近的
     return "unknown_dim"  # 兜底：未识别的 metric 结构错
@@ -838,8 +846,15 @@ class MetricRouter:
                 best_by_metric[mid] = cos
         return sorted(best_by_metric.items(), key=lambda kv: kv[1], reverse=True)
 
-    def try_route(self, question: str) -> RouteResult:
-        """从不抛异常。"""
+    def try_route(
+        self, question: str, session_props: dict[str, object] | None = None
+    ) -> RouteResult:
+        """从不抛异常。
+
+        session_props 透传给渲染层做行级权限绑值（RLAC）。指标声明了
+        row_policies 却没拿到所需属性时，渲染层 fail-closed 抛错，这里
+        照常捕获成 fail_reason="rlac_denied" 并退回 NL2SQL。
+        """
         # 1-2. 打分并排名。**离线扫阈值走的是同一个方法**，见 rank_metrics
         ranked = self.rank_metrics(question)
 
@@ -861,7 +876,10 @@ class MetricRouter:
         # 4. resolve
         try:
             spec, sql = _resolve_to_spec_and_sql(
-                question, self.catalog, candidate_ids=candidate_ids
+                question,
+                self.catalog,
+                candidate_ids=candidate_ids,
+                session_props=session_props,
             )
         except MetricResolverError as e:
             return RouteResult(

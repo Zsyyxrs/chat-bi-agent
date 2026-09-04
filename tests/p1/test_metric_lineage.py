@@ -580,3 +580,20 @@ def test_real_catalog_row_policies_clean():
     cat = MetricCatalog.from_yaml(root / "config" / "metrics.yaml")
     errs = [i for i in row_policy_issues(cat) if i.severity == "error"]
     assert errs == [], errs
+
+
+def test_real_catalog_actually_uses_rlac():
+    """RLAC 不能只活在测试夹具里。
+
+    2026-09-02 RLAC 上线到 09-04 之间，21 个指标没有一个声明 row_policies、
+    也没有任何调用方传 session_props——实现完整、测试覆盖，但从未在真实查询里
+    跑过。这条锁住那个状态不再回来。
+    """
+    from pathlib import Path
+
+    from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog
+
+    root = Path(__file__).resolve().parents[2]
+    cat = MetricCatalog.from_yaml(root / "config" / "metrics.yaml")
+    protected = [m.id for m in cat.metrics if m.row_policies]
+    assert protected, "生产 catalog 里没有任何指标声明 row_policies——RLAC 又回到零使用"

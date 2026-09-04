@@ -692,6 +692,16 @@ metrics:
       channel:       {select_expr: "fcr.channel",       alias: "channel"}
       response_type: {select_expr: "fcr.response_type", alias: "response_type"}
       branch_id:     {select_expr: "fcr.branch_id",     alias: "branch_id"}
+    # 行级权限（RLAC，ADR-017）：渲染期注入 WHERE，LLM 全程看不见这几行。
+    # 分行身份只能看本行的营销数据；总行身份传 branch_scope=ALL 越过分行边界。
+    # 两个占位符都必须出现在 requires 里，否则 catalog gate 直接报 error。
+    # 选营销这两个指标做 RLAC 的落地首发，是因为它们不在 P1 评测集的命中范围内：
+    # fail-closed 是全局开关，挂在 deposit/customer 上会让未传身份的批处理
+    # 静默退回 NL2SQL，把已发布的 baseline 一起改掉。
+    row_policies:
+      - name: branch_scope
+        requires: [branch_scope, branch_id]
+        condition: "(@branch_scope = 'ALL' OR fcr.branch_id = @branch_id)"
     filter_catalog:
       branch_id:     {column: "fcr.branch_id",     type: string}
       campaign_name: {column: "fcr.campaign_name", type: string}
@@ -727,6 +737,16 @@ metrics:
       campaign_name: {select_expr: "fcr.campaign_name", alias: "campaign_name"}
       channel:       {select_expr: "fcr.channel",       alias: "channel"}
       branch_id:     {select_expr: "fcr.branch_id",     alias: "branch_id"}
+    # 行级权限（RLAC，ADR-017）：渲染期注入 WHERE，LLM 全程看不见这几行。
+    # 分行身份只能看本行的营销数据；总行身份传 branch_scope=ALL 越过分行边界。
+    # 两个占位符都必须出现在 requires 里，否则 catalog gate 直接报 error。
+    # 选营销这两个指标做 RLAC 的落地首发，是因为它们不在 P1 评测集的命中范围内：
+    # fail-closed 是全局开关，挂在 deposit/customer 上会让未传身份的批处理
+    # 静默退回 NL2SQL，把已发布的 baseline 一起改掉。
+    row_policies:
+      - name: branch_scope
+        requires: [branch_scope, branch_id]
+        condition: "(@branch_scope = 'ALL' OR fcr.branch_id = @branch_id)"
     filter_catalog:
       branch_id:     {column: "fcr.branch_id",     type: string}
       campaign_name: {column: "fcr.campaign_name", type: string}

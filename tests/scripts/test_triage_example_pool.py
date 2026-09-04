@@ -112,3 +112,15 @@ def test_split_pool_rejects_unknown_adjudicated_id():
 
     with pytest.raises(ValueError, match="zzz"):
         _mod.split_pool(_POOL, [_A_DRIFT], adjudicated={"zzz"})
+
+
+def test_triage_passes_an_identity_to_the_router():
+    """分流诊断也要带身份跑。
+
+    不带身份时，受行级权限管控的指标会被记成「路由失败」，分流结论把
+    权限拒绝误读成召回不行——诊断本身就错了。
+    """
+    from tests.ast_probe import call_keywords
+
+    kws = call_keywords("scripts/triage_example_pool.py")
+    assert any(name == "session_props" for name, _ in kws)

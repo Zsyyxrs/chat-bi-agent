@@ -1436,3 +1436,75 @@ def test_rlac_never_reaches_the_llm_prompt(tmp_path):
     assert "branch_scope" not in prompt
     assert "row_polic" not in prompt.lower()
     assert "@branch_id" not in prompt
+
+
+# ---------------------- RLAC 接线：session_props 穿参到路由层 ----------------------
+# 上面那批测试证明 render_sql_from_spec 会注入权限条件，但直到 2026-09-04
+# 为止**没有任何调用方传 session_props**——能力完整、从未被调用。
+# 下面这批锁的是「路由层到渲染层这条线是通的」。
+
+
+def _rlac_router(tmp_path, probe_fn=None):
+    from chat_bi_agent.agents.p1.metric_resolver import MetricRouter
+
+    return MetricRouter(
+        _rlac_catalog(tmp_path),
+        embed_fn=lambda texts: [[1.0, 0.0] for _ in texts],
+        threshold=0.0,
+        probe_fn=probe_fn,
+    )
+
+
+_RLAC_SPEC_JSON = '{"metric_id":"customer_count","dims":[],"filters":[],"time_window":null}'
+
+
+def test_try_route_binds_session_props_into_rendered_sql(tmp_path):
+    """路由层拿到 session 属性 → 渲染出的 SQL 带权限条件。"""
+    with patch(
+        "chat_bi_agent.agents.p1.metric_resolver.qwen_client.chat",
+        return_value=_mock_llm(_RLAC_SPEC_JSON),
+    ):
+        rr = _rlac_router(tmp_path).try_route(
+            "本行有多少客户", session_props={"branch_id": "BR001"}
+        )
+    assert rr.sql is not None, rr.fail_reason
+    assert "dc.branch_id = 'BR001'" in rr.sql
+
+
+def test_try_route_without_session_props_is_fail_closed(tmp_path):
+    """没给 session 属性 → 不出 SQL，退回 NL2SQL；绝不静默放行全表。"""
+    with patch(
+        "chat_bi_agent.agents.p1.metric_resolver.qwen_client.chat",
+        return_value=_mock_llm(_RLAC_SPEC_JSON),
+    ):
+        rr = _rlac_router(tmp_path).try_route("本行有多少客户")
+    assert rr.sql is None
+    assert rr.fail_reason == "rlac_denied"
+
+
+def test_try_route_different_sessions_render_different_sql(tmp_path):
+    """同一个问题、两个身份 → 两条不同的 SQL。这是 RLAC 的全部意义。"""
+    with patch(
+        "chat_bi_agent.agents.p1.metric_resolver.qwen_client.chat",
+        return_value=_mock_llm(_RLAC_SPEC_JSON),
+    ):
+        router = _rlac_router(tmp_path)
+        a = router.try_route("本行有多少客户", session_props={"branch_id": "BR001"})
+        b = router.try_route("本行有多少客户", session_props={"branch_id": "BR002"})
+    assert a.sql != b.sql
+    assert "'BR001'" in a.sql and "'BR002'" in b.sql
+
+
+def test_rlac_denial_is_not_misreported_as_unknown_dim():
+    """fail-closed 拒绝有自己的 fail_reason。
+
+    兜底分支会把它记成 unknown_dim——「维度不认识」和「权限不足」是两件事，
+    混在一起意味着看板上永远看不见权限拒绝。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import _classify_metric_error
+
+    msg = (
+        "metric customer_count 的 row_policy 'branch_scope' 需要 session 属性 "
+        "['branch_id']，但调用方没有提供——拒绝渲染（fail-closed）"
+    )
+    assert _classify_metric_error(msg) == "rlac_denied"

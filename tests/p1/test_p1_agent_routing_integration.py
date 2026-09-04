@@ -41,6 +41,12 @@ def _make_embed_fn(target_aliases: set[str]):
     return fake_embed
 
 
+# 全组合遍历以「总行审计身份」渲染。声明了 row_policies 的指标不给身份会
+# fail-closed（这正是设计意图，见下面的 RLAC 用例），但这个用例要覆盖的是
+# 列名/类型对不对得上 schema，不是权限——不给身份就会漏掉那几个指标。
+_HQ_SESSION = {"branch_scope": "ALL", "branch_id": "__unused_by_hq__"}
+
+
 @pytest.mark.integration
 def test_every_metric_dim_filter_combo_executes_on_real_pg(real_catalog):
     """catalog 全组合真打 PG。
@@ -76,7 +82,7 @@ def test_every_metric_dim_filter_combo_executes_on_real_pg(real_catalog):
         for dims, filters in combos:
             checked += 1
             spec = MetricSpec(metric_id=m.id, dims=dims, filters=filters, time_window=tw)
-            sql = render_sql_from_spec(spec, real_catalog)
+            sql = render_sql_from_spec(spec, real_catalog, session_props=_HQ_SESSION)
             _, err = executor.execute(sql)
             if err is not None:
                 failures.append(f"{m.id} dims={dims} filters={filters}: {err.splitlines()[0]}")
@@ -128,3 +134,61 @@ def test_metric_hit_produces_rows_from_real_pg(real_catalog):
     # 命中路径不进 Reflect Loop
     assert result.attempts == 1
     assert result.reflect_history == []
+
+
+@pytest.mark.integration
+def test_rlac_gives_two_identities_two_different_numbers_on_real_pg(real_catalog):
+    """同一个指标、两个身份 → 真库上两个不同的数。
+
+    单测只能证明 WHERE 拼对了字符串；只有真打 PG 才能证明它**确实少给了行**。
+    这条用例是 RLAC 从「实现完整、从未跑过」变成「跑过」的落点，所以断的是
+    数字关系，不是 SQL 长相。
+    """
+    if not PG_UP:
+        pytest.skip(SKIP_REASON)
+
+    protected = [m for m in real_catalog.metrics if m.row_policies]
+    assert protected, "生产 catalog 没有任何指标声明 row_policies，这条用例失去意义"
+    metric = protected[0]
+
+    branch_id = "BR_CITY_0000"
+    executor = SQLExecutor()
+    spec = MetricSpec(metric_id=metric.id, dims=[], filters=[], time_window=None)
+
+    def _value(session_props):
+        sql = render_sql_from_spec(spec, real_catalog, session_props=session_props)
+        rows, err = executor.execute(sql)
+        assert err is None, f"{session_props} 渲染出的 SQL 跑不通：{err}"
+        return rows[0][metric.metric_alias]
+
+    hq = _value({"branch_scope": "ALL", "branch_id": "__unused_by_hq__"})
+    branch = _value({"branch_scope": "BRANCH", "branch_id": branch_id})
+
+    # 分行身份必须真的少看到东西——相等就说明权限条件根本没生效
+    assert 0 < branch < hq, f"总行={hq} 分行={branch}，权限条件没起作用"
+
+    # 且少掉的正好是「别的分行」，不是任意一个子集
+    gold_sql = (
+        f"SELECT {metric.metric_expr} AS {metric.metric_alias} "
+        f"FROM {metric.fact_table} {metric.fact_alias} "
+        f"WHERE {metric.fact_alias}.branch_id = '{branch_id}'"
+    )
+    gold_rows, err = executor.execute(gold_sql)
+    assert err is None, err
+    assert branch == gold_rows[0][metric.metric_alias]
+
+
+@pytest.mark.integration
+def test_rlac_protected_metric_without_identity_is_denied_not_leaked(real_catalog):
+    """不给身份 → 拒绝渲染。绝不能退化成「没有 WHERE 的全表查询」。"""
+    if not PG_UP:
+        pytest.skip(SKIP_REASON)
+
+    protected = [m for m in real_catalog.metrics if m.row_policies]
+    assert protected
+    spec = MetricSpec(metric_id=protected[0].id, dims=[], filters=[], time_window=None)
+
+    from chat_bi_agent.agents.p1.metric_resolver import MetricResolverError
+
+    with pytest.raises(MetricResolverError, match="fail-closed"):
+        render_sql_from_spec(spec, real_catalog)

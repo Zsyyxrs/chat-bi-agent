@@ -47,7 +47,8 @@ class P1AgentResult:
     retrieved_example_ids: list[str] = field(default_factory=list)
     trace_id: str | None = None
     # 语义层前置路由字段（ADR-013 集成，metric_router=None 时全 None/"nl2sql"）
-    route: str = "nl2sql"  # "nl2sql" | "metric" | "metric_then_nl2sql"
+    # "nl2sql" | "metric" | "metric_then_nl2sql" | "metric_denied"（行级权限拒绝，终止）
+    route: str = "nl2sql"
     metric_id: str | None = None
     prefilter_cosine: float | None = None
     metric_spec: dict | None = None  # 命中且 resolve 成功时落 MetricSpec 的 dict 形式
@@ -98,7 +99,16 @@ class P1NL2SQLAgent:
         self.tag_route_on_trace = tag_route_on_trace
 
     @observe_llm(name="p1_nl2sql_run")
-    def run(self, question_id: str, question: str) -> P1AgentResult:
+    def run(
+        self,
+        question_id: str,
+        question: str,
+        session_props: dict[str, object] | None = None,
+    ) -> P1AgentResult:
+        """session_props 是调用方的身份属性（如 {"branch_id": "BR_CITY_0000"}），
+        只透传给语义层做行级权限绑值（RLAC），不进任何 prompt。不传等价于
+        「没有身份」：声明了 row_policies 的指标会 fail-closed 退回 NL2SQL。
+        """
         start = time.perf_counter()
 
         # 抓当前 langfuse trace_id → 传回 UI 层，供用户 👍/👎 反馈 attach 到同一条 trace
@@ -117,7 +127,7 @@ class P1NL2SQLAgent:
         if self.metric_router is not None:
             from dataclasses import asdict as _asdict
 
-            rr = self.metric_router.try_route(question)
+            rr = self.metric_router.try_route(question, session_props=session_props)
             r_prefilter_cosine = rr.cosine
             if rr.prefilter_hit:
                 r_metric_id = rr.metric_id
@@ -164,6 +174,44 @@ class P1NL2SQLAgent:
                         # executor failed
                         route = "metric_then_nl2sql"
                         r_metric_fail_reason = "executor_fail"
+                elif rr.fail_reason == "rlac_denied":
+                    # 行级权限拒绝**终止**这次查询，不回退 NL2SQL。
+                    # 回退等于「拒绝之后换一条没有权限管控的路把同一个数给出来」，
+                    # 2026-09-04 首次真实调用时实测到：总行 31992 / 杭州 808 /
+                    # 无身份走 NL2SQL 拿到 13618——第三个数是裸查出来的。
+                    elapsed_ms = max(1, int((time.perf_counter() - start) * 1000))
+                    self._tag_trace(
+                        [],
+                        None,
+                        [],
+                        route="metric_denied",
+                        metric_id=rr.metric_id,
+                        prefilter_cosine=rr.cosine,
+                        metric_fail_reason=rr.fail_reason,
+                        tag_route=self.tag_route_on_trace,
+                    )
+                    return P1AgentResult(
+                        question_id=question_id,
+                        sql=None,
+                        rows=None,
+                        execution_error=(
+                            "当前身份缺少该指标所需的行级权限属性，已拒绝查询"
+                            "（不回退 NL2SQL：那条路径没有行级权限管控）"
+                        ),
+                        error_class=None,
+                        schema_link_top_k=[],
+                        thought="",
+                        attempts=0,
+                        total_latency_ms=elapsed_ms,
+                        reflect_history=[],
+                        retrieved_example_ids=[],
+                        trace_id=trace_id,
+                        route="metric_denied",
+                        metric_id=rr.metric_id,
+                        prefilter_cosine=rr.cosine,
+                        metric_spec=None,
+                        metric_fail_reason=rr.fail_reason,
+                    )
                 else:
                     # resolve 失败
                     route = "metric_then_nl2sql"

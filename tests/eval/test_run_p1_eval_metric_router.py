@@ -213,3 +213,66 @@ def test_summary_records_top_k_so_arm_is_identifiable_from_artifact():
         top_k=8,
     )
     assert result["top_k"] == 8
+
+
+# ---------------------- 离线批处理的身份（RLAC）----------------------
+# fail-closed 是全局开关：受行级权限管控的指标不给 session 属性，渲染期就会
+# 拒绝，路由静默退回 NL2SQL——metric_hit_rate 会悄悄变小，而 ADR-013 的数字
+# 是在「catalog 里一条 row_policies 都没有」的世界里测出来的，对不上就没法比。
+
+
+def test_eval_runner_declares_a_full_scope_identity():
+    from chat_bi_agent.runners.run_p1_eval import EVAL_SESSION_PROPS
+
+    assert EVAL_SESSION_PROPS["branch_scope"] == "ALL"
+
+
+def test_eval_identity_covers_every_session_prop_the_catalog_requires():
+    from pathlib import Path
+
+    from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog
+    from chat_bi_agent.runners.run_p1_eval import EVAL_SESSION_PROPS
+
+    root = Path(__file__).resolve().parents[2]
+    cat = MetricCatalog.from_yaml(root / "config" / "metrics.yaml")
+    required = {name for m in cat.metrics for pol in m.row_policies for name in pol.requires}
+    assert required, "catalog 里没有 row_policies，这条用例失去意义"
+    assert not required - set(EVAL_SESSION_PROPS)
+
+
+def test_eval_runner_actually_passes_the_identity_to_the_agent():
+    """在 AST 上断言构造点——注释里写了不算。"""
+    from tests.ast_probe import call_keywords
+
+    kws = call_keywords("src/chat_bi_agent/runners/run_p1_eval.py")
+    assert any(name == "session_props" for name, _ in kws), (
+        "评测跑批没传 session_props，受管控指标会静默退回 NL2SQL"
+    )
+
+
+def test_summary_accounts_for_rlac_denied_route():
+    """权限拒绝是第四种路由结局，不能从统计里漏掉。
+
+    三个计数原本必须加总等于 n_total；新增一种 route 而不改这里，
+    差额会静默消失——正是本项目反复修的那一族缺陷。
+    """
+    per_q = [
+        _mk("metric", 0.9),
+        _mk("metric_then_nl2sql", 0.8, fail="no_metric"),
+        _mk("nl2sql", 0.95),
+        _mk("metric_denied", 0.0, fail="rlac_denied"),
+    ]
+    result = _summarize_metric_router(
+        per_question=per_q, enabled=True, catalog_path="config/metrics.yaml", threshold=0.63
+    )
+    assert result["n_route_metric_denied"] == 1
+    assert (
+        result["n_route_metric"]
+        + result["n_route_metric_then_nl2sql"]
+        + result["n_route_nl2sql"]
+        + result["n_route_metric_denied"]
+        == result["n_total"]
+    )
+    # 权限拒绝也是 prefilter 命中之后才发生的
+    assert result["n_prefilter_hit"] == 3
+    assert result["fail_reason_breakdown"]["rlac_denied"] == 1

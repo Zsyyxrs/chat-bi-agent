@@ -44,6 +44,13 @@ from chat_bi_agent.agents.p1.metric_resolver import (  # noqa: E402
 )
 from chat_bi_agent.llm import qwen_client  # noqa: E402
 
+# 分流诊断以「总行审计身份」跑：不带身份的话，受行级权限管控的指标会被记成
+# 路由失败，把权限拒绝误读成召回不行——诊断本身就错了。
+TRIAGE_SESSION_PROPS: dict[str, object] = {
+    "branch_scope": "ALL",
+    "branch_id": "__unused_by_hq__",
+}
+
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_POOL = REPO / "data" / "example_pool_prod.jsonl"
 DEFAULT_CATALOG = REPO / "config" / "metrics.yaml"
@@ -119,7 +126,7 @@ def run(pool: Path, catalog_path: Path, threshold: float, top_k: int, probe: boo
         t0 = time.perf_counter()
         gold = " ".join(r["sql"].split())
         try:
-            rr = router.try_route(r["question"])
+            rr = router.try_route(r["question"], session_props=TRIAGE_SESSION_PROPS)
             sql = " ".join(rr.sql.split()) if rr.sql else None
             rec = {
                 "idx": i,

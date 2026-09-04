@@ -36,6 +36,35 @@ _PROD_TOP_K = 3
 _METRICS_CATALOG_PATH = _REPO_ROOT / "config" / "metrics.yaml"
 
 
+# ---- 身份（RLAC，ADR-017）----
+# 语义层的 row_policies 在渲染期绑这几个属性；LLM 全程看不到它们。
+# 演示用固定名单：真实系统里 session 属性来自 SSO/会话，不该让用户自己挑。
+# 总行用 branch_scope=ALL 显式越界，而不是靠「不传属性」绕过——不传属性是
+# fail-closed 拒绝，不是放行。
+HQ_IDENTITY = "总行（可见全行）"
+IDENTITIES: dict[str, dict[str, object]] = {
+    HQ_IDENTITY: {"branch_scope": "ALL", "branch_id": "__unused_by_hq__"},
+    "杭州分行客户经理（BR_CITY_0000）": {
+        "branch_scope": "BRANCH",
+        "branch_id": "BR_CITY_0000",
+    },
+    "南京分行客户经理（BR_CITY_0002）": {
+        "branch_scope": "BRANCH",
+        "branch_id": "BR_CITY_0002",
+    },
+    "苏州分行客户经理（BR_CITY_0003）": {
+        "branch_scope": "BRANCH",
+        "branch_id": "BR_CITY_0003",
+    },
+}
+_IDENTITY_KEY = "p1_identity"
+
+
+def _session_props_for(label: str) -> dict[str, object]:
+    """身份 → session 属性。认不出的身份返回空——空即 fail-closed 拒绝，不是放行。"""
+    return dict(IDENTITIES.get(label, {}))
+
+
 def _build_retriever_if_available() -> ExampleRetriever | None:
     """池子文件存在且非空才挂 retriever；否则完全跳过（不影响 P1 原有行为）。"""
     if not _PROD_POOL_PATH.exists():
@@ -86,6 +115,15 @@ def _metric_label(catalog: MetricCatalog | None, metric_id: str) -> str:
         return metric_id
 
 
+def _metric_has_row_policies(catalog: MetricCatalog | None, metric_id: str) -> bool:
+    if catalog is None or not metric_id:
+        return False
+    try:
+        return bool(catalog.get(metric_id).row_policies)
+    except Exception:
+        return False
+
+
 def _get_agent() -> P1NL2SQLAgent:
     if _AGENT_KEY not in st.session_state:
         retriever = _build_retriever_if_available()
@@ -113,11 +151,23 @@ def _render_route_block(result) -> None:
     看见一个似是而非的数字。
     """
     route = getattr(result, "route", "nl2sql")
+    if route == "metric_denied":
+        # 拒绝就是拒绝：不给 SQL、不给数，也不偷偷换 NL2SQL 重答一遍
+        st.error(
+            "当前身份无权查询该指标——语义层已拒绝渲染。"
+            "换一个有权限的身份，或让管理员补齐会话属性。"
+        )
+        return
     if route != "metric":
         return
     catalog = st.session_state.get("p1_metric_catalog")
     label = _metric_label(catalog, result.metric_id or "")
     st.success(f"命中语义层指标：**{label}** — 模板 SQL，口径固定、结果可复现")
+    if _metric_has_row_policies(catalog, result.metric_id or ""):
+        st.caption(
+            f"该指标受行级权限管控，本次以「{st.session_state.get(_IDENTITY_KEY, '')}」"
+            f"的身份查询——权限条件在渲染期注入，模型看不到它。"
+        )
 
     spec = result.metric_spec or {}
     with st.expander("语义层是怎么理解这个问题的"):
@@ -140,6 +190,16 @@ def render_p1_tab(call_counter: dict) -> None:
     st.subheader("P1：自然语言 → SQL")
     st.caption("输入业务问题，自动生成并执行 SQL，返回结果数据与图表。")
 
+    identity = st.selectbox(
+        "当前登录身份",
+        list(IDENTITIES),
+        key=_IDENTITY_KEY,
+        help=(
+            "行级权限（RLAC）在 SQL 渲染期注入，模型看不到权限条件。"
+            "分行身份只能看到本行的数据；换个身份问同一个问题，数会变。"
+        ),
+    )
+
     question = st.text_area(
         "问题",
         height=100,
@@ -156,6 +216,7 @@ def render_p1_tab(call_counter: dict) -> None:
                 result = _get_agent().run(
                     question_id=f"ui_p1_{uuid.uuid4().hex[:8]}",
                     question=question.strip(),
+                    session_props=_session_props_for(identity),
                 )
                 call_counter["count"] = call_counter.get("count", 0) + 1
                 st.session_state[_SESSION_KEY] = result
@@ -183,7 +244,11 @@ def render_p1_tab(call_counter: dict) -> None:
     ]
     if getattr(result, "route", "nl2sql") == "metric_then_nl2sql":
         # 低调提示：语义层试过但没走通，已安全回退，答案质量不受影响
-        caption_parts.append(f"语义层未采用（{result.metric_fail_reason}），已回退 NL2SQL")
+        if result.metric_fail_reason == "rlac_denied":
+            # 这条只可能出现在「身份属性给漏了」时；用户看得懂才报得上来
+            caption_parts.append("语义层拒绝渲染（当前身份缺少所需权限属性），已回退 NL2SQL")
+        else:
+            caption_parts.append(f"语义层未采用（{result.metric_fail_reason}），已回退 NL2SQL")
     pool_size = st.session_state.get("p1_pool_size", 0)
     if pool_size > 0:
         n_used = len(getattr(result, "retrieved_example_ids", []) or [])

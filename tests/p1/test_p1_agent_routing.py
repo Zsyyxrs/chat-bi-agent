@@ -282,3 +282,107 @@ def test_eval_runner_disables_route_tagging():
     assert has_call_keyword(
         "src/chat_bi_agent/runners/run_p1_eval.py", "tag_route_on_trace", "False"
     )
+
+
+# ---------------------- RLAC：session 属性从 agent 穿到渲染层 ----------------------
+
+
+def _rlac_router(tmp_path):
+    """真 MetricRouter（不是 MagicMock）+ 一个声明了行级权限的最小 catalog。
+
+    用真 router 才能证明这条线是通的：agent → try_route → render_sql_from_spec。
+    """
+    from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog, MetricRouter
+
+    yml = tmp_path / "metrics.yaml"
+    yml.write_text(
+        """
+version: 1
+metrics:
+  - id: customer_count
+    display_name: 客户数
+    aliases: [客户数]
+    fact_table: dim_customer
+    fact_alias: dc
+    metric_expr: COUNT(*)
+    metric_alias: cnt
+    hard_filters: []
+    dim_catalog: {}
+    filter_catalog: {}
+    row_policies:
+      - name: branch_scope
+        requires: [branch_id]
+        condition: "dc.branch_id = @branch_id"
+""",
+        encoding="utf-8",
+    )
+    return MetricRouter(
+        MetricCatalog.from_yaml(yml),
+        embed_fn=lambda texts: [[1.0, 0.0] for _ in texts],
+        threshold=0.0,
+    )
+
+
+_RLAC_LLM_SPEC = (
+    '```json\n{"metric_id":"customer_count","dims":[],"filters":[],"time_window":null}\n```'
+)
+
+
+def test_run_binds_session_props_into_metric_sql(tmp_path):
+    """agent.run 拿到的 session 属性要落到最终 SQL 的权限条件里。"""
+    agent = _make_agent(metric_router=_rlac_router(tmp_path))
+    with patch(
+        "chat_bi_agent.agents.p1.metric_resolver.qwen_client.chat",
+        return_value=MagicMock(content=_RLAC_LLM_SPEC),
+    ):
+        result = agent.run(
+            question_id="q1", question="本行有多少客户", session_props={"branch_id": "BR001"}
+        )
+    assert result.route == "metric"
+    assert "dc.branch_id = 'BR001'" in result.sql
+
+
+def test_run_without_session_props_refuses_instead_of_falling_back(tmp_path):
+    """没身份 → 拒答，**不能**回退 NL2SQL。
+
+    2026-09-04 首次真实调用时发现的：语义层 fail-closed 拒绝渲染后，原逻辑
+    把问题交给 NL2SQL 重答一遍——而 NL2SQL 路径上没有任何行级权限。真实
+    观测到的后果是「总行 31992 / 杭州 808 / 无身份 13618」，第三个数是裸查
+    出来的。拒绝之后换条没有管控的路把数给出来，等于没有拒绝。
+    """
+    agent = _make_agent(metric_router=_rlac_router(tmp_path))
+    with (
+        patch(
+            "chat_bi_agent.agents.p1.metric_resolver.qwen_client.chat",
+            return_value=MagicMock(content=_RLAC_LLM_SPEC),
+        ),
+        patch.object(agent.sql_generator, "generate") as mock_gen,
+    ):
+        mock_gen.return_value = MagicMock(sql="SELECT 1", thought="t")
+        result = agent.run(question_id="q1", question="本行有多少客户")
+    assert result.route == "metric_denied"
+    assert result.metric_fail_reason == "rlac_denied"
+    assert result.sql is None
+    assert result.rows is None
+    assert result.execution_error is not None
+    mock_gen.assert_not_called()
+    agent._mocks["linker"].link.assert_not_called()
+
+
+def test_other_metric_failures_still_fall_back_to_nl2sql(tmp_path):
+    """只有权限拒绝终止流程；识别失败仍旧回退——别把降级路径一起关掉。"""
+    router = MagicMock()
+    router.try_route.return_value = RouteResult(
+        prefilter_hit=True,
+        metric_id="customer_count",
+        cosine=0.9,
+        sql=None,
+        spec=None,
+        fail_reason="unknown_dim",
+    )
+    agent = _make_agent(metric_router=router)
+    with patch.object(agent.sql_generator, "generate") as mock_gen:
+        mock_gen.return_value = MagicMock(sql="SELECT 1", thought="t")
+        result = agent.run(question_id="q1", question="本行有多少客户")
+    assert result.route == "metric_then_nl2sql"
+    assert result.metric_fail_reason == "unknown_dim"
