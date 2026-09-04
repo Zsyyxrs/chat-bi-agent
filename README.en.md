@@ -370,7 +370,7 @@ open http://localhost:8501
 ```
 
 If you get stuck, see [docs/RUNBOOK.md](./docs/RUNBOOK.md) (Chinese) — health checks,
-eight common failure modes with fixes, and what `down -v` destroys.
+nine common failure modes with fixes, and what `down -v` destroys.
 
 Service ports:
 - Streamlit App: `http://localhost:8501`

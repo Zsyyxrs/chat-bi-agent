@@ -58,11 +58,13 @@ docker compose up -d
 **该看到**：10 个容器创建。首次会构建 `chat-bi-agent:local` 镜像（几分钟）。
 
 ```bash
-docker compose ps
+docker compose ps      # 运行中的 9 个
+docker compose ps -a   # 加上已退出的一次性 job
 ```
 
-**该看到**：`chatbi-pg` 与 `chatbi-langfuse-db` 状态是 `Up (healthy)`，
-其余 `Up`。`chatbi-minio-bootstrap` 是一次性 job，`Exited (0)` 才是对的。
+**该看到**：`chatbi-pg` 与 `chatbi-langfuse-db` 状态是 `Up (healthy)`，其余 `Up`。
+`chatbi-minio-bootstrap` 是一次性 job，`Exited (0)` 才是对的——但它**不会出现在
+`docker compose ps` 里**（默认只列运行中的），要加 `-a` 才看得到。
 
 Langfuse 首次启动要跑 Postgres + ClickHouse 双份 migration，通常要几分钟才对外服务。
 这期间访问 `:3001` 得到 502 或空白页是正常的，不要急着重启——
@@ -77,7 +79,12 @@ docker compose --profile seed run --rm seed
 seed 走 profile，`docker compose up` **不会**自动拉起它，必须显式触发。
 参数固定为 `--truncate --with-events`（rows 默认 100000、seed 默认 42）。
 
-**该看到**：跑完 2–5 分钟，容器以 0 退出。核对方式见 §2.2。
+**该看到**：实测约 40 秒跑完，容器以 0 退出。核对方式见 §2.2。
+
+seed 结束会打印一张 `Table row counts` 表——**别拿它跟 §2.2 对**。那是生成阶段的
+内存计数（`dim_counts` / `fact_counts`），而 `--with-events` 的事件传导会在之后
+继续增删行，两者本就不一致（实测 seed 打印 `dim_customer 5,000`，库里实际 5230）。
+以 §2.2 直接查库的结果为准。
 
 ### 1.4 回填 Langfuse API Key
 
@@ -161,13 +168,16 @@ docker exec -e PGPASSWORD=readonly_dev chatbi-pg \
 # 期望：ERROR:  permission denied for table dim_branch
 ```
 
-第二条**必须报错**。如果它成功了，说明 `03_readonly_role.sql` 没执行过（见 §3-D），
+第二条**必须报错**。如果它成功了，说明 `03_readonly_role.sql` 没执行过（见 §3-E），
 Agent 就在拿一个有写权限的连接跑 LLM 生成的 SQL。
 
 ### 2.4 端到端
 
-Streamlit P1 tab → 点示例问题「杭州分行（BR_CITY_0000）在 2026 年 2 月末……」→ 执行。
-期望 10 秒内出 SQL + 数据表；底部出现 👍/👎（说明 trace_id 拿到了，Langfuse 通了）。
+Streamlit P1 tab → 展开「这个 tab 适合问什么？」→ 点第一条示例问题（会自动填进输入框）
+→ 执行。
+
+期望：中位约 12 秒出 SQL + 数据表（复杂题到 40 秒以上），底部出现 👍/👎——
+后者说明拿到了 trace_id，即 Langfuse 链路是通的。
 
 ---
 
@@ -193,7 +203,21 @@ cp config/local.example.yaml config/local.yaml
 docker compose up -d
 ```
 
-### B. `bind: address already in use`
+### B. 首次构建失败：`dns error / failed to lookup address information: Try again`
+
+**症状**：`docker compose up -d` 在 `RUN uv sync` 那层挂掉，报 `EAI_AGAIN`，
+随机卡在某个包上（实测卡在 `setuptools`）。
+**原因**：uv 并发下载把 Docker 内嵌 DNS(127.0.0.11) → 宿主机解析器这条转发链
+的 UDP 查询打丢。Dockerfile 已把 `UV_CONCURRENT_DOWNLOADS` 降到 4 来缓解，
+但网络差时仍会偶发。
+**处置**：**直接重试**，层缓存还在，不用清理。实测第二次即通过（约 6 分钟）。
+
+```bash
+docker compose build app && docker compose up -d
+```
+先确认 DNS 本身没坏：`docker run --rm python:3.11-slim getent hosts pypi.org`
+
+### C. `bind: address already in use`
 
 **症状**：`docker compose up` 报某端口被占。
 **定位**：`lsof -nP -iTCP:8501 -sTCP:LISTEN`（端口换成报错里那个）。
@@ -201,7 +225,7 @@ docker compose up -d
 本项目已把容易撞的端口都挪开了，实际最常撞的只剩 `8501`（机器上另一个 Streamlit）
 和 `5050`（另一个 pgAdmin）。
 
-### C. Langfuse `:3001` 打不开 / 502
+### D. Langfuse `:3001` 打不开 / 502
 
 **先等**，首启双 migration 要几分钟，`docker compose logs -f langfuse` 能看到进度。
 仍不行时：
@@ -212,21 +236,26 @@ docker compose ps clickhouse redis minio     # 三个依赖必须都 Up
 ```
 最常见是 ClickHouse 因内存不足被 OOM kill（`Exited (137)`）→ 调大 Docker 内存到 6 GB 以上。
 
-### D. Agent 报 `permission denied` 或只读角色不存在
+### E. Agent 报 `relation "xxx" does not exist`（表明明在）
+
+**这条症状具有欺骗性**：Postgres 把「权限被拒」伪装成「关系不存在」，
+所以真正的病因往往是只读角色 `chatbi_readonly` 缺少 SELECT 权限，
+而不是表真的没建。
 
 **原因**：`docker/postgres/init/*.sql` **只在数据卷首次初始化时执行一次**。
-如果 `pgdata` 卷是之前建的（比如加 `03_readonly_role.sql` 之前），它不会补跑。
-**处置**（二选一）：
+`pgdata` 卷若是加 `03_readonly_role.sql` 之前建的，它不会补跑。
+
+**处置**：重跑一次 seed 就行——`seed.py` 的 `ensure_readonly_grants()`
+会幂等重建角色与授权，它存在的理由正是兜住这一条：
 
 ```bash
-# 轻量：只补跑角色脚本
-docker exec -i chatbi-pg psql -U chatbi -d chatbi < docker/postgres/init/03_readonly_role.sql
-
-# 彻底：删卷重来（会丢数据，要重跑 seed）
-docker compose down -v && docker compose up -d && docker compose --profile seed run --rm seed
+docker compose --profile seed run --rm seed
 ```
 
-### E. UI 上没有 👍/👎，显示「Langfuse trace_id 缺失」
+跑完用 §2.3 复核。真想从头来（会丢数据）才用
+`docker compose down -v && docker compose up -d && docker compose --profile seed run --rm seed`。
+
+### F. UI 上没有 👍/👎，显示「Langfuse trace_id 缺失」
 
 **原因**：`.env` 里 Langfuse key 还是占位符，或填完没重启 app。
 **处置**：核对 §1.4 第 4、5 步。验证：
@@ -237,7 +266,7 @@ docker exec chatbi-app env | grep LANGFUSE_
 `LANGFUSE_HOST` 在容器里应当是 `http://langfuse:3000`（**不是** `localhost:3001`——
 容器里的 localhost 指它自己；compose 已显式覆盖，`.env` 里那个是给宿主机脚本用的）。
 
-### F. P1 结果正常但 few-shot 从不生效 / caption 里 `pool=0`
+### G. P1 结果正常但 few-shot 从不生效 / caption 里 `pool=0`
 
 **原因**：`data/example_pool_prod.jsonl` 被 `.gitignore` 排除，全新 clone 没有。
 **处置**：这个池子是可选增强项，缺了只是不做 few-shot 检索，不影响正确性
@@ -248,12 +277,12 @@ docker exec chatbi-app env | grep LANGFUSE_
 make bootstrap-pool     # 需要 .env 里的 key 已配好；默认 --source both
 ```
 
-### G. `Agent 执行失败：... DashScope ...` / 401 / 限流
+### H. `Agent 执行失败：... DashScope ...` / 401 / 限流
 
 **处置**：确认 `.env` 里 `DASHSCOPE_API_KEY` 是真 key 且账户有额度；改完 `.env` 后
 `docker compose restart app`。侧边栏「本会话用量」计数可以帮你判断是不是问太快了。
 
-### H. 改了源码但 UI 行为没变
+### I. 改了源码但 UI 行为没变
 
 `app` 和 `seed` 都设了 `pull_policy: build`，正常情况 `up` 会重建。
 如果仍是旧行为：
@@ -327,6 +356,6 @@ docker compose down -v       # 连数据卷一起删 —— 不可逆
 | `miniodata` | Langfuse 事件对象存储 | 同上 |
 
 删卷后首次 `up` 会重跑 `docker/postgres/init/*.sql`（含只读角色），
-这也是 §3-D 的「彻底」解法。
+这也是 §3-E 的「彻底」解法。
 
 不需要保留镜像时再加：`docker image rm chat-bi-agent:local`。

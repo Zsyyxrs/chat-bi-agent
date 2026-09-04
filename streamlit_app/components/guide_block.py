@@ -4,9 +4,14 @@
 哪个 tab、要等多久、👍/👎 点了会怎样）全是**用的当下**才想知道的，切出去翻
 markdown 没人会做。
 
-示例问题一律取自 `src/chat_bi_agent/data/*_evaluation.yaml`——那是跑过 ground
-truth 的题面（P1 0.965 / P2 0.601 / P3 0.900）。给一条答不对的示例比不给更糟，
-所以 tests/streamlit/test_tab_guide.py 会逐条比对题集，现编的加不进来。
+示例问题一律取自 `src/chat_bi_agent/data/*_evaluation.yaml`，并且**必须在
+results/ 的 baseline 里真跑过、分数不低于该题集中位数**——给一条答不对的示例
+比不给更糟。tests/streamlit/test_tab_guide.py 两头都守。
+
+这条规矩是 2026-09-04 走查换来的：当时只校验「题面出自题集」，结果 P1 的第一
+条示例是 precision_q005（全集最低 0.8167），实跑漏掉 gold 要求的
+account_type='SAVING' 过滤，报出的是全部账户类型的合计；另一条 precision_q009
+根本不在任何 baseline 里。题面合法 ≠ 答得对。
 """
 
 from __future__ import annotations
@@ -44,12 +49,13 @@ TAB_GUIDES: dict[str, TabGuide] = {
             "这是设计如此，不是 bug。",
             "命中语义层指标时会显示「模板 SQL，口径固定」，并摊开它对问题的理解；"
             "理解错了当场就能看出来。",
-            "通常 10 秒内出结果。",
+            "实测中位约 12 秒；带多重过滤或排序的题会到 40 秒以上。",
         ),
         examples=(
-            "杭州分行（BR_CITY_0000）在 2026 年 2 月末（2 月 28 日）的定期存款余额总和是多少？",
             "查询上海分行（BR_CITY_0006）所有高净值客户的客户 ID、姓名和客户等级。",
-            "统计上海地区各家分行的客户数量，返回分行名称和客户数，按客户数从多到少排序。",
+            "找出 2026 年 2 月 15-23 日期间，交易渠道为 ATM 或 COUNTER 的现金支取交易。 "
+            "返回交易日期、账户 ID、金额和交易渠道。",
+            "分别统计杭州（BR_CITY_0000）和南京（BR_CITY_0002）两个分行的大众客户层级客户数量。",
         ),
     ),
     "p2": TabGuide(
@@ -122,7 +128,10 @@ def render_guide_block(tab_key: str, *, input_key: str) -> None:
         for tip in guide.tips:
             st.markdown(f"- {tip}")
 
-        st.markdown("**试试这些**（都取自评测题集，跑过 ground truth）：")
+        st.markdown(
+            "**试试这些**（取自评测题集，均有 ground truth 对照，"
+            "且 baseline 分数不低于该题集中位数）："
+        )
         for i, example in enumerate(guide.examples):
             if st.button(example, key=f"{tab_key}_example_{i}", use_container_width=True):
                 prefill_question(st.session_state, input_key, example)

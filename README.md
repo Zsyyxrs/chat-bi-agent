@@ -352,7 +352,7 @@ docker compose --profile seed run --rm seed
 open http://localhost:8501
 ```
 
-卡住了看 [docs/RUNBOOK.md](./docs/RUNBOOK.md)——健康检查怎么做、8 类常见故障怎么定位、
+卡住了看 [docs/RUNBOOK.md](./docs/RUNBOOK.md)——健康检查怎么做、9 类常见故障怎么定位、
 `down -v` 会删掉什么，都在那份文档里。
 
 服务端口：
