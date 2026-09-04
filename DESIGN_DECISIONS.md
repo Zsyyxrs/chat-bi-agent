@@ -731,7 +731,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-014](#adr-014) | 评测集 gold 的可信度守门 | Accepted |
 | [ADR-015](#adr-015) | P2 评分器中文分词修复 | Accepted（三个饱和维度待决） |
 | [ADR-016](#adr-016) | P2 rubric LLM judge | Accepted |
-| [ADR-017](#adr-017) | RLAC session 属性注册表与值域门禁 | Proposed（2026-09-04 执行面首次真实调用 + 拒绝不再回退，见 Update；注册表本体仍未做） |
+| [ADR-017](#adr-017) | RLAC session 属性注册表与值域门禁 | Proposed（2026-09-04 执行面首次真实调用 + 拒绝不再回退 + session 值存在性探针，见两条 Update；注册表本体待「接入认证」触发） |
 
 新增 ADR 从 `ADR-018` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
@@ -2543,6 +2543,48 @@ RLAC 不生效」，第一次跑就以最难看的形式兑现了——无身份
 留给注册表（本 ADR 主体）的仍然是：属性名的 CI 门禁、取值值域校验、赋值链路。
 现在多了一条现实约束——`branch_scope` 这类「作用域开关」属性一旦进注册表，
 它的值域必须和「谁有权拿到 ALL」绑在一起，否则等于把越界权交给调用方自觉。
+
+### Update 2026-09-04（二）：把「值存在吗」摘出来做了，注册表本体按触发条件继续挂着
+
+接线跑通后重新评估本 ADR 的四件事，逐条的结论是：
+
+| 本 ADR 的条目 | 现在的判断 | 理由 |
+|---|---|---|
+| ① 注册表本体 `session_properties.yaml` | **不做** | 全项目只有 2 个属性（`branch_scope` / `branch_id`），来源是三处硬编码。为 2 个属性建一份会漂移的元数据文件，成本大于收益 |
+| ② 属性名的 CI 门禁 | **已等价拿到** | `test_every_identity_supplies_all_props_the_catalog_requires`（Streamlit 侧）与 `test_eval_identity_covers_every_session_prop_the_catalog_requires`（评测侧）：从生产 catalog 收集全部 `requires` 逐个核对调用方。`requires` 写错名字 CI 直接红——正是本条要的效果，不需要注册表 |
+| ③ 渲染期值域校验 | **拆成两半**：安全那半不做，正确性那半已做 | 见下 |
+| ④ 赋值链路 | **做不了** | 全项目没有任何认证层（`streamlit_app/` 下 grep `login`/`auth`/`SSO` 零命中）。session 属性由应用自己硬编码，这条只能等认证 |
+
+**③ 为什么要拆**：本 ADR 原文把它写成越权面（「调用方传 `BR_ALL` 会原样拼进 WHERE」）。
+但值全部来自应用自己写死的 dict，**今天不存在不受信输入**——让代码校验自己写死的常量
+落不落在自己声明的值域里，是仪式不是防护。而且 2026-09-04 引入 `branch_scope=ALL` 之后，
+这条的性质变了：`ALL` 本来就在合法值域内，值域校验拦不住它；能拦住的是「谁有权拿到 ALL」,
+那是第 ④ 条。
+
+**但它还有另一半，与安全无关**：`render_domain_probe_sql` 只探 `spec.filters`
+（LLM 抽的值），**不探 row_policy 绑的 session 值**。传一个打错字的 `branch_id`，
+SQL 合法、跑得出数、返回 0——与「本行确实一个人都没触达」不可区分。这是 ADR-013
+已经修过一次的形状（静默 0 行），只是换了个入口，且不需要注册表就能修。
+
+因此只做这一小块：`render_policy_probe_sql(metric, session_props)` 生成
+`SELECT 1 FROM <fact> [policy joins] WHERE <权限条件> LIMIT 1`——**只带权限条件**，
+不带 time_window / hard_filters / 用户过滤（那几样为空是业务事实，不是身份错）。
+
+**关键取舍：警告，不拦截。** 对 `spec.filters` 来说探不到就退回 NL2SQL 是安全的
+替代路径；对权限条件不是——退回等于走一条没有行级权限的路（就是上面那个 13618）。
+而拒答又会误伤「确实一行数据都没有」的合法分行。所以探不到只在 `RouteResult
+.policy_value_warning` / `P1AgentResult.metric_policy_warning` 上挂一句诊断，
+UI 用 `st.warning` 显示，路由结局不变。探针自身报错（超时、连接断）一律不出警告——
+把基础设施抖动读成「你的身份配错了」比不提示更糟。
+
+实测（`BR_CITY_00OO`，把 `0` 打成字母 `O`）：结果 0，附
+「当前身份的属性（branch_id='BR_CITY_00OO'…）在该指标的数据里一行都没匹配到——
+结果为 0 可能是身份值不存在，而不是业务事实」；真实分行则安静。
+
+**本 ADR 主体（① ③安全那半 ④）的触发条件写死为：接入认证 / 多租户。** 在那之前
+session 属性不来自外部，注册表没有输入源，做出来是空转。相应地也如实标注一条
+现状限制：**demo 里身份是用户自己从下拉框选的，选「总行」就能看全行，演示环境下
+RLAC 是可绕过的**——堵这个口子的是认证层，注册表堵不上。
 
 
 ---

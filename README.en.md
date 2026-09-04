@@ -258,6 +258,19 @@ python scripts/eval_diff.py --phase p3       # diff latest two P3 baselines
   every other failure reason still falls back. `_classify_metric_error` had also been bucketing
   permission denials into the catch-all `unknown_dim`, hiding them from every dashboard; they now
   have their own bucket.
+  **The value-existence probe now covers session values too.** It previously guarded only the
+  filters the LLM extracts; the values bound by policy conditions had nothing. A typo'd `branch_id`
+  produces legal SQL that runs and returns 0 — indistinguishable from "this branch genuinely
+  reached nobody" (`BR_CITY_00OO` does exactly that). A miss now attaches a diagnostic but **does
+  not block**: falling back to NL2SQL is no safe alternative for a policy condition (that path has
+  no row-level access control), and refusing outright would punish a legitimate branch that simply
+  has no rows.
+  **Stated plainly:** in the demo the identity is picked by the user from a dropdown — choose "HQ"
+  and you see everything, so **RLAC is bypassable in the demo**. What closes that is an
+  authentication layer, not the semantic layer: `session_props` should be derived by auth from a
+  verified identity token. That is also why [ADR-017](./DESIGN_DECISIONS.md#adr-017) stays
+  Proposed — the registry and value-domain gate are triggered by "authentication/multi-tenancy
+  lands", and building them before that is motion without traction.
 
 - **SQL validation gained a function-level blacklist.** "SELECT only" was a check on the
   **top-level statement type** and said nothing about what the SELECT calls —

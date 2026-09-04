@@ -246,6 +246,15 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
   等于没拒绝。现在 `rlac_denied` 直接终止查询（`route="metric_denied"`），其余失败原因照旧
   回退。另外 `_classify_metric_error` 此前把权限拒绝归进兜底桶 `unknown_dim`，
   看板上永远看不见它，已单独成桶。
+  **值域探针扩到 session 值**：此前只有 LLM 抽出来的 `spec.filters` 有存在性探针，
+  权限条件绑的值没有——传一个打错字的 `branch_id`，SQL 合法、跑得出数、返回 0，
+  和「本行确实一个人都没触达」长得一模一样（实测 `BR_CITY_00OO` 就是这样）。现在
+  探不到会带一句诊断，但**不拦截**：退回 NL2SQL 对权限条件不是安全替代（那条路没有
+  行级权限），拒答又会误伤确实没有数据的合法分行。
+  **诚实标注**：demo 里身份是用户自己从下拉框选的，选「总行」就能看全行——**演示环境下
+  RLAC 是可绕过的**。堵这个口子的是认证层，不是语义层；`session_props` 应当由认证层从
+  已验证的身份令牌派生，这也是 [ADR-017](./DESIGN_DECISIONS.md#adr-017) 仍是 Proposed
+  的原因（注册表与值域门禁的触发条件就是「接入认证/多租户」，在那之前做是空转）。
 
 - **SQL 校验补函数级黑名单**：原有「只有 SELECT」是**顶层语句类型**检查，管不到 SELECT
   里调了什么——`SELECT pg_read_file(...)` 顶层是 SELECT、表列检查也过。补 AST 级函数
