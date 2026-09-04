@@ -332,8 +332,9 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
 git clone https://github.com/Zsyyxrs/chat-bi-agent.git
 cd chat-bi-agent
 
-# 1. 配置 API key
+# 1. 配置（两个文件，缺一个起不来）
 cp .env.example .env
+cp config/local.example.yaml config/local.yaml
 # 编辑 .env，填入 DASHSCOPE_API_KEY（必填）
 
 # 2. 起全栈（Postgres + Langfuse 全套 + Streamlit App）
@@ -351,6 +352,9 @@ docker compose --profile seed run --rm seed
 open http://localhost:8501
 ```
 
+卡住了看 [docs/RUNBOOK.md](./docs/RUNBOOK.md)——健康检查怎么做、8 类常见故障怎么定位、
+`down -v` 会删掉什么，都在那份文档里。
+
 服务端口：
 - Streamlit App：`http://localhost:8501`
 - Langfuse UI：`http://localhost:3001`
@@ -366,8 +370,8 @@ pip install -e ".[dev]"
 # 起 Postgres + Langfuse（不起 App）
 docker compose up -d postgres langfuse pgadmin
 
-# 灌数据
-python -m chat_bi_agent.data.seed --truncate --with-events
+# 灌数据（seed 不读 PG_PORT，默认连 5432；容器映射在 5433，必须显式指定）
+python -m chat_bi_agent.data.seed --port 5433 --truncate --with-events
 
 # 本地跑 Streamlit
 streamlit run streamlit_app/app.py
@@ -396,7 +400,9 @@ P1 的实录 GIF 在页首「三路径能力」表下方。**P2 / P3 没有录�
 实时录制不可看，加速到能看的倍率又会让人误判真实延迟；这两条路径的产出是大段归因文字，
 后续补静态截图更合适。
 
-想自己看全套，按 Quick Start A 起 Streamlit，三个 tab 各试一题：
+想自己看全套，按 Quick Start A 起 Streamlit。**三个 tab 顶部各有一个「这个 tab 适合问什么？」**，
+里面写了适合 / 不适合什么、要等多久，并给了可一键填入的示例问题——都取自评测题集，跑过 ground truth。
+下面这三题是各 tab 的代表：
 
 - **P1 tab**：输入"上海分行 2026 年 5 月高净值客户的存款余额总额是多少？"
 - **P2 tab**：输入"春节前后现金支取行为有什么变化？"
@@ -480,6 +486,7 @@ chat-bi-agent/
 - [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) —— 技术选型对比 + 架构演进史 + 17 条 ADR
 - [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md) —— 三路径评估方法、问题集、rubric、ground truth
 - [金融 data agent 架构设计](./docs/金融data%20agent架构设计.md) —— 业务背景与原始设计稿
+- [docs/RUNBOOK.md](./docs/RUNBOOK.md) —— 部署 runbook：前置条件、健康检查、故障速查、卸载与重置
 - [CONTRIBUTING.md](./CONTRIBUTING.md) —— 开发环境与贡献流程
 
 ---

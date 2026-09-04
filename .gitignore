@@ -94,6 +94,9 @@ dmypy.json
 #  clone 仓库的人都是死链）
 docs/*
 !docs/金融data agent架构设计.md
+# 部署 runbook 同理：README 的 Quick Start 与「文档导航」都指向它，
+# 不放行的话，clone 下来的人点过去是 404
+!docs/RUNBOOK.md
 # README 里内嵌的演示图同理，不跟着 docs/ 一起被 ignore
 # （docs/* 会连 docs/assets 目录一起排除，必须先放行目录再挑文件类型）
 !docs/assets/

@@ -349,8 +349,9 @@ Full design trade-offs in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 git clone https://github.com/Zsyyxrs/chat-bi-agent.git
 cd chat-bi-agent
 
-# 1. Configure API key
+# 1. Configure (two files — missing either one breaks startup)
 cp .env.example .env
+cp config/local.example.yaml config/local.yaml
 # Edit .env and fill in DASHSCOPE_API_KEY (required)
 
 # 2. Bring up the full stack (Postgres + Langfuse stack + Streamlit app)
@@ -368,6 +369,9 @@ docker compose --profile seed run --rm seed
 open http://localhost:8501
 ```
 
+If you get stuck, see [docs/RUNBOOK.md](./docs/RUNBOOK.md) (Chinese) — health checks,
+eight common failure modes with fixes, and what `down -v` destroys.
+
 Service ports:
 - Streamlit App: `http://localhost:8501`
 - Langfuse UI: `http://localhost:3001`
@@ -383,8 +387,9 @@ pip install -e ".[dev]"
 # Bring up Postgres + Langfuse only (skip the app container)
 docker compose up -d postgres langfuse pgadmin
 
-# Seed data
-python -m chat_bi_agent.data.seed --truncate --with-events
+# Seed data (seed does not read PG_PORT; it defaults to 5432 while the
+# container is mapped to 5433, so pass --port explicitly)
+python -m chat_bi_agent.data.seed --port 5433 --truncate --with-events
 
 # Run Streamlit locally
 streamlit run streamlit_app/app.py
@@ -414,7 +419,10 @@ P2 / P3** — a single P2 question takes 300–500s and P3 is in the same range,
 unwatchable while a fast-forwarded one misrepresents the actual latency. Both tracks output long-form
 attribution prose, which static screenshots serve better; those are still to come.
 
-To see the full set yourself, follow Quick Start A, launch Streamlit, and try one question per tab:
+To see the full set yourself, follow Quick Start A and launch Streamlit. **Each tab opens with a
+"What can I ask here?" panel** covering what the tab is and isn't for, how long a run takes, and
+one-click example questions — all drawn from the evaluated question sets, so they are known to work.
+These three are the representative ones:
 
 - **P1 tab**: "What was the total deposit balance of HNW customers in the Shanghai branch in May 2026?"
 - **P2 tab**: "How did cash withdrawal behavior change around Chinese New Year?"
@@ -498,6 +506,7 @@ Full rationale and alternatives in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 - [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) — Tech-choice comparison, architecture evolution, 17 ADRs (Chinese)
 - [EVALUATION_FRAMEWORK.md](./EVALUATION_FRAMEWORK.md) — Three-track methodology, question sets, rubrics, ground truth (Chinese)
 - [金融 data agent 架构设计](./docs/金融data%20agent架构设计.md) — Original business-domain design (Chinese)
+- [docs/RUNBOOK.md](./docs/RUNBOOK.md) — Deployment runbook: prerequisites, health checks, troubleshooting, teardown (Chinese)
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — Dev environment and contribution flow
 
 ---
