@@ -53,6 +53,8 @@ class P1AgentResult:
     prefilter_cosine: float | None = None
     metric_spec: dict | None = None  # 命中且 resolve 成功时落 MetricSpec 的 dict 形式
     metric_fail_reason: str | None = None
+    # 身份值在库里探不到时的诊断（不影响路由结局，见 MetricRouter._probe_policy_values）
+    metric_policy_warning: str | None = None
 
 
 class P1NL2SQLAgent:
@@ -170,6 +172,7 @@ class P1NL2SQLAgent:
                                 prefilter_cosine=rr.cosine,
                                 metric_spec=_asdict(rr.spec),
                                 metric_fail_reason=None,
+                                metric_policy_warning=rr.policy_value_warning,
                             )
                         # executor failed
                         route = "metric_then_nl2sql"

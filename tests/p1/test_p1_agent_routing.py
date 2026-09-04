@@ -386,3 +386,23 @@ def test_other_metric_failures_still_fall_back_to_nl2sql(tmp_path):
         result = agent.run(question_id="q1", question="本行有多少客户")
     assert result.route == "metric_then_nl2sql"
     assert result.metric_fail_reason == "unknown_dim"
+
+
+def test_policy_value_warning_reaches_the_result():
+    """身份值探不到的诊断要一路带到调用方，否则等于没提示。"""
+    spec = MetricSpec(metric_id="campaign_response_count")
+    router = MagicMock()
+    router.try_route.return_value = RouteResult(
+        prefilter_hit=True,
+        metric_id="campaign_response_count",
+        cosine=0.9,
+        sql="SELECT 1",
+        spec=spec,
+        fail_reason=None,
+        policy_value_warning="当前身份的属性（branch_id='X'）在该指标的数据里一行都没匹配到",
+    )
+    agent = _make_agent(metric_router=router)
+    result = agent.run(question_id="q1", question="营销触达数")
+    assert result.route == "metric"
+    assert result.metric_policy_warning is not None
+    assert "一行都没匹配到" in result.metric_policy_warning

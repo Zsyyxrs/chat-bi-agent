@@ -1508,3 +1508,67 @@ def test_rlac_denial_is_not_misreported_as_unknown_dim():
         "['branch_id']，但调用方没有提供——拒绝渲染（fail-closed）"
     )
     assert _classify_metric_error(msg) == "rlac_denied"
+
+
+# ---------------------- RLAC：session 值的存在性探针 ----------------------
+# 值域探针原本只覆盖 spec.filters（LLM 抽出来的值），不覆盖 row_policy 绑的
+# session 值。调用方传一个不存在的 branch_id（打错字、分行撤并、组织架构没同步），
+# SQL 完全合法、照样跑得出数——返回 0。用户看到的「本行一个人都没触达」和真实的
+# 0 长得一模一样。这是 ADR-013 已经修过一次的形状（静默 0 行），换了个入口。
+
+
+def test_policy_probe_is_none_when_metric_has_no_row_policies(tmp_path):
+    from chat_bi_agent.agents.p1.metric_resolver import render_policy_probe_sql
+
+    cat = _rlac_catalog(tmp_path)
+    assert render_policy_probe_sql(cat.get("product_count"), {"branch_id": "BR001"}) is None
+
+
+def test_policy_probe_binds_the_session_value(tmp_path):
+    """探针问的是「这个值在这一列里存在吗」，所以只带权限条件。"""
+    from chat_bi_agent.agents.p1.metric_resolver import render_policy_probe_sql
+
+    cat = _rlac_catalog(tmp_path)
+    sql = render_policy_probe_sql(cat.get("customer_count"), {"branch_id": "BR001"})
+    assert "dc.branch_id = 'BR001'" in sql
+    assert "LIMIT 1" in sql
+
+
+def test_try_route_warns_but_still_answers_when_session_value_matches_nothing(tmp_path):
+    """身份值探不到 → **警告，不拦截**。
+
+    对 spec.filters 来说，探不到就退回 NL2SQL 是安全的替代路径；对权限条件
+    不是——退回等于走一条没有行级权限的路（见 2026-09-04 的 13618）。而拒答
+    又会误伤「确实一行数据都没有」的合法分行。所以这里只出诊断。
+    """
+    with patch(
+        "chat_bi_agent.agents.p1.metric_resolver.qwen_client.chat",
+        return_value=_mock_llm(_RLAC_SPEC_JSON),
+    ):
+        router = _rlac_router(tmp_path, probe_fn=lambda sql: ([], None))
+        rr = router.try_route("本行有多少客户", session_props={"branch_id": "BR_NOT_EXIST"})
+    assert rr.sql is not None, "权限探针不该拦截查询"
+    assert rr.fail_reason is None
+    assert rr.policy_value_warning is not None
+    assert "BR_NOT_EXIST" in rr.policy_value_warning
+
+
+def test_try_route_is_silent_when_session_value_exists(tmp_path):
+    with patch(
+        "chat_bi_agent.agents.p1.metric_resolver.qwen_client.chat",
+        return_value=_mock_llm(_RLAC_SPEC_JSON),
+    ):
+        router = _rlac_router(tmp_path, probe_fn=lambda sql: ([{"1": 1}], None))
+        rr = router.try_route("本行有多少客户", session_props={"branch_id": "BR001"})
+    assert rr.policy_value_warning is None
+
+
+def test_policy_probe_failure_is_not_treated_as_missing_value(tmp_path):
+    """探针自己跑挂了（超时/连接断）不能变成「值不存在」的结论。"""
+    with patch(
+        "chat_bi_agent.agents.p1.metric_resolver.qwen_client.chat",
+        return_value=_mock_llm(_RLAC_SPEC_JSON),
+    ):
+        router = _rlac_router(tmp_path, probe_fn=lambda sql: (None, "connection reset"))
+        rr = router.try_route("本行有多少客户", session_props={"branch_id": "BR001"})
+    assert rr.policy_value_warning is None

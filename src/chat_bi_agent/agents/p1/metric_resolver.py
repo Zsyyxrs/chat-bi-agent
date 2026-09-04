@@ -551,6 +551,35 @@ def render_domain_probe_sql(spec: MetricSpec, catalog: MetricCatalog) -> str | N
     return "\n".join(lines)
 
 
+def render_policy_probe_sql(metric: Metric, session_props: dict[str, object] | None) -> str | None:
+    """给 row_policy 绑的 session 值生成一条存在性探针；没有 row_policies 返 None。
+
+    问的是「这个值在这一列里出现过吗」，所以**只带权限条件**——不带 time_window、
+    不带 hard_filters、不带用户过滤（那几样为空是业务事实，不是身份错）。
+
+    为什么需要：`spec.filters` 的值有 `render_domain_probe_sql` 兜着，session 值
+    此前完全没有防护。传一个不存在的 branch_id，SQL 合法、跑得出数、返回 0——
+    和「本行确实一个人都没触达」长得一模一样。
+    """
+    if not metric.row_policies:
+        return None
+    where_parts = _render_row_policies(metric, session_props)
+    if not where_parts:
+        return None
+
+    needed_joins: list[str] = []
+    for pol in metric.row_policies:
+        for j in pol.requires_join:
+            if j not in needed_joins:
+                needed_joins.append(j)
+
+    lines = ["SELECT 1", f"FROM {metric.fact_table} {metric.fact_alias}"]
+    lines += [metric.joins[j] for j in needed_joins]
+    lines.append("WHERE " + "\n  AND ".join(where_parts))
+    lines.append("LIMIT 1")
+    return "\n".join(lines)
+
+
 # ---------------------------- LLM spec 抽取 ----------------------------
 
 
@@ -716,8 +745,12 @@ class RouteResult:
     cosine: float
     sql: str | None
     spec: MetricSpec | None
-    # "no_metric" | "unknown_dim" | "enum_out_of_range" | "unsupported_op" | None
+    # "no_metric" | "unknown_dim" | "enum_out_of_range" | "unsupported_op" |
+    # "rlac_denied" | "value_out_of_domain" | None
     fail_reason: str | None
+    # 身份值探不到时的诊断。**不拦截**：权限条件已经生效，这里只是提醒
+    # 「这个 0 可能是身份值写错了，不是业务事实」
+    policy_value_warning: str | None = None
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -819,6 +852,29 @@ class MetricRouter:
                 (mid, vec) for (mid, _), vec in zip(all_aliases, vecs, strict=True)
             ]
 
+    def _probe_policy_values(
+        self, metric_id: str, session_props: dict[str, object]
+    ) -> str | None:
+        """身份值在库里探不到就回一句人话诊断；探针本身出错时返 None。
+
+        探针跑挂（超时、连接断）不能被读成「值不存在」——那会把基础设施抖动
+        变成一句「你的身份配错了」，比不提示更糟。
+        """
+        try:
+            probe_sql = render_policy_probe_sql(self.catalog.get(metric_id), session_props)
+        except MetricResolverError:
+            return None
+        if probe_sql is None:
+            return None
+        rows, err = self.probe_fn(probe_sql)
+        if err is not None or rows:
+            return None
+        vals = "、".join(f"{k}={v!r}" for k, v in sorted(session_props.items()))
+        return (
+            f"当前身份的属性（{vals}）在该指标的数据里一行都没匹配到——"
+            f"结果为 0 可能是身份值不存在，而不是业务事实"
+        )
+
     def rank_metrics(self, question: str) -> list[tuple[str, float]]:
         """给每个指标打分，按 cosine 倒序返回 (metric_id, cosine)。
 
@@ -911,6 +967,13 @@ class MetricRouter:
                         fail_reason="value_out_of_domain",
                     )
 
+        # 6. 权限值探针。放在最后：它不改变路由结局，只给一条诊断。
+        #    退回 NL2SQL 对权限条件不是安全替代（那条路径没有行级权限），
+        #    拒答又会误伤「确实没有数据」的合法分行——所以只警告。
+        policy_warning: str | None = None
+        if self.probe_fn is not None and session_props:
+            policy_warning = self._probe_policy_values(spec.metric_id, session_props)
+
         return RouteResult(
             prefilter_hit=True,
             metric_id=spec.metric_id,
@@ -918,4 +981,5 @@ class MetricRouter:
             sql=sql,
             spec=spec,
             fail_reason=None,
+            policy_value_warning=policy_warning,
         )

@@ -168,6 +168,10 @@ def _render_route_block(result) -> None:
             f"该指标受行级权限管控，本次以「{st.session_state.get(_IDENTITY_KEY, '')}」"
             f"的身份查询——权限条件在渲染期注入，模型看不到它。"
         )
+    # 身份值在库里探不到：数照出，但要说清楚这个 0 可能不是业务事实
+    policy_warning = getattr(result, "metric_policy_warning", None)
+    if policy_warning:
+        st.warning(policy_warning)
 
     spec = result.metric_spec or {}
     with st.expander("语义层是怎么理解这个问题的"):
