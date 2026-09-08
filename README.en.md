@@ -19,6 +19,12 @@
 | **P2 Multi-Step Analysis** | Decompose → multi-step retrieval → fact extraction → synthesized insight | "How did cash withdrawal behavior change around Chinese New Year?" |
 | **P3 RCA Attribution** | Anchor fact → drill by dimension → match events → synthesize root cause | "Shanghai branch deposits dropped 8% on 2026-05-14 — why?" |
 
+**Entry points**: the Streamlit UI (three tabs), plus an **MCP server** that exposes P1 to
+Claude Desktop and other MCP clients. The caller's identity is pinned by server-side
+configuration — the tool schema carries no identity field, so the model cannot declare who
+it is. With no identity configured the server fails closed, and a refusal never falls back
+to a path without row-level control. See [docs/RUNBOOK.md §4bis](docs/RUNBOOK.md).
+
 ![P1 demo: natural language → SQL → result table → auto-chart](docs/assets/demo_p1.gif)
 
 <sub>P1 tab, recorded live and **sped up**: ask "monthly transaction-amount trend for 2026" → generate and run SQL → result table → chart type inferred automatically. The 👍 at the end sends this (question, sql) pair to the few-shot pool candidates. The "耗时 18043 ms" at the bottom is the **real** end-to-end latency of this run, not compressed; across all 8 questions avg is 17.7s / p50 12.0s (<a href="results/baseline_p1_eval_2026-08-15.json">baseline JSON</a>). No recording for P2 / P3 yet.</sub>

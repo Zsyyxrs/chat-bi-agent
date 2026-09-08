@@ -311,6 +311,77 @@ docker compose --profile seed run --rm seed
 
 ---
 
+## 4bis. 接入 Claude Desktop（MCP server）
+
+把 P1 精准取数暴露给任何 MCP 客户端。**只暴露 P1**：P2/P3 委托 P1 时不传
+`session_props`，子问题走 NL2SQL 兜底时没有行级管控，故不进暴露面。
+
+### 前置
+
+- Postgres 已起、已灌数（`docker compose up -d postgres` + seed）
+- 仓库根的 `.env` 已配好 `DASHSCOPE_API_KEY` 与 `PG_*`
+  （server 按**绝对路径**读它，与 Claude Desktop 的 cwd 无关）
+- 装 MCP 依赖：`uv pip install -e '.[mcp]'`
+
+### 配置
+
+Claude Desktop 的 `claude_desktop_config.json`，一个身份一个条目——
+**身份由服务端配置锁定，模型无法在对话里指定**：
+
+```json
+{
+  "mcpServers": {
+    "chatbi-杭州分行": {
+      "command": "/absolute/path/to/python",
+      "args": ["-m", "chat_bi_agent.mcp_server"],
+      "env": {
+        "CHATBI_MCP_BRANCH_SCOPE": "BRANCH",
+        "CHATBI_MCP_BRANCH_ID": "BR_CITY_0000"
+      }
+    },
+    "chatbi-总行": {
+      "command": "/absolute/path/to/python",
+      "args": ["-m", "chat_bi_agent.mcp_server"],
+      "env": { "CHATBI_MCP_BRANCH_SCOPE": "ALL" }
+    }
+  }
+}
+```
+
+`command` 必须是绝对路径的解释器（装了本项目那个环境的），Claude Desktop 不走登录 shell。
+
+### 两个 tool
+
+| tool | 入参 | 说明 |
+|---|---|---|
+| `query_bank_data` | `question` **仅此一个** | 返回 `{sql, rows, row_count, truncated, route, metric_id, denied, error}`；rows 截断到 200 行，`row_count` 报真值 |
+| `list_governed_metrics` | 无 | 受治理指标清单，标出哪些受行级权限管控 |
+
+### 验收（2026-09-08 实测）
+
+同一个问题「统计营销触达响应数」，换身份出不同数：
+
+| 身份配置 | route | 结果 |
+|---|---|---|
+| `SCOPE=ALL` | `metric` | 159500 |
+| `SCOPE=BRANCH` + `BRANCH_ID=BR_CITY_0000` | `metric` | 3831 |
+| 两个环境变量都不配 | `metric_denied` | 拒绝，`rows=null` |
+
+两个数与直接打 `fct_campaign_response` 逐字符一致。**第三行是重点**：没配身份不是
+「总行视角」，是没有身份——受管控指标在渲染期被拒，且**不回退 NL2SQL**
+（回退等于换一条没有行级管控的路把同一个数给出来，2026-09-04 实测过）。
+
+### 故障速查
+
+| 现象 | 原因 |
+|---|---|
+| 连不上库 / `could not connect ... 5432` | `.env` 没读到。本项目 PG 映射在 **5433**；确认仓库根有 `.env` |
+| 所有受治理指标都 `denied` | 环境变量没配或拼错。`SCOPE` 只认 `ALL` / `BRANCH`，其余一律拒绝 |
+| `SCOPE=BRANCH` 却全被拒 | 少配了 `CHATBI_MCP_BRANCH_ID`——这是 fail-closed，不是 bug |
+| Claude Desktop 里看不到 server | `command` 不是绝对路径，或该解释器没装 `.[mcp]` |
+
+---
+
 ## 5. 最小启动（不要 Langfuse）
 
 只跑三条路径、不要观测栈：

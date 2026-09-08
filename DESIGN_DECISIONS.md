@@ -732,8 +732,9 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-015](#adr-015) | P2 评分器中文分词修复 | Accepted（三个饱和维度待决） |
 | [ADR-016](#adr-016) | P2 rubric LLM judge | Accepted |
 | [ADR-017](#adr-017) | RLAC session 属性注册表与值域门禁 | Proposed（2026-09-04 执行面首次真实调用 + 拒绝不再回退 + session 值存在性探针，见两条 Update；注册表本体待「接入认证」触发） |
+| [ADR-018](#adr-018) | MCP server 只暴露 P1，身份锁在服务端 | Accepted（2026-09-08 真跑：三种身份三种结果） |
 
-新增 ADR 从 `ADR-018` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
+新增 ADR 从 `ADR-019` 继续追加。修改现有决策请把 Status 改为 `Superseded by ADR-XXX` 并保留原文。
 
 ---
 
@@ -2645,6 +2646,68 @@ session 属性不来自外部，注册表没有输入源，做出来是空转。
 现状限制：**demo 里身份是用户自己从下拉框选的，选「总行」就能看全行，演示环境下
 RLAC 是可绕过的**——堵这个口子的是认证层，注册表堵不上。
 
+
+---
+
+<a id="adr-018"></a>
+### ADR-018: MCP server 只暴露 P1，身份锁在服务端配置而非 tool 入参
+
+**Status**: Accepted（2026-09-08）
+
+**Context**
+
+排期第 14 周保留的唯一新增能力：把 FinAgent 包成 MCP server，让 Claude Desktop 能用。
+包一层本身是小工程，真正要定的是两件事——**暴露什么**，以及**身份从哪来**。
+
+查代码后确认了一个此前没写下来的事实：**P2/P3 并非"没有权限管控"，而是把
+`session_props` 丢在了半路**。两者都委托 P1 执行（`p2_analysis_agent.py:85`、
+`p3/drill_executor.py:164`），但调用时不传身份。后果分岔：子问题命中带 `row_policies`
+的指标 → P1 返回 `metric_denied` → P2 步骤失败 / P3 下钻空，**误打误撞是 fail-closed 的**；
+子问题没命中语义层 → 走 NL2SQL 裸查，**完全没有行级管控**。后一条是漏的。
+
+**Decision**
+
+1. **只暴露 P1**，两个 tool：`query_bank_data`（入参只有 `question`）与
+   `list_governed_metrics`。P2/P3 不进暴露面——把一个已知缺口摆进新接口，
+   等于用更大的门把它散出去。
+2. **身份从服务端环境变量读**（`CHATBI_MCP_BRANCH_SCOPE` / `CHATBI_MCP_BRANCH_ID`），
+   锁在闭包里，**tool schema 里没有任何身份字段**。让被管的人自己声明自己是谁，
+   权限边界就是假的。这与语义层既有约定同源：session 属性只参与渲染、不进 prompt。
+3. **fail-closed 不打折**。没配环境变量 = 空 props = 受管控指标被拒；
+   配了 `BRANCH` 却没给 `branch_id` 同样拒绝——「没指定分行」绝不能被解释成
+   「所有分行都能看」。拒绝后不回退（延续 2026-09-04 在 P1 里堵掉的那条）。
+4. **接线不复制**。P1 的生产接线抽到 `agents/p1/wiring.py`，Streamlit 与 MCP 共用，
+   `tests/p1/test_p1_wiring_shared.py` 用**同一性**断言（`is`）钉住。理由是本项目
+   已经在「双写必然漂移」上吃过两次亏，且两次都不报错、只是两边不一致。
+   `ALL` 档的属性直接取自 `wiring.IDENTITIES[HQ_IDENTITY]`，不另写字面量。
+
+**Consequences**
+
+真跑一次（stdio + 真实 MCP 客户端 + 真库真模型），同一个问题「统计营销触达响应数」：
+
+| 身份配置 | route | 结果 |
+|---|---|---|
+| `SCOPE=ALL` | `metric` | 159500 |
+| `SCOPE=BRANCH` + `BRANCH_ID=BR_CITY_0000` | `metric` | 3831 |
+| 两个环境变量都不配 | `metric_denied` | 拒绝，`rows=null` |
+
+两个数与直接打 `fct_campaign_response` 逐字符一致；客户端侧看到的 `query_bank_data`
+入参确实只有 `question`。
+
+**这条 ADR 顺带补上了 ADR-017 结尾自陈的那个限制的一半。** ADR-017 如实写着
+「demo 里身份是用户自己从下拉框选的，选『总行』就能看全行，演示环境下 RLAC 是
+可绕过的」。那对 Streamlit 仍然成立，但**对 MCP 入口不成立**：身份在进程启动时定死，
+对话里改不了，模型也看不见。这不等于有了认证层——配置文件仍是谁能编辑谁说了算——
+但它把「谁来声明身份」从**被管的人**挪到了**部署方**，是认证层缺席时能做到的最强形态。
+
+**真跑暴露的一个测试没覆盖的缺陷**（记下来因为它属于本项目反复出现的那一类）：
+Claude Desktop 以裸子进程拉起 server，cwd 由它决定，裸 `load_dotenv()` 找不到仓库
+`.env` → `PG_PORT` 退回默认 5432（本项目是 5433）、`DASHSCOPE_API_KEY` 为空。
+表现是「连不上库」，而真因是「没读到配置」——排查方向会被带偏。已改为锚仓库根的
+绝对路径并补两条守门。**18 条测试全绿也没抓住它，是真跑抓住的。**
+
+**明确不做**：HTTP transport、OAuth、P2/P3 暴露、多租户、把 MCP 塞进 docker-compose。
+P2/P3 的暴露触发条件写死为：**先给它们补上 `session_props` 穿参**（约 2 天，含两边测试）。
 
 ---
 

@@ -19,6 +19,11 @@
 | **P2 多步分析** | 拆解 → 多步取数 → 事实抽取 → 综合洞察 | "春节前后现金支取行为有什么变化？" |
 | **P3 RCA 归因** | 锚定事实 → 维度下钻 → 事件命中 → 根因合成 | "上海分行存款 5/14 下降 8%，原因是什么？" |
 
+**接入方式**：Streamlit UI（三个 tab），以及 **MCP server**——把 P1 暴露给 Claude Desktop
+等 MCP 客户端。身份锁在服务端配置里、tool schema 里没有身份字段，模型无法声明自己是谁；
+没配身份即 fail-closed 拒绝，且不回退到没有行级管控的路径。配置见
+[docs/RUNBOOK.md §4bis](docs/RUNBOOK.md)。
+
 ![P1 演示：自然语言 → SQL → 结果表 → 自动图表](docs/assets/demo_p1.gif)
 
 <sub>P1 tab 实录（**已加速**）：提问「2026 年各月的交易金额趋势」→ 生成并执行 SQL → 结果表 → 自动推断图表类型出折线图，末尾 👍 把这条 (question, sql) 送进 few-shot pool 候选。画面底部的「耗时 18043 ms」是这一次**真实**的端到端耗时，未经压缩；全量 8 题 avg 17.7s / p50 12.0s（<a href="results/baseline_p1_eval_2026-08-15.json">baseline JSON</a>）。P2 / P3 暂无录屏。</sub>
