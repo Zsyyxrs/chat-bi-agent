@@ -1843,6 +1843,65 @@ SQL 合法、结果非空，又一个静默错答。已在 prompt 里教全比�
 
 ---
 
+**Update 2026-09-07：promotion 的判定改「取最新一条 user_feedback」；撤掉 UI 上一句不实承诺**
+
+起因是一句提问：面板上给错 SQL 点了 👍 会不会污染池子。答案是「拦得住一类，拦不住
+另一类」——顺着查出三处该修的，都跟判定谁说了算有关。
+
+**1. `judge_pass` 摘掉。**
+
+`load_langfuse()` 原来按 `max(user_feedback, judge_pass)` 定通过分。而 `judge_pass`
+**全仓没有任何写入方**，只在这一个过滤条件里出现过一次。这行代码等于提前给一个还
+不存在的 LLM judge 授权：接上那天 `max(user_feedback=0.0, judge_pass=1.0) = 1.0`，
+机器判的分盖过人点的 👎。**没有输入源的 or 分支不叫「预留扩展」，叫预置的越权。**
+等它真存在、且定义了跟人类反馈谁优先，再加回来。
+
+**2. `max` 改成取最新一条 `user_feedback`。**
+
+`max` 表达不了「改主意」。UI 靠 `st.session_state` 挡同会话二次投票，但刷新页面就能
+再投——用户点完 👍 看仔细了改点 👎，`max` 把这次纠正整个吞掉。这是 `max` 在本项目
+里唯一够得着的危害路径，不是多人对冲（每次提问生成独立 trace，两个人投同一条基本
+不发生）。
+
+**没有做「一票否决」，尽管它更严。** 因为 👎 的语义本来就是脏的：它自己的 help 文案
+主动鼓励用户拿它表达「对但不够好」。给一个被故意放宽了语义的按钮发否决权，会误杀
+正确样本。「取最新」只表达这个人最后的判断，不多不少。
+
+时间戳做了防御：`timestamp` / `created_at` / `createdAt` 三个字段名都试，`datetime`
+和 ISO 字符串都吃，naive 的补 UTC——不补的话跟 aware 的一比就 `TypeError`，而那是
+在 nightly cron 里炸。全都取不到时间戳才退回按到达顺序，因为 **API 不保证返回顺序，
+拿位置当时间是猜**，只配垫底。
+
+**3.「👎 进回归测试集」是空头支票，已撤。**
+
+UI 三处这么写（button help / 成功提示 / 已投票 caption），而全仓消费 `user_feedback`
+的只有 `bootstrap_prod_pool` 一处，它只筛 ≥1.0——0.0 落进 Langfuse 就停在那，没有
+任何下游。改成说实话：P1 的 👎 把这条挡在 few-shot 池外、同一条以最后一次点击为准，
+P2/P3 只计满意度。保留了「不够好也可以点」的鼓励，但把代价写在旁边（这条正确样本
+不会被复用）——**让点的人自己权衡，比替他们决定好**。`feedback_block.py` docstring
+里钉了一条「👎 目前没有下游消费方，文案不许承诺它」并注明查证日期。
+
+**范围之外，明确不做的一项**：把归档 / quarantine 名单接进 promotion 的排除逻辑。
+归档那 14 条按 2026-08-28 的决策**故意**不堵——归档 `example_id` 原样回来是语义层
+退化的信号，堵住等于把告警静音；quarantine 那条则**根本不需要名单**，gold 执行门禁
+每次都会独立地把它再拒一遍，加名单纯属冗余。
+
+**这次没有解决的**：口径错、但跑得出数的 SQL 仍然畅通无阻。执行门禁只看「解出东西
+没有」，反馈聚合只看「谁最后说的」，两道闸都不看「解得对不对」。真要堵得拿 catalog
+命中的题做 gold vs governed 交叉比对——`caliber_drift()` 是现成的，零 LLM 零 DB，
+按 2026-08-28 那次 A/B/C 分布（A 14 / B 12 / C 5）覆盖率约 45%，B/C 档弃权。
+记在这里，没做。
+
+**Trace**：`bootstrap_prod_pool.py` 加 `FEEDBACK_SCORE_NAME` / `_score_timestamp()` /
+`resolve_pass_score()`，`load_langfuse()` 改调它；`feedback_block.py` 三处文案 +
+docstring；`test_bootstrap_prod_pool.py` +10 例（judge_pass 单独不算数 / 盖不过人类
+👎 / 双向改主意 / 乱序只看时间戳 / datetime·ISO·naive 混用 / 无时间戳退回顺序 /
+有时间戳的赢过没有的 / 空输入 / `value=None` 跳过）；`test_tab_guide.py` 那条
+`assert "回归" in joined` 前提作废，按「改写不删」反向断言并补 `"最后一次"`；
+全量 867 passed / 57 skipped（57 = 未起 Docker 的 PG 集成测试）
+
+---
+
 <a id="adr-014"></a>
 
 ### ADR-014: 评测集 gold 的可信度——修哪些、不修哪些，以及行数守门
@@ -2589,4 +2648,4 @@ RLAC 是可绕过的**——堵这个口子的是认证层，注册表堵不上�
 
 ---
 
-**最后更新**：2026-09-04
+**最后更新**：2026-09-08
