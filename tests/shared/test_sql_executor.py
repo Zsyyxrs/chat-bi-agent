@@ -175,7 +175,10 @@ def test_unparseable_sql_is_refused_not_passed_through():
 
 def test_write_hidden_inside_a_cte_is_refused():
     """PG 支持 `WITH x AS (DELETE ... RETURNING *) SELECT ...`——
-    根节点是 SELECT，但它真的会删数据。只看开头两个词的护栏挡不住这个。"""
+    根节点是 SELECT，但它真的会删数据。只看开头两个词的护栏挡不住这个。
+
+    不过要说清楚：被替换掉的那版词边界正则**也拦得住这条**（它匹配全串而非 startswith）。
+    保留本测试是当回归锚——AST 化不能在这个方向上开倒车。"""
     executor = SQLExecutor()
     sql = "WITH gone AS (DELETE FROM dim_customer RETURNING *) SELECT * FROM gone"
     assert executor._is_safe(sql) is False

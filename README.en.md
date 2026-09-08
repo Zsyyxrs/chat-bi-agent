@@ -37,13 +37,20 @@ to a path without row-level control. See [docs/RUNBOOK.md §4bis](docs/RUNBOOK.m
 
 | Track | Questions | Passed | Avg Score | Baseline | Notes |
 |---|---:|---:|---:|---|---|
-| **P1 NL2SQL** | 8 / 8 | 8 | **0.977** | 2026-08-15 (restated 2026-09-08) | Full question set; multi-table JOIN, time windows, aggregation, branch filters — all pass. Originally reported 0.965, understated by a scorer bug — see below |
+| **P1 NL2SQL** | 8 / 14 | 8 | **0.977** | 2026-08-15 (restated 2026-09-08) | Published on the **original 8** questions; multi-table JOIN, time windows, aggregation, branch filters — all pass. Originally reported 0.965, understated by a scorer bug — see below |
 | **P2 Multi-Step Analysis** | 3 / 8 | 1 | **0.626** | 2026-08-17 | 3 scored dims (insight 45% + rubric LLM judge 35% + metric coverage 20%); reasoning/business/step-completeness demoted to diagnostics |
 | **P3 RCA Attribution** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4-dim rubric, all events matched, zero hallucination |
 
-The denominator in "Questions" is the total in each evaluation set. **P2 has only ever scored the
-first 3 of its 8 questions**; q004–q008 have never been scored. At 300–500s per question,
-completing them takes 40–70 minutes — deferred on cost.
+The denominator in "Questions" is the total in each evaluation set; the numerator is how many were
+run and counted toward that row's score. Two tracks have a numerator below the denominator, for
+different reasons:
+
+- **The P1 set later grew from 8 to 14 questions** (+3 value-resolution, +3 window-function), but
+  the published figure stays pinned to the **original 8** — q001–q008 have not changed a character
+  since the baseline landed, which is what makes runs comparable. Results for the new questions live
+  in [`results/README.md`](results/README.md) and are deliberately kept out of this number.
+- **P2 has only ever scored the first 3 of its 8 questions**; q004–q008 have never been scored. At
+  300–500s per question, completing them takes 40–70 minutes — deferred on cost.
 
 **P2 is the only score in this project that has been repeatedly revised downward**, because much of
 the earlier figure was unearned. Four steps (2026-08-15/17), each one a case of "this dimension
@@ -457,7 +464,7 @@ Every question leaves a full trace in Langfuse (`http://localhost:3001`, live).
 chat-bi-agent/
 ├── src/chat_bi_agent/
 │   ├── agents/                # Three agents + shared components
-│   │   ├── p1/                #   nl2sql_agent · sql_generator · sql_validator · reflector
+│   │   ├── p1/                #   nl2sql_agent · sql_generator · sql_validator · reflector · wiring
 │   │   ├── p2/                #   p2_analysis_agent · planner · fact_extractor · insight_synthesizer · report_writer
 │   │   ├── p3/                #   p3_rca_agent · fact_anchor · drilldown_selector · drill_executor · event_matcher · synthesizer
 │   │   └── shared/            #   schema_linker · sql_executor
@@ -468,8 +475,10 @@ chat-bi-agent/
 │   ├── eval/                  # precision / multi-step / rca evaluators
 │   ├── data/
 │   │   ├── seed.py            #   seed data generation CLI
-│   │   └── events/            #   YAML event library (4 real-world scenarios)
+│   │   ├── *_evaluation.yaml  #   Question sets: P1 (14) / P2 (8) / P3 (7) / metric routing (34)
+│   │   └── events/            #   YAML event library (4 scenarios, all in product_expiry.yaml)
 │   ├── schema/                # table/column metadata loader
+│   ├── mcp_server.py          # MCP server (P1 only; identity pinned server-side)
 │   └── config.py              # YAML + defaults merge
 │
 ├── streamlit_app/
@@ -481,7 +490,9 @@ chat-bi-agent/
 │   ├── run_all_evals.py       # One-click: run P1+P2+P3 + generate markdown report
 │   ├── eval_diff.py           # Baseline regression detector
 │   ├── verify_events.py       # Verify event propagation
-│   ├── rejudge_baseline.py    # Re-run LLM judge
+│   ├── rejudge_baseline.py    # Re-run LLM judge (P3)
+│   ├── replay_p1_scoring.py   # P1 offline re-scoring (replays SQL against the real DB, zero LLM)
+│   ├── replay_p2_scoring.py   # P2 offline re-scoring (reuses the rubric stored in the artifact)
 │   ├── check_metric_catalog.py     # metrics.yaml static gate (columns/symmetry/joins/RLAC)
 │   ├── sweep_prefilter_threshold.py # Re-sweep routing threshold (mandatory after an embedding model swap)
 │   ├── verify_ab.py           # A/B guard (commit/model treated as CRITICAL fields)
@@ -490,7 +501,7 @@ chat-bi-agent/
 ├── config/
 │   ├── local.yaml             # Runtime config (model names, retrieval top_k, PG timeout, ...)
 │   └── metrics.yaml           # Semantic-layer metric catalog (21 metrics)
-├── tests/                     # 847 tests, organized by p1/p2/p3/shared/data/viz/eval/schema
+├── tests/                     # 987 tests, organized by p1/p2/p3/shared/data/viz/eval/schema
 ├── results/                   # Evaluation baseline JSONs + markdown reports
 ├── docker-compose.yml         # Postgres + Langfuse stack + App + Seed
 ├── Dockerfile                 # Streamlit image
@@ -514,7 +525,7 @@ chat-bi-agent/
 | Database | PostgreSQL 16 | Isolated read-only user (chatbi_readonly) |
 | Web UI | Streamlit | Demo-oriented, ~3× dev speed → ADR-009 |
 | Visualization | Plotly | 6 chart types auto-inferred (rule-based) |
-| Testing | pytest (847 tests) + ruff | CI on GitHub Actions |
+| Testing | pytest (987 tests) + ruff | CI on GitHub Actions |
 
 Full rationale and alternatives in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 

@@ -36,12 +36,18 @@
 
 | 路径 | 题量 | 通过 | 平均分 | baseline | 备注 |
 |---|---:|---:|---:|---|---|
-| **P1 NL2SQL** | 8 / 8 | 8 | **0.977** | 2026-08-15（2026-09-08 重述） | 全量题集；多表 JOIN、时间窗、聚合、分行筛选全过。原报 0.965，因评分器把 CTE 名误算成表而低估，见下 |
+| **P1 NL2SQL** | 8 / 14 | 8 | **0.977** | 2026-08-15（2026-09-08 重述） | 公布口径是**原 8 题**；多表 JOIN、时间窗、聚合、分行筛选全过。原报 0.965，因评分器把 CTE 名误算成表而低估，见下 |
 | **P2 多步分析** | 3 / 8 | 1 | **0.626** | 2026-08-17 | 3 维计分（洞察 45% + rubric LLM judge 35% + 多指标 20%）；推理/业务/步骤完整降为诊断 |
 | **P3 RCA 归因** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4 维 rubric，全部命中埋雷事件、零幻觉 |
 
-「题量」列的分母是评测集里的总题数。**P2 只跑了 8 题里的前 3 题**，q004–q008 从未评过分
-——单题 300–500s，补齐要 40–70 分钟，按成本暂缓。
+「题量」列的分母是评测集里的总题数，分子是**跑过并计入本行分数**的题数。两条路径的分子
+小于分母，原因不同：
+
+- **P1 题集后来从 8 题扩到 14 题**（+3 值检索、+3 窗口函数），但公布口径仍锁在**原 8 题**
+  ——q001–q008 自 baseline 落盘后一字未动，这样跨 run 才可比。新增题的实测结果记在
+  [`results/README.md`](results/README.md)，不混进这个数字。
+- **P2 只跑了 8 题里的前 3 题**，q004–q008 从未评过分——单题 300–500s，补齐要 40–70 分钟，
+  按成本暂缓。
 
 **P2 是本项目唯一持续「往下修」的分数**，因为此前的高分有相当部分是白送的。
 2026-08-15/17 分四步修，每一步都是「某个维度声称测 A、实际算 B」：
@@ -436,7 +442,7 @@ P1 的实录 GIF 在页首「三路径能力」表下方。**P2 / P3 没有录�
 chat-bi-agent/
 ├── src/chat_bi_agent/
 │   ├── agents/                # 三个 Agent + 共享组件
-│   │   ├── p1/                #   nl2sql_agent · sql_generator · sql_validator · reflector
+│   │   ├── p1/                #   nl2sql_agent · sql_generator · sql_validator · reflector · wiring
 │   │   ├── p2/                #   p2_analysis_agent · planner · fact_extractor · insight_synthesizer · report_writer
 │   │   ├── p3/                #   p3_rca_agent · fact_anchor · drilldown_selector · drill_executor · event_matcher · synthesizer
 │   │   └── shared/            #   schema_linker · sql_executor
@@ -447,8 +453,10 @@ chat-bi-agent/
 │   ├── eval/                  # precision / multi-step / rca evaluators
 │   ├── data/
 │   │   ├── seed.py            #   种子数据生成 CLI
-│   │   └── events/            #   YAML 埋雷事件库（4 个真实场景）
+│   │   ├── *_evaluation.yaml  #   P1(14 题)/P2(8 题)/P3(7 题)/metric routing(34 题) 题集
+│   │   └── events/            #   YAML 埋雷事件库（4 个场景，同在 product_expiry.yaml）
 │   ├── schema/                # 表/列元数据 loader
+│   ├── mcp_server.py          # MCP server（只暴露 P1，身份锁在服务端）
 │   └── config.py              # YAML + 默认值合并
 │
 ├── streamlit_app/
@@ -460,7 +468,9 @@ chat-bi-agent/
 │   ├── run_all_evals.py       # 一键跑齐 P1+P2+P3 + 生成 markdown 报告
 │   ├── eval_diff.py           # baseline 回归检测
 │   ├── verify_events.py       # 埋雷事件传播验证
-│   ├── rejudge_baseline.py    # 重新跑 LLM judge
+│   ├── rejudge_baseline.py    # 重新跑 LLM judge（P3）
+│   ├── replay_p1_scoring.py   # P1 离线重放评分（重打真库，零 LLM）
+│   ├── replay_p2_scoring.py   # P2 离线重放评分（复用产物里的 rubric）
 │   ├── check_metric_catalog.py     # metrics.yaml 静态门禁（列名/对称性/join/RLAC）
 │   ├── sweep_prefilter_threshold.py # 指标路由阈值重扫（换 embedding 模型后必跑）
 │   ├── verify_ab.py           # A/B 两轮的守门（commit/model 当 CRITICAL 字段）
@@ -469,7 +479,7 @@ chat-bi-agent/
 ├── config/
 │   ├── local.yaml             # 运行时配置（模型名、检索 top_k、PG 超时等）
 │   └── metrics.yaml           # 语义层指标 catalog（21 指标）
-├── tests/                     # 847 测试，按 p1/p2/p3/shared/data/viz/eval/schema 分目录
+├── tests/                     # 987 测试，按 p1/p2/p3/shared/data/viz/eval/schema 分目录
 ├── results/                   # 评估 baseline JSON + markdown 报告
 ├── docker-compose.yml         # Postgres + Langfuse 全套 + App + Seed
 ├── Dockerfile                 # Streamlit 镜像
@@ -493,7 +503,7 @@ chat-bi-agent/
 | 数据库 | PostgreSQL 16 | 只读用户隔离（chatbi_readonly）+ 渲染期行级权限 RLAC → ADR-010 / ADR-017 |
 | Web UI | Streamlit | Demo 取向，3 倍开发速度 → ADR-009 |
 | 可视化 | Plotly | 6 种图表自动推断（rule-based） |
-| 测试 | pytest（847 项） + ruff | CI on GitHub Actions |
+| 测试 | pytest（987 项） + ruff | CI on GitHub Actions |
 
 完整决策理由与替代方案对比见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。
 

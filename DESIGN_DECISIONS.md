@@ -449,6 +449,38 @@ for kw in forbidden:
 `Func`，放进黑名单只会误伤名为 `user` 的业务列。已加测试锁住这条「不过度拦截」——
 黑名单的失败模式是双向的，只测「拦住了坏的」会让它慢慢变成一个误伤机器。
 
+**Update 2026-09-08：执行层的护栏也换成 AST，且改为 fail-closed（`9c38301`）**
+
+上面拿 DB-GPT 的首关键字黑名单当反面样本时，本项目**自己的执行层护栏也还是关键字正则**：
+`SQLExecutor.FORBIDDEN_PATTERN` = `\b(DROP|TRUNCATE|DELETE|...)\b`。校验层（`SQLValidator`）
+一直是 AST，执行层这道纵深防御却没跟上——写 ADR 时只盯着校验层，漏了它。
+
+**要说清楚这两者不是同一个缺陷**。DB-GPT 那个是 `startswith`，失败方向是**漏放**
+（`WITH x AS (DELETE ...)` 、`SELECT 1; DROP TABLE t` 全部放行）；本项目的词边界正则匹配
+全串，上面那几个反例它其实都拦得住。它的失败方向是**误伤**——分不清关键字出现在语句位置
+还是字符串字面量/注释里：
+
+```sql
+SELECT * FROM fct_transaction WHERE description = 'DELETE'   -- 合法只读，被拦死
+SELECT 1 -- 这条不做 INSERT                                   -- 合法只读，被拦死
+```
+
+（一处更正：`9c38301` 的 commit message 写「顺带补住一个老护栏挡不住的洞
+`WITH x AS (DELETE ... RETURNING *) SELECT *`」——这句是错的，逐条实测过，老正则拦得住它。
+AST 化在**这个洞上没有净收益**，真实收益是消掉上面那类误伤，外加判据从「碰巧拦住」
+变成「结构上拦住」。相应的测试仍保留为回归锚。）
+
+改为：`sqlglot.parse()` 后判根节点属不属于只读类型（`Select`/`Union`/`Except`/`Intersect`/
+`Subquery`），再全树扫一遍写操作节点（CTE 里藏 `DELETE` 靠这一步），多语句一律拒绝。
+
+**解析失败一律拒绝执行（fail-closed）**：安全层不能因为「我看不懂」而放行。代价是 sqlglot
+不认的合法方言写法会被误拒——实测风险为 0：78 条真实 SQL（两个题集的 gold + 全部历史
+生成 SQL）零误拒，且 P1 主路径上游的 `SQLValidator` 本来就先用 sqlglot 解析过一遍，
+能走到执行层的 SQL 都是解析得动的。
+
+`FORBIDDEN_PATTERN` 常量保留但不再参与判定，只为向后兼容外部引用。
+**本层始终是纵深防御，真正的只读控制是 `PG_READONLY_USER` 这个只读角色**（[ADR-010](#adr-010)）。
+
 ---
 
 <a id="adr-006"></a>
@@ -719,7 +751,7 @@ Streamlit。三 tab 对应三路径。组件层抽出 `chart_block / dataframe_b
 | [ADR-002](#adr-002) | 自研函数链编排 | Accepted |
 | [ADR-003](#adr-003) | Langfuse v3 self-hosted | Accepted（2026-09-02 埋点可信度四修，见 Update） |
 | [ADR-004](#adr-004) | LLM-as-judge 评分 | Accepted |
-| [ADR-005](#adr-005) | sqlglot AST 校验 | Accepted（2026-09-01/02 补函数级黑名单，见 Update） |
+| [ADR-005](#adr-005) | sqlglot AST 校验 | Accepted（2026-09-01/02 补函数级黑名单；2026-09-08 执行层护栏也换 AST + fail-closed，见两条 Update） |
 | [ADR-006](#adr-006) | Reflector 单次重试 | Accepted |
 | [ADR-007](#adr-007) | YAML 事件库埋雷 | Accepted |
 | [ADR-008](#adr-008) | Embedding + jieba schema 检索 | Accepted |
@@ -1140,6 +1172,7 @@ nl2sql 代码路径**——纯粹是跑间噪声。
 - P1 ✅ `op='IN'` 支持完成
 - P1 ✅ 接线到 P1 主路径完成（前置路由而非 SQLGenerator 内部 try/except）
 - P2 ✅ 指标目录扩容完成——已到 18 个，覆盖 holding/risk/campaign/transaction 四个新域
+  （**这是当时的完成记录**；后续 RLAC 接线又加了 3 个，现为 21 个，见 [ADR-017](#adr-017) 的 Update）
 - P3 ✅ Streamlit "识别到 metric=X" UX 完成——P1 tab 命中时显示业务名 +
   expander 摊开语义层的理解（指标/维度/过滤/时间窗），让"识别错了"能当场被发现
 - P3 保留：Langfuse 看板 `metric_hit_rate` 图。**注意："数据已就绪、只差建图"是错的**

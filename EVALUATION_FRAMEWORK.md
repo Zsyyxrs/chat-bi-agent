@@ -12,12 +12,43 @@ chat-bi-agent 项目包含一个全面的评估框架，覆盖三个分析能力
 
 ### 问题集
 📄 **文件：** `src/chat_bi_agent/data/precision_retrieval_evaluation.yaml`
-- **总问题数：** 8 题 (`precision_q001` - `precision_q008`)
+- **总问题数：** 14 题 (`precision_q001` - `precision_q014`)
+
+题集分**三个口径**，跨 run 比对必须指明用的是哪个——三者的 avg 不可直接互比：
+
+| 口径 | 题目 | 说明 |
+|---|---|---|
+| **原 8 题** | q001–q008 | 权威 baseline 口径，对齐 `results/baseline_p1_eval_2026-08-15.json`（avg **0.9771**，2026-09-08 重述值） |
+| 全量 11 题 | + q009–q011 | 补值检索 |
+| 全量 14 题 | + q012–q014 | 补窗口函数 |
+
 - **问题类型：**
-  - 基础维度导航 (2 题)
-  - 时间窗口过滤 (2 题)
-  - 多表关联与维度导航 (2 题)
-  - 复杂聚合和排序 (2 题)
+  - 基础维度导航 (2 题：q001/q002)
+  - 时间窗口过滤 (2 题：q003/q004)
+  - 多表关联与维度导航 (2 题：q005/q006)
+  - 复杂聚合和排序 (2 题：q007/q008)
+  - **值检索**「用户说的词 → 库里存的值」(3 题：q009–q011)——`上海` 是 province 的取值而非 city、
+    `杭州分行` 要反查 `branch_id` 才能过滤客户、`短期理财` 是 `product_subcategory`
+    的取值而非 `product_category`（那里存 `WEALTH`）
+  - **窗口函数**三族 (3 题：q012–q014)——偏移 `LAG`（环比）/ 排名 `ROW_NUMBER`（组内 Top-N）/
+    帧 `SUM() OVER`（累计占比）
+
+**基线可比性**：q001–q008 自 baseline 落盘后一字未动，新增题只往后追加。
+
+#### 另一个题集：MetricRouter A/B（34 题）
+
+📄 **文件：** `src/chat_bi_agent/data/metric_routing_evaluation.yaml`（`mr_m01` – `mr_n12`）
+
+专门用来测**语义层前置路由**：同一批问句分别在 metric router 开 / 关两种配置下跑，
+比较路由精准率与总分影响。它走**同一个 `PrecisionRetrievalEvaluator`**，只是换个题集：
+
+```bash
+python -m chat_bi_agent.runners.run_p1_eval \
+    --eval-set src/chat_bi_agent/data/metric_routing_evaluation.yaml \
+    --metric-catalog config/metrics.yaml
+```
+
+`--metric-catalog` 不传即 router off，这就是 A/B 的 B 侧。
 
 ### 评估维度
 | 维度 | 权重 | 测量内容 |
@@ -28,6 +59,19 @@ chat-bi-agent 项目包含一个全面的评估框架，覆盖三个分析能力
 | 聚合函数 | 15% | GROUP BY 和聚合函数是否正确 |
 | 结果行数 | 15% | 返回结果是否在预期范围内 |
 | SQL 语法 | 10% | 查询是否可以执行无误 |
+| ~~`result_match`~~ | — | **诊断字段，不计入总分**：与 gold SQL 的结果集是否一致 |
+| ~~`group_by_match`~~ | — | **诊断字段，不计入总分**：gold 的分组键是否全部出现在生成 SQL 的分组键里 |
+
+**两个诊断字段为何刻意不计入 `combined_score`**：现有六维权重和已是 1.0，加进去会改变
+所有历史分数、废掉 baseline 可比性。它们的作用是让六个维度**结构性看不见**的错误可见：
+
+- `result_match` 抓「语义不忠实」——丢约束、丢 Top-N、值域塞错，SQL 合法、表/过滤/聚合全对，
+  但答的是另一个问题。实测 MetricRouter 丢掉 Top-5 时总分只扣 0.075，靠分数根本发现不了。
+- `group_by_match` 抓「聚合粒度错了、而行数和结果集恰好都对得上」。2026-09-08 实测：模型按
+  `customer_name` 而非 `customer_id` 分组（库里 5230 个客户只有 3801 个不同姓名，会并掉不同客户），
+  行数、`result_match`、六个维度**全部为它背书**拿了 0.837；随后把分组键修对，**分数仍是 0.837**，
+  一个千分位都没动。判据用**子集**而非相等：修对后多带的、对 `customer_id` 函数依赖的 name 列
+  一起分组无害；反方向（多分一个键把行拆细）由 `result_count` 与 `result_match` 承担。
 
 ### 通过标准
 - **单题：** combined_score ≥ 0.7
@@ -49,11 +93,27 @@ score = evaluator.evaluate_response(
 )
 ```
 
+**离线重放**（改评分器不必重跑 agent，零 LLM 调用）：
+
+```bash
+# 产物里存了每题生成的 SQL，重新打一次真库就能拿到结果集，评分器其余入参都在题库里
+python scripts/replay_p1_scoring.py results/baseline_p1_eval_2026-08-15.json
+# 写出重述产物 <原名>.restated.json
+python scripts/replay_p1_scoring.py results/baseline_p1_eval_2026-08-15.json \
+    --write results/baseline_p1_eval_2026-08-15.restated.json
+```
+
+与 P2 的重放是同一个思路，但动机不同：P2 是因为单题 300~500s 太贵，**P1 是为了不让评分器的
+修复动到模型这一侧的变量**——P1 同配置反复跑单题波动可达 ±0.4，直接重跑会把「评分器变了」和
+「模型这次手气好」搅在一起。前提是库里仍是产物生成时的同一批数据，重灌过就不可当真。
+
 ### 示例问题
 1. **precision_q001：** 查询上海分行的高净值客户（含过滤条件）
 2. **precision_q003：** 按特定日期过滤交易
 3. **precision_q005：** 单时点存款余额聚合（余额是 stock 指标，不可跨日累加）
 4. **precision_q008：** 时间窗口分析与百分比变化计算
+5. **precision_q013：** 每个城市级分行交易额 Top-3 客户（`ROW_NUMBER` 组内排名；
+   这题的分组键陷阱正是 `group_by_match` 的由来）
 
 ---
 
@@ -176,13 +236,13 @@ agent 输出不变、只换评分器。重评产物保留原 agent 跑的 `ran_a
 
 ### 问题集
 📄 **文件：** `src/chat_bi_agent/data/attribution_evaluation.yaml`
-- **总问题数：** 8 题 (`attribution_q001` - `attribution_q008`)
+- **总问题数：** 7 题 (`attribution_q001` - `attribution_q007`)
 - **问题类型：**
   - 直接事件归因 (2 题)
   - 二阶指标分析 (2 题)
   - 多事件干扰下的信号分离 (1 题)
   - 预测性洞察生成 (1 题)
-  - 困难题与干扰模式 (2 题)
+  - 困难题与干扰模式 (1 题)
 
 ### 评估维度
 | 维度 | 权重 | 测量内容 |
@@ -246,21 +306,23 @@ score = evaluator.evaluate_response(
 
 ## 数据生成与事件传导
 
-所有三个评估框架都依赖一个包含 299,476 行真实银行数据的种子数据库：
+所有三个评估框架都依赖同一个带埋雷事件的种子数据库（**约 556,000 行**，实测见下表）：
 
 ### 种子化过程
 ```bash
 cd <项目根目录>
 
-# 启用事件传导种子化（用于所有三个评估路径）
-python -m chat_bi_agent.data.seed \
-    --host localhost \
-    --port 5432 \
-    --database chatbi \
-    --truncate \
-    --rows 100000 \
-    --with-events
+# 推荐：与 docker-compose 的 seed profile 完全一致的一条命令
+docker compose --profile seed run --rm seed
+
+# 或本机直连（seed 不读 PG_PORT，容器映射在 5433 时必须显式指定）
+python -m chat_bi_agent.data.seed --port 5433 --truncate --with-events
 ```
+
+`--rows` 默认 100000，是**交易表的目标值而非精确值**：事件传导会改写/重分布部分行，
+实测落在 86,000。所有跨 run 可比的评测都必须在同一批种子数据上跑——`expected_result_count`
+这类 gold 字段绑定的是具体行数，reseed 后会静默失真（这个坑踩过一次，见
+[ADR-014](./DESIGN_DECISIONS.md#adr-014)）。
 
 ### 事件传导引擎
 📦 **类：** `PropagationEngine`
@@ -273,8 +335,10 @@ python -m chat_bi_agent.data.seed \
 - **多表支持：** 规则可以针对 fct_transaction、fct_balance_daily 或 fct_holding
 
 ### 事件配置
-📄 **文件：** `src/chat_bi_agent/data/events/`
-- 每个事件定义为 YAML 格式，包含传导规则
+📄 **目录：** `src/chat_bi_agent/data/events/`
+- `EventLoader` 加载该目录下**所有** `*.yaml`，每个文件的 `events:` 下可以放多个事件
+- 目前四个事件都写在**同一个文件** `product_expiry.yaml` 里（文件名是历史遗留，
+  它现在装的不止产品到期一个事件）
 - 规则指定：target_table、target_column、delta(%)、delay_days、ramp_days
 
 ---
@@ -322,20 +386,24 @@ print("期望 SQL：", question["expected_sql"])
 
 ## 数据模式概览
 
-### 维度表 (6 个)
+行数为 2026-09-09 实查（`--truncate --with-events` 灌完后）。
+
+### 维度表 (5 个)
 - `dim_branch` (50 行)：4 级分层结构（总行 → 省行 → 城市行 → 支行）
-- `dim_customer` (5,000 行)：4 个客户等级（HIGH_NET_WORTH、AFFLUENT、MASS、BASIC）
+- `dim_customer` (5,230 行)：4 个客户等级（HIGH_NET_WORTH、AFFLUENT、MASS、BASIC）。
+  **姓名不唯一**——5,230 个客户只有 3,801 个不同姓名，聚合必须用 `customer_id`
 - `dim_product` (91 行)：产品分类（理财、存款、贷款、保险、信用卡）
-- `dim_account` (10,000 行)：账户类型及关联产品
+- `dim_account` (10,380 行)：账户类型及关联产品
 - `dim_date` (730 行)：2025-01 至 2026-12，包含节假日/月末标志
-- (24 个月索引在事实表上)
 
 ### 事实表 (5 个)
-- `fct_transaction` (100,000 行)：日交易数据，含交易类型（存款、支取、转账、支付、利息、费用）
-- `fct_balance_daily` (~51,600 行)：按账户日终余额快照
-- `fct_holding` (3,000 行)：理财/基金持有人快照
-- `fct_risk_event` (3 行)：风险事件（低频率）
-- `fct_campaign_response` (~129,500 行)：营销活动交互数据
+- `fct_transaction` (86,000 行)：日交易数据，含交易类型（存款、支取、转账、支付、利息、费用）
+- `fct_balance_daily` (267,753 行)：按账户日终余额快照
+- `fct_holding` (26,332 行)：理财/基金持有人快照
+- `fct_risk_event` (11 行)：风险事件（低频率）
+- `fct_campaign_response` (159,500 行)：营销活动交互数据
+
+`fct_transaction` 与 `fct_balance_daily` 按月做了范围分区（2025-01 ~ 2026-12，各 24 个子分区）。
 
 ---
 
@@ -354,45 +422,55 @@ print("期望 SQL：", question["expected_sql"])
 ```
 src/chat_bi_agent/
 ├── data/
-│   ├── precision_retrieval_evaluation.yaml    # P1 问题集 (8 题)
+│   ├── precision_retrieval_evaluation.yaml    # P1 问题集 (14 题)
+│   ├── metric_routing_evaluation.yaml         # MetricRouter A/B 题集 (34 题)
 │   ├── multi_step_analysis_evaluation.yaml    # P2 问题集 (8 题)
-│   ├── attribution_evaluation.yaml            # P3 问题集 (8 题)
+│   ├── attribution_evaluation.yaml            # P3 问题集 (7 题)
 │   ├── seed.py                                # 数据生成编排器
 │   ├── transaction_generator.py               # 事实表生成器
 │   ├── dimension_generator.py                 # 维度表生成器
 │   ├── propagation_engine.py                  # 事件传导逻辑
 │   ├── event_loader.py                        # YAML 事件解析器
+│   ├── scenario_anchor.py                     # 埋雷事件的时间/维度锚点
 │   └── events/
-│       ├── anxin_90_expire.yaml
-│       ├── spring_festival_withdrawal.yaml
-│       ├── lpr_cut_q2.yaml
-│       └── qixi_deposit_campaign.yaml
+│       └── product_expiry.yaml                # 四个事件都在这一个文件里
 └── eval/
     ├── precision_retrieval_evaluator.py       # P1 评估器
     ├── multi_step_analysis_evaluator.py       # P2 评估器
-    └── rca_evaluator.py                       # P3 评估器
+    ├── rca_evaluator.py                       # P3 评估器
+    ├── run_metadata.py                        # 产物出处（模型/commit/配置指纹）
+    ├── latency_stats.py                       # 时延统计
+    └── zh_tokenize.py                         # 中文分词（P2 内容词召回用）
+
+scripts/
+├── replay_p1_scoring.py                       # P1 离线重放（重打真库，零 LLM）
+├── replay_p2_scoring.py                       # P2 离线重放（复用产物里的 rubric）
+└── rejudge_baseline.py                        # P3 用当前 prompt 重跑 judge
 ```
 
 ---
 
-## 后续步骤
+## 当前成绩与未决项
 
-1. **实现 Agent**
-   - NL2SQL Agent (P1)：将自然语言转化为 SQL
-   - 分析 Agent (P2)：从查询结果进行多步推理
-   - 根因分析 Agent (P3)：从数据模式中识别根因
+本文档最初写在三个 agent 落地**之前**（数字全填零、先定评判标准再写代码）。三条路径现均已
+实现并跑出 baseline，权威数字见 [README 的记分牌](./README.md)：
 
-2. **集成测试**
-   - 针对实现的 Agent 运行完整评估套件
-   - 监控三条路径的通过率
-   - 识别失败模式并改进训练数据
+| 路径 | 跑过 / 总题 | 通过 | 平均分 | baseline |
+|---|---:|---:|---:|---|
+| P1 NL2SQL | 8 / 14 | 8 | **0.977** | 2026-08-15（2026-09-08 重述） |
+| P2 多步分析 | 3 / 8 | 1 | **0.626** | 2026-08-17 |
+| P3 RCA 归因 | 7 / 7 | 7 | **0.900** · event_hit 7/7 | 2026-06-29 |
 
-3. **性能优化**
-   - 缓存常用查询 (P1)
-   - 并行化多步查询 (P2)
-   - 优化事件模式检测 (P3)
+**未决项（如实列）：**
 
-4. **监控与部署**
-   - 在生产环境中跟踪评估指标
-   - 实现反馈循环以持续改进
-   - 记录边界情况和已知限制
+1. **P2 只跑了 8 题里的前 3 题**，q004–q008 从未评过分（单题 300–500s，按成本暂缓）。
+   由此 `multi_metric_coverage` 的零区分度、`causal_reasoning` / `business_actionability`
+   的量程被压这两条判断**是缺证据、不是缺工时**。
+2. **P1 新增的 q009–q014 尚未纳入公布口径**——公布的仍是「原 8 题」baseline。
+   窗口函数三题跑过探针，结果记在 `results/README.md`。
+3. **评分器盲区仍在扩**：`result_match` 与 `group_by_match` 都是先由一次实测暴露、
+   事后才补上的诊断。它们**不计入总分**，所以不会自动进 baseline 比较——
+   看产物时要单独看这两列。
+4. **`AGG_PATTERN` 仍是正则**：会在字符串/注释里误命中，且漏 `STRING_AGG` /
+   `PERCENTILE_CONT`。它是两侧对称比较的布尔值，误判多数互相抵消，故暂未换 AST——
+   但「多数抵消」只是大概率成立，gold 与生成 SQL 用了不同聚合函数时它会误判成一致。

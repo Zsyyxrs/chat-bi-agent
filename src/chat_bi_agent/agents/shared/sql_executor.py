@@ -64,7 +64,10 @@ _READ_ONLY_ROOTS = (
 
 # 树内任意位置出现即拒绝。CTE 里藏写操作是真实可行的
 # （PG 支持 `WITH x AS (DELETE ... RETURNING *) SELECT * FROM x`，
-# 根节点是 SELECT 但它真的删数据），只看开头两个词的护栏挡不住。
+# 根节点是 SELECT 但它真的删数据），只看**开头两个词**的护栏挡不住这个。
+# 注：被替换掉的那版词边界正则其实也拦得住这条（它匹配全串，不是 startswith）——
+# AST 化在这个洞上没有净收益，真实收益是消掉字面量/注释里的误伤。这里全树扫描的意义
+# 是让「拦住」从碰巧变成结构性成立。
 # Command 兜住 sqlglot 解析不出具体类型的语句（VACUUM / CALL 之类）。
 _WRITE_NODES = (
     sqlglot.exp.Insert,
