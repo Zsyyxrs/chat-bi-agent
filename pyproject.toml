@@ -33,6 +33,11 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.4.0",
 ]
+# MCP server（src/chat_bi_agent/mcp_server.py）。不进主依赖：不用 MCP 的人
+# 不该被迫装它，Streamlit / eval / CI 三条主路径都不 import 它。
+mcp = [
+    "mcp>=1.12,<3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
