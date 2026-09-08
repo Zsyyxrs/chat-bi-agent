@@ -203,7 +203,10 @@ python scripts/eval_diff.py --phase p3       # 对比最近两个 P3 baseline
   python scripts/sweep_prefilter_threshold.py
   ```
 
-  结果 JSON 里 `result_match` 段是**结果集比对**诊断：它抓的是分数看不见的"语义不忠实"（丢约束、丢 Top-N、值域塞错——SQL 合法、表/过滤/聚合全对，但答的是另一个问题）。`mismatched_ids` 直接点名是哪几题。刻意不计入 `combined_score`，以免废掉历史 baseline 的可比性。
+  结果 JSON 里有**两个不计入总分的诊断段**，专抓分数看不见的错误，`mismatched_ids` 都会直接点名是哪几题。刻意不进 `combined_score`，以免废掉历史 baseline 的可比性。
+
+  - `result_match`（结果集比对）：抓"语义不忠实"——丢约束、丢 Top-N、值域塞错，SQL 合法、表/过滤/聚合全对，但答的是另一个问题。
+  - `group_by_match`（分组键比对）：抓**聚合粒度错了、而行数和结果集恰好都对得上**。2026-09-08 实测的由来：模型按 `customer_name` 而非 `customer_id` 分组（库里 5230 个客户只有 3801 个不同姓名），行数、`result_match`、六个评分维度全部为它背书拿了 0.837；随后修对分组键，**分数仍是 0.837，一个千分位都没动**。判据用子集而非相等（多带对 id 函数依赖的 name 列无害）；48 条 gold SQL 解析零失败。
 
   catalog 改动后请跑一遍全组合回归（21 metric × 全部 dim/filter 真打 PG），模板里的列名只有真正 execute 才会被校验：
 

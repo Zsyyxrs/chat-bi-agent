@@ -174,15 +174,19 @@ def _build_metric_router(args: argparse.Namespace) -> MetricRouter | None:
     )
 
 
-def _summarize_result_match(per_question: list[dict]) -> dict:
-    """结果集比对汇总。与 combined_score 无关，专门用来暴露"语义不忠实"。
+def _summarize_diagnostic(per_question: list[dict], field: str) -> dict:
+    """诊断字段汇总。与 combined_score 无关，专门用来暴露分数看不见的那类错误。
 
-    分数看不见的那类错误在这里现形：SQL 合法、表/过滤/聚合全对，
-    但答的是另一个问题（丢约束、丢 Top-N、值域塞错），结果集必然对不上。
+    两个字段共用这一份逻辑，不各写一份——本项目在「双写必然漂移」上吃过两次亏：
+      result_match    SQL 合法、表/过滤/聚合全对，但答的是另一个问题（丢约束、
+                      丢 Top-N、值域塞错），结果集必然对不上
+      group_by_match  聚合粒度错了（如按 customer_name 而非 customer_id 分组，
+                      姓名不唯一会并掉不同客户），而行数与结果集可能恰好都对得上
+
+    None 不进分母：「没测」和「全错」是两回事，全 None 时 match_rate 必须是 None。
     """
-    vals = [r.get("result_match") for r in per_question]
-    matched = sum(1 for v in vals if v is True)
-    mismatched = [r["question_id"] for r in per_question if r.get("result_match") is False]
+    matched = sum(1 for r in per_question if r.get(field) is True)
+    mismatched = [r["question_id"] for r in per_question if r.get(field) is False]
     n_eval = matched + len(mismatched)
     return {
         "n_evaluated": n_eval,
@@ -414,6 +418,7 @@ def main(args: argparse.Namespace | None = None) -> int:
                 "n_few_shot_used": len(agent_result.retrieved_example_ids or []),
                 "expected_route": q.get("expected_route"),
                 "result_match": score.result_match,
+                "group_by_match": score.group_by_match,
             }
         )
 
@@ -469,7 +474,8 @@ def main(args: argparse.Namespace | None = None) -> int:
         "passed_questions": evaluation.passed_questions,
         "pass_rate": round(evaluation.pass_rate, 4),
         "avg_score": round(evaluation.avg_score, 4),
-        "result_match": _summarize_result_match(per_question),
+        "result_match": _summarize_diagnostic(per_question, "result_match"),
+        "group_by_match": _summarize_diagnostic(per_question, "group_by_match"),
         "latency_ms": lat_stats,
         "per_question": per_question,
     }

@@ -7,6 +7,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from typing import Optional
 
+import sqlglot
 import yaml
 
 AGG_PATTERN = re.compile(r"\b(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
@@ -36,6 +37,15 @@ class PrecisionScore:
     # 废掉 baseline 可比性。它的作用是让"语义不忠实"可见：mr_n12 丢掉 Top-5 时
     # 表/过滤/聚合全对，总分只扣 0.075，靠分数根本发现不了。
     result_match: bool | None = None
+    # 诊断字段：gold 的分组键是否**全部**出现在生成 SQL 的分组键里。
+    # None = 未评估（任一侧解析失败，或两侧都没有 GROUP BY）。
+    # 与 result_match 一样**刻意不计入 combined_score**。理由见 2026-09-08 的 q013：
+    # 模型按 customer_name 而非 customer_id 聚合（姓名不唯一，会并掉不同客户），
+    # 行数、result_match、六个维度全部为它背书，拿 0.837；随后修对分组键，
+    # **分数仍是 0.837**，一个千分位都没动——现有维度根本不在度量聚合粒度。
+    # 用子集而非相等：修对后的 SQL 多带了对 id 函数依赖的 name 列，一起分组无害；
+    # 反方向（多分一个键把行拆细）由 result_count 与 result_match 承担。
+    group_by_match: bool | None = None
 
     @property
     def combined_score(self) -> float:
@@ -96,6 +106,61 @@ class PrecisionEvaluation:
             Details:
             --------
         """)
+
+
+def group_by_keys(sql: str) -> set[str] | None:
+    """把 SQL 里所有 GROUP BY 的分组键归一成**裸列名集合**。
+
+    用途见 `PrecisionScore.group_by_match`：抓「聚合粒度错了但结果看起来对」。
+
+    三处归一都是必要的，否则这个诊断对本项目的 gold 直接失效：
+    - **剥表别名**：gold 写 `ft.branch_id`、生成 SQL 写 `t.branch_id`，别名不同不是粒度不同。
+    - **解析序号**：gold 里大量 `GROUP BY 1, 2`，不按 SELECT 列表回解就什么都拿不到。
+    - **穿透所有 scope**：分组常发生在子查询/CTE 里，只看最外层等于什么都看不到。
+
+    表达式（如 `DATE_TRUNC('month', dt)`）取它引用到的全部列名——按月分组的粒度
+    取决于 dt。解析失败返回 None（未知），没有 GROUP BY 返回空集合。
+    """
+    try:
+        trees = sqlglot.parse(sql, read="postgres")
+    except Exception:
+        return None
+    if not trees or any(t is None for t in trees):
+        return None
+
+    keys: set[str] = set()
+    for tree in trees:
+        for select in tree.find_all(sqlglot.exp.Select):
+            group = select.args.get("group")
+            if group is None:
+                continue
+            projections = select.expressions
+            for key in group.expressions:
+                target = key
+                # GROUP BY 1 → 回解成 SELECT 列表第 1 项
+                if isinstance(key, sqlglot.exp.Literal) and key.is_int:
+                    idx = int(key.name) - 1
+                    if not (0 <= idx < len(projections)):
+                        continue
+                    target = projections[idx]
+                for col in target.find_all(sqlglot.exp.Column):
+                    keys.add(col.name)
+    return keys
+
+
+def _compare_group_by(gold_sql: str, generated_sql: str) -> bool | None:
+    """gold 的分组键是否全部出现在生成 SQL 的分组键里。任一端不可解就返 None。
+
+    两边都没有 GROUP BY 时同样返 None 而不是 True——这个诊断对非聚合题没有意义，
+    报 True 会让「已检查且通过」的题数虚高。
+    """
+    gold_keys = group_by_keys(gold_sql or "")
+    gen_keys = group_by_keys(generated_sql or "")
+    if gold_keys is None or gen_keys is None:
+        return None
+    if not gold_keys and not gen_keys:
+        return None
+    return gold_keys.issubset(gen_keys)
 
 
 def _canonical_value(v: object) -> str:
@@ -267,6 +332,9 @@ class PrecisionRetrievalEvaluator:
 
         # 7. 结果集比对（诊断，不进总分）
         score.result_match = self._compare_with_gold(question, actual_results, execution_error)
+
+        # 8. 分组键比对（诊断，不进总分）
+        score.group_by_match = _compare_group_by(question.get("expected_sql", ""), generated_sql)
 
         return score
 
