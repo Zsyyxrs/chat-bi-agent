@@ -108,6 +108,33 @@ class PrecisionEvaluation:
         """)
 
 
+_TABLE_RE = re.compile(r"(?:FROM|JOIN)\s+(\w+)", re.IGNORECASE)
+
+
+def tables_in_sql(sql: str) -> set[str]:
+    """抽出 SQL 真正读到的表名（小写），**排除同查询内定义的 CTE**。
+
+    2026-09-08 修：原实现是正则 `(?:FROM|JOIN)\\s+(\\w+)`，把 `FROM txn_agg`
+    这种对 CTE 的引用也算成表。后果不是随机噪声而是**系统性偏置**——它惩罚
+    「用 CTE 写」这个风格选择，且不对称：gold 惯用派生子查询（`FROM (` 不匹配
+    `\\w+`，逃过），生成 SQL 用 `WITH` 就中招。table_score 权重 0.2 且计入
+    combined_score，四道用 CTE 的题（q008/q012/q013/q014）表选择本应满分却被
+    算成 0.5~0.6，各扣 0.08~0.10；已发布的 P1 baseline 因此被低估
+    （0.9646 实为 0.9771）。偏置还随题目难度上升——分析型 SQL 天然用 CTE。
+
+    解析失败时**退回老正则**而不是返回空集合：空集合会让 Jaccard 变 0、
+    把 table_score 打到底，等于因为「我解析不了」而判它零分。
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read="postgres")
+    except Exception:
+        tree = None
+    if tree is None:
+        return {m.lower() for m in _TABLE_RE.findall(sql or "")}
+    ctes = {c.alias_or_name.lower() for c in tree.find_all(sqlglot.exp.CTE)}
+    return {t.name.lower() for t in tree.find_all(sqlglot.exp.Table)} - ctes
+
+
 def group_by_keys(sql: str) -> set[str] | None:
     """把 SQL 里所有 GROUP BY 的分组键归一成**裸列名集合**。
 
@@ -352,17 +379,13 @@ class PrecisionRetrievalEvaluator:
             return None  # gold 自己跑不通，不能据此判 agent
         return _result_sets_equal(gold_rows, actual_results)
 
-    def _extract_tables_from_expected_sql(self, sql: str) -> set[str]:
-        """从期望的 SQL 中提取表名。"""
-        pattern = r"(?:FROM|JOIN)\s+(\w+)"
-        matches = re.findall(pattern, sql, re.IGNORECASE)
-        return set(m.lower() for m in matches)
-
     def _extract_tables_from_sql(self, sql: str) -> set[str]:
-        """从生成的 SQL 中提取表名。"""
-        pattern = r"(?:FROM|JOIN)\s+(\w+)"
-        matches = re.findall(pattern, sql, re.IGNORECASE)
-        return set(m.lower() for m in matches)
+        """抽表名。gold 与生成 SQL **必须同源**——原本这里是两个函数体逐字相同的
+        方法，改一个漏一个就会让两侧按不同规则抽表，Jaccard 直接失去意义。"""
+        return tables_in_sql(sql)
+
+    # gold 侧沿用同一个实现（保留旧名，调用方无需改动）
+    _extract_tables_from_expected_sql = _extract_tables_from_sql
 
     def evaluate_batch(self, results: list[dict]) -> PrecisionEvaluation:
         """

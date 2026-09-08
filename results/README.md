@@ -34,13 +34,16 @@ See [EVALUATION_FRAMEWORK.md](../EVALUATION_FRAMEWORK.md) for detailed evaluatio
 ## 窗口函数探针（2026-09-08）
 
 `baseline_p1_eval_2026-09-08.window-probe.json` —— 只跑新增的 q012~q014 三题，
-不是一次全量 baseline，**不要拿它的 avg 与 0.965 直接比**（口径不同、题数不同）。
+不是一次全量 baseline，**不要拿它的 avg 与全量 baseline 直接比**（口径不同、题数不同）。
+
+下表的 score 已按 2026-09-08 的评分器修复重述（`*.restated.json`），括号内是原报值。
+三题全部用了 CTE，因此原先每题都被那个「CTE 名误算成表」的 bug 白扣了 0.08~0.10。
 
 | 题 | 窗口函数族 | 生成的写法 | 行数 | result_match | score |
 |---|---|---|---|---|---|
-| q012 | 偏移 | `LAG() OVER (ORDER BY 月)` + CASE WHEN 防除零 | 6/6 ✅ | ✅ | 0.900 |
-| q013 | 排名 | `DENSE_RANK() OVER (PARTITION BY 分行)` | 45/45 ✅ | ✅ | 0.837 |
-| q014 | 帧 | `SUM() OVER (ORDER BY ... ROWS UNBOUNDED PRECEDING)` + `SUM() OVER ()` | 20/20 ✅ | ✅ | 0.817 |
+| q012 | 偏移 | `LAG() OVER (ORDER BY 月)` + CASE WHEN 防除零 | 6/6 ✅ | ✅ | **1.000**（原报 0.900） |
+| q013 | 排名 | `DENSE_RANK() OVER (PARTITION BY 分行)` | 45/45 ✅ | ✅ | **0.917**（原报 0.837） |
+| q014 | 帧 | `SUM() OVER (ORDER BY ... ROWS UNBOUNDED PRECEDING)` + `SUM() OVER ()` | 20/20 ✅ | ✅ | **0.917**（原报 0.817） |
 
 接线：默认档（few-shot off、metric router off、value index on），与 `run_all_evals.py` 同源。
 模型 qwen3.7-flash-2026-07-15，三题均 **attempts=1，零反思重试**。
@@ -88,3 +91,26 @@ GROUP BY customer_id」（`get_ddl_text` 会把列描述送进 prompt，所以�
 这是「评分维度抓不住」最干净的一次演示：不是它们打分打偏了，是它们根本不在
 度量这件事。补检测（`group_by_match` 诊断字段）因此仍然必要——源头修的是这一次，
 检测补的是下一次。
+
+### 再后续：评分器的 CTE 偏置已修，全部 P1 数字重述（2026-09-08）
+
+上面那张表里 q013 的 0.837、以及正文里「六个维度全部为它背书」的说法，本身还压着
+另一个 bug：`table_score` 的抽取正则 `(?:FROM|JOIN)\s+(\w+)` 把 `FROM txn_agg` 这种
+**对 CTE 的引用**也算成表名。
+
+这不是随机噪声而是**系统性偏置**，而且不对称——gold 惯用派生子查询（`FROM (` 不匹配
+`\w+`，逃过），生成 SQL 用 `WITH` 就中招。四道用 CTE 的题表选择本应全是 1.000：
+
+| 产物 | 原 avg | 重述 avg | 变化来源 |
+|---|---:|---:|---|
+| `baseline_p1_eval_2026-08-14.json` | 0.9771 | 0.9771 | 无（该次无 CTE，作为对照） |
+| `baseline_p1_eval_2026-08-15.json` | 0.9646 | **0.9771** | 仅 q008（0.900 → 1.000） |
+| `...2026-09-08.window-probe.json` | 0.8511 | **0.9445** | q012/q013/q014 全部 |
+
+重打分走 `scripts/replay_p1_scoring.py`：**零 LLM 调用**，SQL 取自原产物、重打真库，
+因此新旧差异纯粹来自评分器，不掺模型跑间噪声。原产物一律保留，重述结果另写
+`*.restated.json`。
+
+**连带修正一条判断**：README 原先写「同一配置反复跑 avg 落在 0.965~0.977，差异全部来自
+q008 的跑间抖动」。重述后 08-14 与 08-15 两次跑**都是 0.9771**——那个「回退」不存在。
+两次之间真正变的是模型把 q008 换成了 CTE 写法，而评分器为这个**等价**写法扣了 0.1。

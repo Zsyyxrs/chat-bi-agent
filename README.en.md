@@ -37,7 +37,7 @@ to a path without row-level control. See [docs/RUNBOOK.md §4bis](docs/RUNBOOK.m
 
 | Track | Questions | Passed | Avg Score | Baseline | Notes |
 |---|---:|---:|---:|---|---|
-| **P1 NL2SQL** | 8 / 8 | 8 | **0.965** | 2026-08-15 | Full question set; multi-table JOIN, time windows, aggregation, branch filters — all pass |
+| **P1 NL2SQL** | 8 / 8 | 8 | **0.977** | 2026-08-15 (restated 2026-09-08) | Full question set; multi-table JOIN, time windows, aggregation, branch filters — all pass. Originally reported 0.965, understated by a scorer bug — see below |
 | **P2 Multi-Step Analysis** | 3 / 8 | 1 | **0.626** | 2026-08-17 | 3 scored dims (insight 45% + rubric LLM judge 35% + metric coverage 20%); reasoning/business/step-completeness demoted to diagnostics |
 | **P3 RCA Attribution** | 7 / 7 | 7 | **0.900** · event_hit **7/7** | 2026-06-29 | 4-dim rubric, all events matched, zero hallucination |
 
@@ -99,13 +99,26 @@ conflate "the scorer changed" with "the agent ran differently", so rescoring is 
   the prerequisite for both points above: only at n=8 can a dimension be shown to discriminate.
   Deferred on cost, so those two items **lack evidence, not effort**.
 
-**Do not read P1's 0.965 as a precise value**: repeated runs of the same configuration land between
-**0.965 and 0.977**, and the spread comes **entirely** from one question, q008 (observed 0.90 / 0.93
-/ 1.00); the other seven are identical run to run. q008 is also the hardest of the eight (two
-windows + conditional aggregation + percent change + Top-N). The table reports the most recent
-reproducible run (`commit_dirty=false`) — by that rule, not by picking the best-looking number.
-Run-to-run noise of this magnitude is normal in this project; judge changes per-question rather
-than by fractions of a point on the average. See [ADR-013](./DESIGN_DECISIONS.md#adr-013).
+**Restated 2026-09-08: 0.965 → 0.977.** The scorer's `table_score` was counting CTE names as
+tables — its regex `(?:FROM|JOIN)\s+(\w+)` matches `FROM txn_agg`, a reference to a CTE. This is
+not random noise but a **systematic bias**, and an asymmetric one: gold SQL here favours derived
+subqueries (`FROM (` does not match), while generated SQL using `WITH` gets penalised. q008's table
+selection should have been perfect and was scored 0.5, costing it a flat 0.1. After the fix,
+[`scripts/replay_p1_scoring.py`](./scripts/replay_p1_scoring.py) re-scored the stored artifacts
+offline (**zero LLM calls** — the recorded SQL is re-executed against the real database): the
+8-question average goes 0.9646 → **0.9771**, with the other seven questions unchanged.
+
+**This also corrects an earlier claim.** This paragraph used to say the 0.965–0.977 spread came
+entirely from run-to-run noise on q008. After restatement the 2026-08-14 and 08-15 runs are **both
+0.9771** — that regression never existed. What actually changed between runs was that the model
+rewrote q008 using a CTE, and the scorer docked 0.1 for that **equivalent** form. The real
+run-to-run variation was in SQL *shape*, not in quality — which is itself another angle on why
+determinism is worth paying for: the model produced two equivalent queries and my scorer gave them
+two different scores.
+
+Run-to-run variation still exists (q008 is the hardest of the eight: two windows + conditional
+aggregation + percent change + Top-N), and changes should still be judged per-question rather than
+by fractions of a point on the average. See [ADR-013](./DESIGN_DECISIONS.md#adr-013).
 
 <details>
 <summary>Why P1 changed from "6 questions / 1.000" to the full 8-question set</summary>
@@ -123,8 +136,8 @@ The previously published **6 questions / 1.000** needed two corrections, both ma
    than raising an error. Backfilled from measured values.
 
 After the fixes the **6-question figure returns to 1.000** (and reproduces); the full 8-question
-average is 0.965 with 8/8 passing. The gap comes from q005, where the agent genuinely dropped the
-"term deposits" constraint.
+average is 0.977 (restated 2026-09-08; originally reported 0.965) with 8/8 passing. The gap comes
+from q005, where the agent genuinely dropped the "term deposits" constraint.
 
 Editing gold risks fitting it to the agent, so a boundary was drawn: fix only golds that violate
 business semantics, or that fail to implement a constraint their own prompt states. Differences of
