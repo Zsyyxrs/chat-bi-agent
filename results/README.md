@@ -68,3 +68,23 @@ See [EVALUATION_FRAMEWORK.md](../EVALUATION_FRAMEWORK.md) for detailed evaluatio
    而不是在 gold 里写 cast 迁就它。用首跑记录下来的那条真实 agent SQL 复验：去掉 gold 的
    cast 后 `result_match` 仍为 True。改它是安全的——`result_match` 刻意不计入
    `combined_score`，动不了任何历史分数。上表的 q012 ✅ 是修复后的判定。
+
+### 后续：q013 的「按姓名聚合」已在源头修掉（2026-09-08 当天）
+
+在 `schema_docs.yaml` 的 `customer_name` 列描述里点明「不唯一，聚合到客户粒度必须
+GROUP BY customer_id」（`get_ddl_text` 会把列描述送进 prompt，所以这句真的到得了模型眼前；
+`tests/schema/test_schema_loader.py` 断言的是 DDL 文本而不是 yaml 原文——注释写在
+没人加载的地方等于没写）。重跑 q013：
+
+| | GROUP BY | 窗口 PARTITION BY | score |
+|---|---|---|---|
+| 改提示前 | `b.branch_name, c.customer_name` ❌ | `branch_name` | 0.837 |
+| 改提示后 | `b.branch_id, b.branch_name, c.customer_id, c.customer_name` ✅ | `branch_id` ✅ | **0.837** |
+
+模型不止改了客户分组键，还自己把窗口的 `PARTITION BY` 也从 `branch_name` 换成了
+`branch_id`（同名分行同理会撞）——这一步提示里没写。
+
+**分数一个千分位都没动。** SQL 从语义错误变成语义正确，六个评分维度合起来纹丝不动。
+这是「评分维度抓不住」最干净的一次演示：不是它们打分打偏了，是它们根本不在
+度量这件事。补检测（`group_by_match` 诊断字段）因此仍然必要——源头修的是这一次，
+检测补的是下一次。

@@ -89,3 +89,28 @@ def test_get_ddl_text_ignores_hits_belonging_to_other_tables(fake_yaml):
     ddl = loader.get_ddl_text("t1", value_hits=[ValueHit("t2", "id", "999")])
 
     assert "-- examples" not in ddl
+
+
+def test_customer_name_ddl_warns_that_names_are_not_unique():
+    """姓名不唯一这件事必须出现在**真正进 prompt 的那段文本**里。
+
+    2026-09-08 实测（P1 题集新增 q013「每个城市分行交易额前 3 的客户」）：模型写了
+    `GROUP BY b.branch_name, c.customer_name`——按姓名而非客户号聚合。库里 5230 个客户
+    只有 3801 个不同姓名，2026-06 单月就有 11 组「同分行同名且都有交易」，按姓名聚合
+    会把不同客户的交易额并成一笔。
+
+    那次没被判错纯属运气：11 组冲突没有一组落进任何分行的 top 3（2026-01~09 全月份
+    全分行实测 0 例），于是行数、result_match、六个评分维度全部为它背书，拿了 0.837。
+
+    断言 get_ddl_text 而不是断言 yaml 原文：注释写在没人加载的地方等于没写，
+    只有进了 DDL 文本才真的送到模型眼前。
+    """
+    from chat_bi_agent.schema.loader import SchemaLoader
+
+    loader = SchemaLoader()
+    loader.load()
+    ddl = loader.get_ddl_text("dim_customer")
+
+    name_line = next(ln for ln in ddl.splitlines() if ln.strip().startswith("customer_name "))
+    assert "不唯一" in name_line
+    assert "customer_id" in name_line, "得直接给出正确做法，而不只是说姓名有重复"

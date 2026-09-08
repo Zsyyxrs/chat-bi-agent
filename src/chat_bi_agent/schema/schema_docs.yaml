@@ -33,7 +33,7 @@ tables:
       - branch_id → dim_branch.branch_id
     columns:
       - {name: customer_id, type: VARCHAR(16), description: "客户号（如 CUST_000001）"}
-      - {name: customer_name, type: VARCHAR(64), description: "客户姓名（演示数据，非真实）"}
+      - {name: customer_name, type: VARCHAR(64), description: "客户姓名（演示数据，非真实）。**不唯一**：5230 个客户只有 3801 个不同姓名，同一分行内也存在同名客户。聚合到客户粒度时必须 GROUP BY customer_id，按 customer_name 分组会把不同客户合并成一个"}
       - {name: id_no_masked, type: VARCHAR(32), description: "身份证号脱敏（前 4 + 后 4）"}
       - {name: gender, type: VARCHAR(8), description: "性别：M 男 / F 女 / U 未知"}
       - {name: birth_date, type: DATE, description: "出生日期"}
@@ -48,7 +48,7 @@ tables:
     embed_text: |
       表名 dim_customer：客户维度表，零售客户基础信息
       业务域：客户
-      关键列：customer_id（客户号）、customer_name（姓名）、customer_tier（层级，DB 存英文枚举，WHERE 用英文：HIGH_NET_WORTH/AFFLUENT/MASS/BASIC；题面写"高净值/私行"应映射为 HIGH_NET_WORTH，不要直接把中文当字段值）、branch_id（所属分行）、risk_appetite（风险偏好 C1-C5）、aum（资产规模）、age、gender
+      关键列：customer_id（客户号，客户粒度聚合的唯一正确分组键）、customer_name（姓名，不唯一、不可用作分组键）、customer_tier（层级，DB 存英文枚举，WHERE 用英文：HIGH_NET_WORTH/AFFLUENT/MASS/BASIC；题面写"高净值/私行"应映射为 HIGH_NET_WORTH，不要直接把中文当字段值）、branch_id（所属分行）、risk_appetite（风险偏好 C1-C5）、aum（资产规模）、age、gender
       典型用途：按分行/层级/风险偏好筛选客户；高净值/私行/财富客户画像分析
 
   - name: dim_product
