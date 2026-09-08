@@ -3,6 +3,7 @@
 import re
 import textwrap
 from dataclasses import dataclass, field
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Optional
 
@@ -97,21 +98,40 @@ class PrecisionEvaluation:
         """)
 
 
+def _canonical_value(v: object) -> str:
+    """单个值归一成字符串。浮点抹末位噪声，日期/时间戳抹表示差异。
+
+    日期这一支是 2026-09-08 补的。此前非数值列一律走 str(v)，于是 gold 的
+    `DATE_TRUNC('month', dt)`（timestamptz）与生成 SQL 的同式 `::DATE`（date）
+    在**金额逐行完全相同**时仍被判为不一致——"2026-01-01 00:00:00+08:00" 与
+    "2026-01-01" 字符串不等。这是类级误判，凡 gold 返回 timestamp 列的题都会中招。
+
+    只归一「零点时间戳 → 日期」这一种情形，不敢再宽：带真实时分秒的值必须照旧
+    逐值比，否则会把「按天聚合」和「按小时聚合」判成相同。代价是零点时间戳的时区
+    被丢弃——两个结果集都来自同一个库同一次会话，跨时区混比不是真实场景，
+    而 date/timestamp 表示差异是每道日期题都会碰上的。
+    """
+    if isinstance(v, float):
+        return f"{round(v, 4):.4f}"
+    if isinstance(v, int) and not isinstance(v, bool):
+        return f"{float(v):.4f}"
+    # datetime 是 date 的子类，必须先判它
+    if isinstance(v, datetime):
+        if v.time() == time(0, 0):
+            return v.date().isoformat()
+        return v.isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
+    return str(v)
+
+
 def _normalize_row(row: dict) -> tuple:
-    """把一行归一成可比较的值元组：忽略列名与列序，浮点抹掉末位噪声。
+    """把一行归一成可比较的值元组：忽略列名与列序。
 
     忽略列名是必要的——gold 与生成 SQL 的别名经常不同
     （branch_id vs bid、avg_balance vs avg_deposit_balance）。
     """
-    vals = []
-    for v in row.values():
-        if isinstance(v, float):
-            vals.append(f"{round(v, 4):.4f}")
-        elif isinstance(v, int) and not isinstance(v, bool):
-            vals.append(f"{float(v):.4f}")
-        else:
-            vals.append(str(v))
-    return tuple(sorted(vals))
+    return tuple(sorted(_canonical_value(v) for v in row.values()))
 
 
 def _result_sets_equal(gold: list[dict], actual: list[dict]) -> bool:

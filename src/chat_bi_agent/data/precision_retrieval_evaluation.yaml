@@ -349,13 +349,14 @@ evaluation_questions:
   # 这批引入第三个口径「全量 14 题」。跨 run 比对务必声明用的是哪个口径。
   # ============================================================
 
-  # gold 里的 `::DATE` 是必须的，不要"简化"掉。2026-09-08 首跑实测：模型写
-  # `DATE_TRUNC('month', dt)::DATE`，gold 原本没有这个 cast，于是两边金额逐行完全相同、
-  # 却被 result_match 判为不一致——_normalize_row 对非数值列走 str(v)，
-  # timestamptz 的 "2026-01-01 00:00:00+08:00" 与 date 的 "2026-01-01" 字符串不等。
-  # 这是评测器的**类级缺陷**（任何 gold 返回 timestamp 列的题都会被误判），
-  # 已知未修；此处先让本题可比。result_match 不计入 combined_score，所以它误判时
-  # 分数看不出来，只有诊断字段是红的——正是"静默失效"的又一种形态。
+  # 本题首跑（2026-09-08）曾暴露评测器的一个类级缺陷：模型写
+  # `DATE_TRUNC('month', dt)::DATE` 返回 date，gold 返回 timestamptz，两边金额逐行
+  # 完全相同却被 result_match 判为不一致——_normalize_row 对非数值列走 str(v)，
+  # "2026-01-01 00:00:00+08:00" 与 "2026-01-01" 字符串不等。凡 gold 返回 timestamp
+  # 列的题都会中招；且 result_match 不计入 combined_score，误判时分数看不出来，
+  # 只有诊断字段是红的。
+  # **已在评测器侧修掉**（_canonical_value 把零点时间戳归一到日期，
+  # tests/eval/test_result_match.py 三条守门），所以这里的 gold 不需要写 cast 迁就它。
   - id: precision_q012
     question: |
       查询杭州分行（BR_CITY_0000）2026 年 1 月到 6 月每个月的交易总金额，
@@ -370,7 +371,7 @@ evaluation_questions:
           / NULLIF(LAG(m.total_amount) OVER (ORDER BY m.month), 0) * 100, 2
         ) AS mom_pct
       FROM (
-        SELECT DATE_TRUNC('month', ft.dt)::DATE AS month,
+        SELECT DATE_TRUNC('month', ft.dt) AS month,
                SUM(ft.amount) AS total_amount
         FROM fct_transaction ft
         WHERE ft.branch_id = 'BR_CITY_0000'

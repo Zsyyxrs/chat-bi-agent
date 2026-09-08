@@ -88,3 +88,48 @@ def test_result_match_does_not_change_combined_score():
     )
     assert with_match.result_match is False
     assert with_match.combined_score == plain.combined_score
+
+
+# ---- 日期/时间戳的表示差异不该算作"结果不一致" ----
+#
+# 2026-09-08 实测（新增窗口函数题 q012）：gold 写 `DATE_TRUNC('month', dt)` 返回
+# timestamptz，模型写 `DATE_TRUNC('month', dt)::DATE` 返回 date，**两边金额逐行完全
+# 相同**，却被判 result_match=False——归一化对非数值列走 str(v)，
+# "2026-01-01 00:00:00+08:00" != "2026-01-01"。
+#
+# 这是类级缺陷：任何 gold 返回 timestamp 列的题都会中招。且因为 result_match 不计入
+# combined_score，它误判时分数看不出来，只有诊断字段是红的——「有测试、还是绿的，
+# 反而让人以为已经防住了」的又一种形态。
+
+
+def test_date_and_midnight_timestamp_of_the_same_day_are_equal():
+    """月/日粒度聚合最常见的一对写法，语义相同就不该判为不一致。"""
+    from datetime import date, datetime, timedelta, timezone
+
+    tz8 = timezone(timedelta(hours=8))
+    ev = _ev([{"month": datetime(2026, 1, 1, 0, 0, tzinfo=tz8), "amt": 3279010.57}])
+    s = ev.evaluate_response(
+        "precision_q001", "SELECT 1", [{"txn_month": date(2026, 1, 1), "amt": 3279010.57}], None
+    )
+    assert s.result_match is True
+
+
+def test_timestamps_with_a_real_time_of_day_still_compare_by_their_time():
+    """只归一"零点"这一种情形。带真实时分秒的时间戳必须照旧逐值比，
+    否则会把「按天聚合」和「按小时聚合」判成相同。"""
+    from datetime import datetime
+
+    ev = _ev([{"t": datetime(2026, 1, 1, 9, 30)}])
+    s = ev.evaluate_response(
+        "precision_q001", "SELECT 1", [{"t": datetime(2026, 1, 1, 14, 0)}], None
+    )
+    assert s.result_match is False
+
+
+def test_different_days_are_still_different():
+    """归一化不能宽到把不同日期抹平。"""
+    from datetime import date, datetime
+
+    ev = _ev([{"d": datetime(2026, 1, 1, 0, 0)}])
+    s = ev.evaluate_response("precision_q001", "SELECT 1", [{"d": date(2026, 1, 2)}], None)
+    assert s.result_match is False

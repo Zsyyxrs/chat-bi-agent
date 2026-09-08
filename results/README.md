@@ -58,10 +58,13 @@ See [EVALUATION_FRAMEWORK.md](../EVALUATION_FRAMEWORK.md) for detailed evaluatio
    `result_match` 判 True、拿了 0.837 分。**行数、结果集、六个评分维度全部为它背书。**
    这正是项目一贯的那类失效：不报错、数字照出、只是错的。
 
-2. **`result_match` 有一个类级误判缺陷（已知未修）。** q012 首跑判 False，实际两边
+2. **`result_match` 有一个类级误判缺陷（当天已修）。** q012 首跑判 False，实际两边
    金额逐行完全相同，差别只是模型写了 `DATE_TRUNC(...)::DATE`（date）而 gold 留着
    timestamptz。`_normalize_row` 对非数值列走 `str(v)`，
    `"2026-01-01 00:00:00+08:00" != "2026-01-01"`。**任何 gold 返回 timestamp 列的题
-   都会被误判成不一致。** 当前只在 q012 的 gold 上加了 `::DATE` 让本题可比，
-   没有动评测器。修它是安全的——`result_match` 刻意不计入 `combined_score`，
-   改它动不了任何历史分数。
+   都会被误判成不一致。**
+
+   修在评测器侧（`_canonical_value`：零点时间戳归一到日期，带真实时分秒的照旧逐值比），
+   而不是在 gold 里写 cast 迁就它。用首跑记录下来的那条真实 agent SQL 复验：去掉 gold 的
+   cast 后 `result_match` 仍为 True。改它是安全的——`result_match` 刻意不计入
+   `combined_score`，动不了任何历史分数。上表的 q012 ✅ 是修复后的判定。
