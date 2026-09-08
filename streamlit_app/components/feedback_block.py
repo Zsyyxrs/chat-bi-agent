@@ -5,7 +5,11 @@
 - 每 trace 一次反馈就够（同会话记 st.session_state["<tab>_feedback"][trace_id]）
 - SQL/report 失败或无 trace_id 时不显示按钮
 - score name 统一 user_feedback（bootstrap_prod_pool 用它过滤 → 只有 P1 trace 会
-  被拉进 Q-SQL 池，P2/P3 的 user_feedback 服务于回归测试集/满意度看板）
+  被拉进 Q-SQL 池，P2/P3 的 user_feedback 只是满意度信号）
+- 同一条结果**以最后一次点击为准**：promotion 侧 resolve_pass_score() 取最新一条
+  user_feedback，不是取 max——刷新页面改主意能改得动
+- **👎 目前没有下游消费方**：分数落进 Langfuse 就停在那，回归测试集还没接。文案
+  不许承诺它（2026-09-07 查证）
 """
 
 from __future__ import annotations
@@ -41,7 +45,7 @@ def render_feedback_block(
     feedback_map: dict = st.session_state.setdefault(session_key, {})
     already = feedback_map.get(trace_id)
     if already:
-        st.caption("👍 已标记（进入 pool 候选）" if already == "1" else "👎 已标记（进入回归集）")
+        st.caption("👍 已标记（进入 pool 候选）" if already == "1" else "👎 已标记（不进示例池）")
         return
 
     st.markdown("**这条结果对你有帮助吗？**")
@@ -66,13 +70,14 @@ def render_feedback_block(
             "👎 不对",
             key=f"{tab_key}_thumb_down_{trace_id}",
             help=(
-                "标记为错结果。这条会进入回归测试集，用来防止同类错误再犯——"
-                "所以结果只是「不够好」时点它比不点更有用。"
+                "标记为不对。P1 的 👎 会把这条挡在 few-shot 示例池外，同一条结果"
+                "以最后一次点击为准；P2/P3 的 👎 只计入满意度看板。"
+                "「对但不够好」也可以点，代价是这条正确样本不会被复用。"
             ),
         ):
             if submit_user_feedback(trace_id, value=0.0, comment=f"ui {tab_key} thumbs down"):
                 feedback_map[trace_id] = "0"
-                st.success("反馈已记录，将纳入回归测试集")
+                st.success("反馈已记录（这条不会进示例池）")
                 st.rerun()
             else:
                 st.warning("反馈提交失败（Langfuse 未就绪？）")

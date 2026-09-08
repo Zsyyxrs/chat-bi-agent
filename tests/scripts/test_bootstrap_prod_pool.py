@@ -150,3 +150,103 @@ def test_load_langfuse_missing_env_returns_empty(monkeypatch):
     monkeypatch.setattr(langfuse_setup, "_client", None)
     got = load_langfuse(days_back=30, score_threshold=1.0)
     assert got == []
+
+
+# ---------------------- resolve_pass_score：谁说了算 ----------------------
+#
+# 原实现是 `max(user_feedback, judge_pass)`，两个毛病：
+#   1. judge_pass 全仓没有任何写入方，这个 or 提前给一个还不存在的 LLM judge
+#      授了权——接上那天机器判的分能盖过人点的 👎
+#   2. max 表达不了「改主意」：点完 👍 刷新页面再点 👎，纠正无效
+# 现在只认 user_feedback，且**取最新的一条**。
+
+
+class _Score:
+    """Langfuse score 明细的最小替身（只用到 name/value/timestamp）。"""
+
+    def __init__(self, name, value, timestamp=None):
+        self.name = name
+        self.value = value
+        if timestamp is not None:
+            self.timestamp = timestamp
+
+
+resolve_pass_score = _mod.resolve_pass_score
+
+
+def test_judge_pass_alone_no_longer_promotes():
+    """judge_pass 不再算数——它现在没有写入方，将来也不该替人做主。"""
+    assert resolve_pass_score([_Score("judge_pass", 1.0)]) == 0.0
+
+
+def test_judge_pass_cannot_override_a_human_thumbs_down():
+    scores = [
+        _Score("user_feedback", 0.0, "2026-09-01T10:00:00Z"),
+        _Score("judge_pass", 1.0, "2026-09-01T11:00:00Z"),
+    ]
+    assert resolve_pass_score(scores) == 0.0
+
+
+def test_latest_feedback_wins_when_user_changes_mind_to_down():
+    """👍 在先、👎 在后 → 0.0。max 在这里会返回 1.0，纠正被吞掉。"""
+    scores = [
+        _Score("user_feedback", 1.0, "2026-09-01T10:00:00Z"),
+        _Score("user_feedback", 0.0, "2026-09-01T10:05:00Z"),
+    ]
+    assert resolve_pass_score(scores) == 0.0
+
+
+def test_latest_feedback_wins_when_user_changes_mind_to_up():
+    """反向也要成立——这是「取最新」而不是「一票否决」。"""
+    scores = [
+        _Score("user_feedback", 0.0, "2026-09-01T10:00:00Z"),
+        _Score("user_feedback", 1.0, "2026-09-01T10:05:00Z"),
+    ]
+    assert resolve_pass_score(scores) == 1.0
+
+
+def test_order_of_arrival_does_not_matter_only_timestamps_do():
+    """API 不保证返回顺序，判定必须只看时间戳。"""
+    scores = [
+        _Score("user_feedback", 0.0, "2026-09-01T10:05:00Z"),
+        _Score("user_feedback", 1.0, "2026-09-01T10:00:00Z"),
+    ]
+    assert resolve_pass_score(scores) == 0.0
+
+
+def test_datetime_timestamps_work_alongside_iso_strings():
+    """SDK 版本不同，timestamp 可能是 datetime 也可能是字符串，还可能不带时区。"""
+    import datetime as _dt
+
+    scores = [
+        _Score("user_feedback", 1.0, _dt.datetime(2026, 9, 1, 10, 0)),  # naive
+        _Score("user_feedback", 0.0, "2026-09-01T10:05:00+00:00"),
+    ]
+    assert resolve_pass_score(scores) == 0.0
+
+
+def test_falls_back_to_arrival_order_when_no_timestamps():
+    scores = [_Score("user_feedback", 1.0), _Score("user_feedback", 0.0)]
+    assert resolve_pass_score(scores) == 0.0
+
+
+def test_timestamped_scores_beat_untimestamped_ones():
+    """有时间戳的才判得了先后，没有的只能垫底，不该靠位置赢过它们。"""
+    scores = [
+        _Score("user_feedback", 1.0, "2026-09-01T10:00:00Z"),
+        _Score("user_feedback", 0.0),
+    ]
+    assert resolve_pass_score(scores) == 1.0
+
+
+def test_no_feedback_at_all_is_not_a_pass():
+    assert resolve_pass_score([]) == 0.0
+    assert resolve_pass_score([_Score("other_metric", 1.0)]) == 0.0
+
+
+def test_none_valued_scores_are_ignored():
+    scores = [
+        _Score("user_feedback", 1.0, "2026-09-01T10:00:00Z"),
+        _Score("user_feedback", None, "2026-09-01T10:05:00Z"),
+    ]
+    assert resolve_pass_score(scores) == 1.0

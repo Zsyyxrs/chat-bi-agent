@@ -147,8 +147,75 @@ def load_p1_eval(yaml_path: Path, baseline_path: Path, score_threshold: float) -
     return examples
 
 
+FEEDBACK_SCORE_NAME = "user_feedback"
+
+
+def _score_timestamp(score) -> dt.datetime | None:
+    """取 score 的时间戳，取不到返回 None。
+
+    SDK 版本之间字段名和类型都飘：可能叫 timestamp / created_at / createdAt，
+    可能是 datetime 也可能是 ISO 字符串，还可能不带时区。naive 的一律按 UTC 补齐，
+    否则跟 aware 的一比就 TypeError。
+    """
+    for attr in ("timestamp", "created_at", "createdAt"):
+        raw = getattr(score, attr, None)
+        if raw is None:
+            continue
+        parsed: dt.datetime | None = None
+        if isinstance(raw, dt.datetime):
+            parsed = raw
+        elif isinstance(raw, str):
+            try:
+                parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+        if parsed is None:
+            continue
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
+    return None
+
+
+def resolve_pass_score(scores) -> float:
+    """一个 trace 的 score 明细 → 这条样本的通过分。**只认 user_feedback，取最新一条。**
+
+    原来是 `max(user_feedback, judge_pass)`，两个毛病：
+
+    1. `judge_pass` 全仓没有任何写入方。把它 or 进来等于提前给一个还不存在的
+       LLM judge 授权——接上那天 `max(user_feedback=0.0, judge_pass=1.0) = 1.0`，
+       机器判的分盖过人点的 👎。所以摘掉，等它真存在、且定义了跟人类反馈谁优先
+       再说。
+    2. `max` 表达不了「改主意」。UI 靠 `st.session_state` 挡同会话二次投票，但刷新
+       页面就能再投——用户点完 👍 看仔细了改点 👎，`max` 会把这次纠正整个吞掉。
+
+    不做「一票否决」而做「取最新」，是因为 👎 的语义本来就是脏的：它的 help 文案
+    主动鼓励用户拿它表达「对但不够好」。给一个语义被故意放宽的按钮发否决权会误杀
+    正确样本；取最新只表达「这个人最后的判断」，不多不少。
+
+    没有任何 user_feedback → 0.0（不是 pass）。时间戳取不到的只能按返回顺序垫底，
+    因为 API 不保证顺序，拿位置当时间是猜。
+    """
+    dated: list[tuple[dt.datetime, int, float]] = []
+    undated: list[tuple[int, float]] = []
+    for idx, s in enumerate(scores):
+        if getattr(s, "name", "") != FEEDBACK_SCORE_NAME:
+            continue
+        val = getattr(s, "value", None)
+        if val is None:
+            continue
+        ts = _score_timestamp(s)
+        if ts is None:
+            undated.append((idx, float(val)))
+        else:
+            dated.append((ts, idx, float(val)))
+    if dated:
+        return max(dated, key=lambda t: (t[0], t[1]))[2]
+    if undated:
+        return max(undated, key=lambda t: t[0])[1]
+    return 0.0
+
+
 def load_langfuse(days_back: int, score_threshold: float) -> list[QAExample]:
-    """从 Langfuse 拉 P1 trace + user_feedback/judge_pass score ≥ threshold 的样本。
+    """从 Langfuse 拉 P1 trace + 最新一条 user_feedback score ≥ threshold 的样本。
 
     当前状态：反馈闭环（#3）还没上线，Langfuse 里不会有 user_feedback score。
     本函数留接口占位，能连上 Langfuse 就试；连不上 or 0 条就返回空列表，不报错。
@@ -192,17 +259,13 @@ def load_langfuse(days_back: int, score_threshold: float) -> list[QAExample]:
     for tr in trace_list:
         # trace.scores 是分数 ID 列表（字符串），需逐个用 score_v_2.get_by_id 拉详情。
         score_ids = getattr(tr, "scores", None) or []
-        pass_score = 0.0
+        fetched = []
         for sid in score_ids:
             try:
-                s = client.api.score_v_2.get_by_id(score_id=sid)
+                fetched.append(client.api.score_v_2.get_by_id(score_id=sid))
             except Exception:
                 continue
-            if getattr(s, "name", "") in ("user_feedback", "judge_pass"):
-                val = getattr(s, "value", None)
-                if val is not None:
-                    pass_score = max(pass_score, float(val))
-        if pass_score < score_threshold:
+        if resolve_pass_score(fetched) < score_threshold:
             continue
         # trace.input 结构由 langfuse @observe 装饰器生成：
         #   {"args": [...positional], "kwargs": {"question": "..."}}

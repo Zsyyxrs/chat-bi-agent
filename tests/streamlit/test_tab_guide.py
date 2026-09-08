@@ -159,13 +159,20 @@ def test_guide_and_feedback_agree_on_the_tab_key(tab_key, src):
 
 
 def test_feedback_buttons_say_where_the_vote_goes():
-    """👍 进 example pool、👎 进回归集——这语义原本只写在 docstring 里，点的人看不到。"""
+    """票投到哪，点的人得看得见——而且说的必须是真的。
+
+    原断言要求 👎 的文案提「回归集」。2026-09-07 查证：全仓没有任何地方消费
+    user_feedback=0.0，回归测试集是张空头支票。前提作废的测试改写、不删——
+    改按实际语义断言：👎 的真实后果是「不进 few-shot 池」，且同一条结果以最后
+    一次点击为准（promotion 侧 resolve_pass_score() 取最新，不取 max）。
+    """
     buttons = _calls_named(_FEEDBACK_SRC, "button")
     helps = [h for h in (_kwarg(b, "help") for b in buttons) if h]
     assert len(helps) == 2, f"两个反馈按钮都要有 help=，实际 {len(helps)} 个"
     joined = "".join(helps)
     assert "池" in joined or "pool" in joined
-    assert "回归" in joined
+    assert "最后一次" in joined, "「改主意以最新为准」是这次改动的核心语义，得写在按钮上"
+    assert "回归" not in joined, "回归测试集没有任何消费方，不许在 UI 上承诺"
 
 
 # ---- 耗时说明 ----
