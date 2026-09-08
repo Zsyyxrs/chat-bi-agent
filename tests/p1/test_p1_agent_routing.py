@@ -266,13 +266,17 @@ def test_agent_defaults_to_not_tagging_route():
     assert agent.tag_route_on_trace is False
 
 
-def test_p1_streamlit_tab_enables_route_tagging():
-    """契约测试：P1 tab 是唯一确定为 root trace 的调用点，必须显式打开，
-    否则生产流量依旧画不出 metric_hit_rate。"""
+def test_p1_production_wiring_enables_route_tagging():
+    """契约测试：生产接线是确定为 root trace 的调用点，必须显式打开，
+    否则生产流量依旧画不出 metric_hit_rate。
+
+    2026-09-08 起构造点从 `streamlit_app/tabs/p1_nl2sql.py` 搬到
+    `agents/p1/wiring.py`（Streamlit 与 MCP server 共用同一份接线），
+    本断言随之改指向新位置。"""
     from tests.ast_probe import has_call_keyword
 
     # AST 而非文本 grep：注释或字符串里出现同样的字面量不该算数。
-    assert has_call_keyword("streamlit_app/tabs/p1_nl2sql.py", "tag_route_on_trace", "True")
+    assert has_call_keyword("src/chat_bi_agent/agents/p1/wiring.py", "tag_route_on_trace", "True")
 
 
 def test_eval_runner_disables_route_tagging():

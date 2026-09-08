@@ -1,18 +1,18 @@
 """Tab P1: 自然语言 → SQL → 结果。"""
 
 import uuid
-from pathlib import Path
 
 import streamlit as st
 
-from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog, MetricRouter
+from chat_bi_agent.agents.p1.metric_resolver import MetricCatalog
 from chat_bi_agent.agents.p1.nl2sql_agent import P1NL2SQLAgent
-from chat_bi_agent.agents.shared.example_retriever import (
-    ExamplePool,
-    ExampleRetriever,
+from chat_bi_agent.agents.p1.wiring import (
+    IDENTITIES,
+    build_metric_router_if_available,
+    build_p1_agent,
+    build_retriever_if_available,
+    session_props_for,
 )
-from chat_bi_agent.agents.shared.sql_executor import SQLExecutor
-from chat_bi_agent.llm import qwen_client
 from streamlit_app.components.chart_block import render_chart_block
 from streamlit_app.components.dataframe_block import render_dataframe_block
 from streamlit_app.components.feedback_block import render_feedback_block
@@ -21,91 +21,14 @@ from streamlit_app.components.sql_block import render_sql_block
 
 _SESSION_KEY = "p1_last_result"
 _AGENT_KEY = "p1_agent"
-
-# 生产 pool 路径（相对 repo 根）。bootstrap_prod_pool.py 落这个文件；
-# 反馈闭环夜间任务往这个文件追加。
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_PROD_POOL_PATH = _REPO_ROOT / "data" / "example_pool_prod.jsonl"
-
-# 生产用同域池：min_sim 0.7 比 BIRD 跨库的 0.55 严格（宁缺毋滥），
-# k=3 上限；池子小的时候大部分调用会返回空 list，行为等价 few-shot off。
-_PROD_MIN_SIM = 0.7
-_PROD_TOP_K = 3
-
-# 语义层指标目录。命中即走 governed 模板 SQL（结果可复现、口径可审计），
-# 未命中回退原 NL2SQL——2026-08-13 A/B 判定绿灯，见 DESIGN_DECISIONS.md#adr-013。
-_METRICS_CATALOG_PATH = _REPO_ROOT / "config" / "metrics.yaml"
-
-
-# ---- 身份（RLAC，ADR-017）----
-# 语义层的 row_policies 在渲染期绑这几个属性；LLM 全程看不到它们。
-# 演示用固定名单：真实系统里 session 属性来自 SSO/会话，不该让用户自己挑。
-# 总行用 branch_scope=ALL 显式越界，而不是靠「不传属性」绕过——不传属性是
-# fail-closed 拒绝，不是放行。
-HQ_IDENTITY = "总行（可见全行）"
-IDENTITIES: dict[str, dict[str, object]] = {
-    HQ_IDENTITY: {"branch_scope": "ALL", "branch_id": "__unused_by_hq__"},
-    "杭州分行客户经理（BR_CITY_0000）": {
-        "branch_scope": "BRANCH",
-        "branch_id": "BR_CITY_0000",
-    },
-    "南京分行客户经理（BR_CITY_0002）": {
-        "branch_scope": "BRANCH",
-        "branch_id": "BR_CITY_0002",
-    },
-    "苏州分行客户经理（BR_CITY_0003）": {
-        "branch_scope": "BRANCH",
-        "branch_id": "BR_CITY_0003",
-    },
-}
 _IDENTITY_KEY = "p1_identity"
 
-
-def _session_props_for(label: str) -> dict[str, object]:
-    """身份 → session 属性。认不出的身份返回空——空即 fail-closed 拒绝，不是放行。"""
-    return dict(IDENTITIES.get(label, {}))
-
-
-def _build_retriever_if_available() -> ExampleRetriever | None:
-    """池子文件存在且非空才挂 retriever；否则完全跳过（不影响 P1 原有行为）。"""
-    # is_file 而非 exists：目录也满足 exists()，随后 ExamplePool.load 会抛
-    # IsADirectoryError，把「少一个增强项」升级成「P1 整个不可用」。
-    if not _PROD_POOL_PATH.is_file():
-        return None
-    pool = ExamplePool.load(_PROD_POOL_PATH)
-    if len(pool) == 0:
-        return None
-    return ExampleRetriever(
-        pool=pool,
-        dialect="postgres",
-        embed_fn=qwen_client.embed,
-        min_similarity=_PROD_MIN_SIM,
-        max_k=_PROD_TOP_K,
-    )
-
-
-def _build_metric_router_if_available() -> MetricRouter | None:
-    """目录存在才挂路由；任何失败都降级成 None。
-
-    语义层是增强项，不能把主路径带崩：构造要 embed 全部 alias（当前 86 条），
-    DashScope 抖动或目录写坏时，宁可少一个增强项也不能让整个 P1 tab 不可用。
-    阈值用 MetricRouter 的默认值（0.63，34 题标尺实测选出），不在这里硬编码。
-    """
-    if not _METRICS_CATALOG_PATH.exists():
-        return None
-    try:
-        catalog = MetricCatalog.from_yaml(_METRICS_CATALOG_PATH)
-        if not catalog.metrics:
-            return None
-        return MetricRouter(
-            catalog=catalog,
-            embed_fn=qwen_client.embed,
-            # probe_fn 必须给：string filter 塞错值时 SQL 依然合法，
-            # 只会静默返回空结果——这是唯一能拦住它的闸
-            probe_fn=SQLExecutor().execute,
-        )
-    except Exception:
-        return None
+# 生产接线（池路径、指标目录、身份名单）统一由 chat_bi_agent.agents.p1.wiring 定义，
+# Streamlit 与 MCP server 共用同一份——见 tests/p1/test_p1_wiring_shared.py 的同一性断言。
+# 下面四个模块级别名是为了让本模块的既有调用点与测试打桩点保持原样。
+_build_retriever_if_available = build_retriever_if_available
+_build_metric_router_if_available = build_metric_router_if_available
+_session_props_for = session_props_for
 
 
 def _metric_label(catalog: MetricCatalog | None, metric_id: str) -> str:
@@ -129,17 +52,8 @@ def _metric_has_row_policies(catalog: MetricCatalog | None, metric_id: str) -> b
 
 def _get_agent() -> P1NL2SQLAgent:
     if _AGENT_KEY not in st.session_state:
-        retriever = _build_retriever_if_available()
-        router = _build_metric_router_if_available()
-        st.session_state[_AGENT_KEY] = P1NL2SQLAgent(
-            top_k=4,
-            example_retriever=retriever,
-            metric_router=router,
-            # 这里每次 run 自成一条 root trace（不像评测批次那样嵌套在 p1_eval_batch 下），
-            # 打 route tag 是安全的。必须打：Langfuse 的 metrics 聚合层不认 metadata
-            # （按 metadata.route 分组返回 400），不打 tag 就画不出 metric_hit_rate。
-            tag_route_on_trace=True,
-        )
+        agent, retriever, router = build_p1_agent()
+        st.session_state[_AGENT_KEY] = agent
         st.session_state["p1_pool_size"] = len(retriever.pool) if retriever is not None else 0
         # 缓存 catalog 供展示层把 metric_id 翻成业务名
         st.session_state["p1_metric_catalog"] = router.catalog if router is not None else None

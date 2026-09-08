@@ -90,10 +90,10 @@ def test_config_falls_back_to_defaults_when_local_yaml_is_a_directory(tmp_path, 
 
 
 def test_example_pool_retriever_degrades_when_pool_path_is_a_directory(tmp_path, monkeypatch):
-    from streamlit_app.tabs import p1_nl2sql
+    from chat_bi_agent.agents.p1 import wiring
 
     pool_dir = tmp_path / "example_pool_prod.jsonl"
     pool_dir.mkdir()
-    monkeypatch.setattr(p1_nl2sql, "_PROD_POOL_PATH", pool_dir)
+    monkeypatch.setattr(wiring, "PROD_POOL_PATH", pool_dir)
 
-    assert p1_nl2sql._build_retriever_if_available() is None
+    assert wiring.build_retriever_if_available() is None
