@@ -316,3 +316,156 @@ evaluation_questions:
     evaluation_criteria:
       - value_grounding: "「短期理财」是否落到 product_subcategory，而不是 product_category='WEALTH'"
       - column_selection: "是否只返回产品名称与风险等级两列"
+
+  # ============================================================
+  # 窗口函数类题目（2026-09-08 新增）
+  #
+  # 为什么补这三题：截至 2026-09-08，本题集 11 道 gold SQL **零窗口函数**
+  # （最复杂的 q008 是 CTE + CASE WHEN 条件聚合）。而环比、组内排名、累计占比
+  # 是 BI 取数最高频的三类分析型 SQL，链路在这一整类上的表现此前完全没有证据。
+  #
+  # 三题按窗口函数的三个族各取一个，翻车时能定位到具体是哪一族：
+  #   q012 偏移族  LAG() OVER (ORDER BY ...)          —— 环比，分母要 NULLIF 防除零
+  #   q013 排名族  ROW_NUMBER() OVER (PARTITION BY ...) —— 组内 Top-N，窗函数不能写在
+  #                WHERE 里，必须套一层子查询再过滤，这是最经典的错法
+  #   q014 帧族    SUM() OVER (ORDER BY ...) 与 SUM() OVER () —— 滚动帧与全局帧同题共存
+  #
+  # 三处刻意的设计：
+  # （1）**题面带机构编码**。q009~q011 那批测的是值检索（「上海」→ province 取值），
+  #     这批要隔离「窗口函数」这一个变量，所以把 BR_CITY_0000 直接写进题面。
+  #     agent 失分就只可能失在窗函数上，不会和值检索的失败混在一起。
+  # （2）**底表用 fct_transaction 而非 fct_balance_daily**。2026-09-08 实测：余额表在
+  #     「杭州分行 + SAVING + 2026-06」这个切片上 25 个客户的日均余额**全部并列
+  #     100000.00**，做排名和累计占比时 ROW_NUMBER 的名次分配不确定，gold 自己的
+  #     结果集就是随机的。交易表同切片 2546 个客户对应 2545 个不同金额，几乎零并列。
+  #     交易额是 flow 指标，跨日求和有业务意义——与 q005「余额是 stock，跨日求和无意义」
+  #     的修正正好构成一对，两类口径在题集里都覆盖到了。
+  # （3）**日期用闭区间 <= '2026-06-30' 而非 < '2026-07-01'**。两者对 DATE 列等价，
+  #     但 expected_filters 是按字面值在生成的 SQL 里做词匹配的，写开区间会让
+  #     「模型按题面自然写法用了 06-30」被判成过滤条件不符——那是评测器的锅，不是模型的。
+  #
+  # 基线可比性：q001~q011 一字未动。此前已有「原 8 题」（对齐
+  # baseline_p1_eval_2026-08-15.json，avg 0.965）与「全量 11 题」两个口径，
+  # 这批引入第三个口径「全量 14 题」。跨 run 比对务必声明用的是哪个口径。
+  # ============================================================
+
+  # gold 里的 `::DATE` 是必须的，不要"简化"掉。2026-09-08 首跑实测：模型写
+  # `DATE_TRUNC('month', dt)::DATE`，gold 原本没有这个 cast，于是两边金额逐行完全相同、
+  # 却被 result_match 判为不一致——_normalize_row 对非数值列走 str(v)，
+  # timestamptz 的 "2026-01-01 00:00:00+08:00" 与 date 的 "2026-01-01" 字符串不等。
+  # 这是评测器的**类级缺陷**（任何 gold 返回 timestamp 列的题都会被误判），
+  # 已知未修；此处先让本题可比。result_match 不计入 combined_score，所以它误判时
+  # 分数看不出来，只有诊断字段是红的——正是"静默失效"的又一种形态。
+  - id: precision_q012
+    question: |
+      查询杭州分行（BR_CITY_0000）2026 年 1 月到 6 月每个月的交易总金额，
+      以及相比上一个月的环比变化百分比。
+    expected_sql: |
+      SELECT
+        m.month,
+        m.total_amount,
+        LAG(m.total_amount) OVER (ORDER BY m.month) AS prev_month_amount,
+        ROUND(
+          (m.total_amount - LAG(m.total_amount) OVER (ORDER BY m.month))
+          / NULLIF(LAG(m.total_amount) OVER (ORDER BY m.month), 0) * 100, 2
+        ) AS mom_pct
+      FROM (
+        SELECT DATE_TRUNC('month', ft.dt)::DATE AS month,
+               SUM(ft.amount) AS total_amount
+        FROM fct_transaction ft
+        WHERE ft.branch_id = 'BR_CITY_0000'
+          AND ft.dt >= DATE '2026-01-01'
+          AND ft.dt <= DATE '2026-06-30'
+        GROUP BY 1
+      ) m
+      ORDER BY m.month
+    expected_result_columns: []
+    expected_filters:
+      - branch_id: BR_CITY_0000
+      - dt_range: ["2026-01-01", "2026-06-30"]
+    expected_result_count:
+      min: 6
+      max: 6
+    evaluation_criteria:
+      - window_function_offset: "是否用 LAG() OVER (ORDER BY 月份) 取上月值，而不是自连接或两次子查询"
+      - period_grain: "是否按 DATE_TRUNC('month', dt) 聚合到月粒度"
+      - division_guard: "环比分母是否做了 NULLIF/零值保护（首月无上月值应为 NULL 而非报错）"
+      - first_row_semantics: "首月（2026-01）的环比是否留空，而不是硬填 0"
+
+  - id: precision_q013
+    question: |
+      列出 2026 年 6 月每个城市级分行（branch_level 为 CITY）交易金额排名前 3 的客户，
+      返回分行名称、客户姓名、交易金额和分行内排名。
+    expected_sql: |
+      SELECT dbr.branch_name, dc.customer_name, r.total_amount, r.rn AS rank_in_branch
+      FROM (
+        SELECT c.branch_id, c.customer_id, c.total_amount,
+               ROW_NUMBER() OVER (
+                 PARTITION BY c.branch_id ORDER BY c.total_amount DESC, c.customer_id
+               ) AS rn
+        FROM (
+          SELECT ft.branch_id, ft.customer_id, SUM(ft.amount) AS total_amount
+          FROM fct_transaction ft
+          WHERE ft.dt >= DATE '2026-06-01'
+            AND ft.dt <= DATE '2026-06-30'
+          GROUP BY 1, 2
+        ) c
+      ) r
+      JOIN dim_branch dbr ON r.branch_id = dbr.branch_id
+      JOIN dim_customer dc ON r.customer_id = dc.customer_id
+      WHERE r.rn <= 3
+        AND dbr.branch_level = 'CITY'
+      ORDER BY dbr.branch_name, r.rn
+    expected_result_columns: [branch_name, customer_name]
+    expected_filters:
+      - branch_level: CITY
+      - dt_range: ["2026-06-01", "2026-06-30"]
+    expected_result_count:
+      min: 45
+      max: 45
+    evaluation_criteria:
+      - window_function_ranking: "是否用 ROW_NUMBER/RANK + PARTITION BY 分行取组内 Top-N"
+      - window_in_where: "是否把窗口函数套进子查询后再过滤 rn <= 3，而不是直接写在 WHERE 里（那是语法错误）"
+      - partition_key: "PARTITION BY 是否按分行，而不是全局排名后取前 3"
+      - join_accuracy: "是否 join 到 dim_branch 取分行名并按 branch_level='CITY' 过滤"
+      - grouping_key: |
+          是否按 customer_id 聚合而不是 customer_name。2026-09-08 首跑实测模型写的是
+          GROUP BY b.branch_name, c.customer_name——库里 5230 个客户只有 3801 个不同姓名，
+          且同一分行内同名有 10 组，按姓名聚合会把不同客户的交易额合并。这一批的 top 3
+          恰好没撞上同名客户，所以行数 45 对得上、result_match 也是 True、拿了 0.837 分。
+          **本题集现有的任何一个维度都抓不住这个错**，留此条备忘。
+
+  - id: precision_q014
+    question: |
+      按 2026 年 6 月的交易金额从高到低排列杭州分行（BR_CITY_0000）的客户，
+      返回前 20 个客户的客户 ID、交易金额，以及按该排序累计的金额占全分行的百分比。
+    expected_sql: |
+      SELECT
+        t.customer_id,
+        t.total_amount,
+        ROUND(
+          SUM(t.total_amount) OVER (ORDER BY t.total_amount DESC, t.customer_id)
+          / SUM(t.total_amount) OVER () * 100, 2
+        ) AS cum_pct
+      FROM (
+        SELECT ft.customer_id, SUM(ft.amount) AS total_amount
+        FROM fct_transaction ft
+        WHERE ft.branch_id = 'BR_CITY_0000'
+          AND ft.dt >= DATE '2026-06-01'
+          AND ft.dt <= DATE '2026-06-30'
+        GROUP BY 1
+      ) t
+      ORDER BY t.total_amount DESC, t.customer_id
+      LIMIT 20
+    expected_result_columns: [customer_id]
+    expected_filters:
+      - branch_id: BR_CITY_0000
+      - dt_range: ["2026-06-01", "2026-06-30"]
+    expected_result_count:
+      min: 20
+      max: 20
+    evaluation_criteria:
+      - window_function_frame: "累计值是否用 SUM() OVER (ORDER BY ...) 的滚动帧，而不是自连接求和"
+      - grand_total_frame: "分母是否用 SUM() OVER () 全局帧取全分行合计，而不是再查一次表"
+      - denominator_scope: "分母是否为**全部**客户的合计，而不是被 LIMIT 20 截断后的合计（截断后占比会虚高）"
+      - order_consistency: "窗口内的 ORDER BY 是否与外层输出排序一致，否则累计占比与行序对不上"
