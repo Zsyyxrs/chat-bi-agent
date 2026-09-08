@@ -140,3 +140,63 @@ def test_connect_options_includes_statement_timeout(monkeypatch):
     with pytest.raises(RuntimeError):
         executor.execute("SELECT 1")
     assert "statement_timeout=10000" in captured.get("options", "")
+
+
+# ---- 安全护栏改为 AST 判定 + fail-closed（2026-09-08）----
+#
+# 原实现是关键字正则 `\b(DROP|TRUNCATE|DELETE|...)\b`。它和评分器里那两个 bug 同族：
+# 用正则读 SQL，分不清关键字出现在**语句位置**还是**字符串字面量/注释**里。
+# 实测误伤：`WHERE description = 'DELETE'`、`SELECT 1 -- INSERT` 都会被拦死，
+# 而它们是完全合法的只读查询。
+#
+# 改成 sqlglot 解析后判语句类型。**解析失败一律拒绝执行**（fail-closed）：
+# 这是安全代码，"我看不懂所以放行"是最不该有的行为。代价是 sqlglot 不认的合法
+# 方言写法会被误拒——可接受，因为 P1 主路径上游的 sql_validator 本来就先用
+# sqlglot 解析过一遍，能到这里的 SQL 都是解析得动的。
+#
+# 真正的只读控制始终是 PG_READONLY_USER 这个只读角色（ADR-010），本层是纵深防御。
+
+
+def test_keyword_inside_a_string_literal_is_not_a_write():
+    executor = SQLExecutor()
+    assert executor._is_safe("SELECT * FROM fct_transaction WHERE description = 'DELETE'") is True
+
+
+def test_keyword_inside_a_comment_is_not_a_write():
+    executor = SQLExecutor()
+    assert executor._is_safe("SELECT 1 -- 这条不做 INSERT") is True
+
+
+def test_unparseable_sql_is_refused_not_passed_through():
+    """fail-closed：解析不了就拒绝。安全层不能因为「我看不懂」而放行。"""
+    executor = SQLExecutor()
+    assert executor._is_safe("SELECT FROM WHERE ((") is False
+
+
+def test_write_hidden_inside_a_cte_is_refused():
+    """PG 支持 `WITH x AS (DELETE ... RETURNING *) SELECT ...`——
+    根节点是 SELECT，但它真的会删数据。只看开头两个词的护栏挡不住这个。"""
+    executor = SQLExecutor()
+    sql = "WITH gone AS (DELETE FROM dim_customer RETURNING *) SELECT * FROM gone"
+    assert executor._is_safe(sql) is False
+
+
+def test_multiple_statements_are_refused():
+    executor = SQLExecutor()
+    assert executor._is_safe("SELECT 1; DROP TABLE dim_customer") is False
+
+
+def test_plain_cte_select_is_still_allowed():
+    executor = SQLExecutor()
+    assert executor._is_safe("WITH a AS (SELECT 1 AS x) SELECT * FROM a") is True
+
+
+def test_set_operations_are_allowed():
+    executor = SQLExecutor()
+    assert executor._is_safe("SELECT 1 UNION ALL SELECT 2") is True
+
+
+def test_non_select_command_is_refused():
+    """VACUUM / CALL 这类会被 sqlglot 解析成 Command，一律拒绝。"""
+    executor = SQLExecutor()
+    assert executor._is_safe("VACUUM dim_customer") is False

@@ -19,6 +19,7 @@ from chat_bi_agent.eval.precision_retrieval_evaluator import (
     PrecisionRetrievalEvaluator,
     tables_in_sql,
 )
+from tests.eval.test_group_by_match import Q013_GENERATED_AFTER
 
 
 def test_cte_name_is_not_a_table():
@@ -98,3 +99,67 @@ def test_cte_using_answers_now_score_full_marks_on_table_selection(qid):
     ev = PrecisionRetrievalEvaluator()
     gold = ev.get_question(qid)["expected_sql"]
     assert tables_in_sql(gold) == tables_in_sql(generated)
+
+
+# ---- 列选择维度：AS 别名剥离 ----
+#
+# 同一族的第二个 bug（2026-09-08）。原实现用 `\bAS\s+(\w+)` 收集"别名"，再把这些名字
+# 从实际输出列里剥掉，用意是排除聚合/计算列、只留真实 schema 列。问题是它把**所有**
+# AS 后面的名字都当成计算列别名，包括：
+#   - `SELECT customer_id AS customer_id`（模型把真实列显式别名成同名，合法且常见）
+#   - `WITH txn_agg AS (...)` 的 CTE 名
+#   - `FROM fct_transaction AS ft` 的表别名
+# 第一条会直接把真实列剥光，column_score 归零、扣 0.15——比 CTE 那个（0.1）更狠。
+# 现有产物里受害者为 0，但那正是 CTE 那个在 q008 改写法之前的状态：潜伏，不是不存在。
+
+
+def test_self_aliased_real_column_is_still_a_real_column():
+    """`SELECT customer_id AS customer_id` 与不写 AS 完全等价，不该被剥掉。"""
+    ev = PrecisionRetrievalEvaluator()
+    sql = (
+        "SELECT customer_id AS customer_id, customer_name AS customer_name, "
+        "customer_tier AS customer_tier FROM dim_customer WHERE branch_id = 'BR_CITY_0006'"
+    )
+    rows = [{"customer_id": "C1", "customer_name": "x", "customer_tier": "HIGH_NET_WORTH"}]
+    s = ev.evaluate_response("precision_q001", sql, rows, None)
+    assert s.column_score == 1.0
+
+
+def test_computed_alias_is_still_excluded():
+    """聚合/计算列仍要排除——这是这段逻辑本来的用途，不能修坏。"""
+    ev = PrecisionRetrievalEvaluator()
+    sql = (
+        "SELECT branch_name, customer_name, SUM(amount) AS total_amount "
+        "FROM fct_transaction GROUP BY 1, 2"
+    )
+    rows = [{"branch_name": "b", "customer_name": "c", "total_amount": 1.0}]
+    s = ev.evaluate_response("precision_q013", sql, rows, None)
+    assert s.column_score == 1.0
+
+
+def test_computed_alias_defined_in_a_cte_is_excluded_at_the_outer_select():
+    """q013 的真实形状：计算列在 CTE 里定义，外层只是引用它的名字。
+    只看最外层投影会把 total_amount / rank_in_branch 误当成真实列。"""
+    ev = PrecisionRetrievalEvaluator()
+    rows = [
+        {"branch_name": "b", "customer_name": "c", "total_amount": 1.0, "rank_in_branch": 1}
+    ]
+    s = ev.evaluate_response("precision_q013", Q013_GENERATED_AFTER, rows, None)
+    assert s.column_score == 1.0
+
+
+def test_renamed_real_column_resolves_to_its_underlying_name():
+    """`customer_id AS cid` 输出名变了，但它仍然是 dim_customer.customer_id 这一列。"""
+    ev = PrecisionRetrievalEvaluator()
+    sql = "SELECT customer_id AS cid, customer_name AS nm, customer_tier AS tier FROM dim_customer"
+    rows = [{"cid": "C1", "nm": "x", "tier": "MASS"}]
+    s = ev.evaluate_response("precision_q001", sql, rows, None)
+    assert s.column_score == 1.0
+
+
+def test_unparseable_sql_does_not_crash_column_scoring():
+    ev = PrecisionRetrievalEvaluator()
+    s = ev.evaluate_response(
+        "precision_q001", "SELECT customer_id FROM ((", [{"customer_id": 1}], None
+    )
+    assert 0.0 <= s.column_score <= 1.0

@@ -135,6 +135,47 @@ def tables_in_sql(sql: str) -> set[str]:
     return {t.name.lower() for t in tree.find_all(sqlglot.exp.Table)} - ctes
 
 
+def output_schema_columns(sql: str) -> set[str] | None:
+    """SQL 最外层输出里，属于**真实 schema 列**的那些（小写）。解析失败返回 None。
+
+    用途是 column_score：`expected_result_columns` 列的是真实库表列名，要把聚合/计算列
+    排除掉再比。2026-09-08 修：原实现用 `\\bAS\\s+(\\w+)` 收集"别名"再从输出列里剥掉，
+    把**所有** AS 后面的名字都当成计算列别名，于是
+    `SELECT customer_id AS customer_id`（把真实列显式别名成同名，完全合法且常见）
+    会被剥得一个不剩，column_score 直接归零、白扣 0.15——比 CTE 那个（0.1）更狠。
+    CTE 名（`WITH txn_agg AS`）和表别名（`FROM t AS ft`）同样被误收进去。
+
+    正确的判据分两步：
+    1. **计算列别名**只算「别名包着的不是一个裸列」的那些（`SUM(x) AS total` 是，
+       `customer_id AS cid` 不是），且要跨全部 scope 收集——q013 的形状是计算列在 CTE
+       里定义、最外层只引用它的名字，只看最外层会把 total_amount 误当成真实列。
+    2. **最外层投影**里，裸列取其列名，别名包着裸列的取**底层列名**
+       （`customer_id AS cid` 仍然是 customer_id 这一列）。
+
+    然后前者从后者里减掉。
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read="postgres")
+    except Exception:
+        return None
+    if tree is None or not isinstance(tree, sqlglot.exp.Select):
+        return None
+
+    computed: set[str] = set()
+    for alias in tree.find_all(sqlglot.exp.Alias):
+        if not isinstance(alias.this, sqlglot.exp.Column):
+            computed.add(alias.alias.lower())
+
+    outer: set[str] = set()
+    for proj in tree.expressions:
+        if isinstance(proj, sqlglot.exp.Column):
+            outer.add(proj.name.lower())
+        elif isinstance(proj, sqlglot.exp.Alias) and isinstance(proj.this, sqlglot.exp.Column):
+            outer.add(proj.this.name.lower())
+
+    return outer - computed
+
+
 def group_by_keys(sql: str) -> set[str] | None:
     """把 SQL 里所有 GROUP BY 的分组键归一成**裸列名集合**。
 
@@ -337,11 +378,17 @@ class PrecisionRetrievalEvaluator:
         if not expected_columns:
             score.column_score = 1.0
         elif actual_results:
-            actual_columns = set(actual_results[0].keys())
-            # 剥掉 SELECT 里 AS 别名的输出列（聚合/计算列），与 expected 对齐到"真实 schema 列"
-            aliased = {m.lower() for m in re.findall(r"\bAS\s+(\w+)", generated_sql, re.IGNORECASE)}
-            actual_real = {c for c in actual_columns if c.lower() not in aliased}
-            score.column_score = _jaccard(expected_columns, actual_real)
+            # 「有期望列但一行没返回 = 漏选、判 0」这条保持不变，故仍挂在 actual_results 上：
+            # 改成纯看 SQL 会让「列选对但查不出数」白得 1.0，动到历史分数。
+            actual_real = output_schema_columns(generated_sql)
+            if actual_real is None:
+                # 解析不了才退回老正则：粗略但好过凭空判 0
+                actual_columns = set(actual_results[0].keys())
+                aliased = {
+                    m.lower() for m in re.findall(r"\bAS\s+(\w+)", generated_sql, re.IGNORECASE)
+                }
+                actual_real = {c.lower() for c in actual_columns if c.lower() not in aliased}
+            score.column_score = _jaccard({c.lower() for c in expected_columns}, actual_real)
         # else: 期望非空但无实际结果 → 保持默认 0.0（漏选）
 
         # 5. 聚合函数正确性 (aggregation_correct)
