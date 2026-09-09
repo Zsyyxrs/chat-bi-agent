@@ -17,6 +17,7 @@ from chat_bi_agent.agents.p3.synthesizer import (
     CLOSE_PEER_THRESHOLD,
     _build_user_prompt,
     _mark_close_peers,
+    _matched_event_name,
     _parse_dual_output,
     _parse_extraction_json,
     _synthesize_rca_two_pass,
@@ -430,12 +431,94 @@ def test_template_conclusion_contains_event_and_scope():
     assert "BR_CITY_0006" in concl or "branch_id" in concl
 
 
-def test_template_narrative_handles_empty_event_id():
+# ============================================================
+# Task 4b: 无事件降级（L0 结构性归因）
+# ============================================================
+
+
+def _no_event_extraction() -> dict:
+    """事件库无匹配时 extractor 应产出的形状：event.id=null + 纯结构 chain。"""
     ext = json.loads(_GOOD_JSON_STR)
     ext["event"] = {"id": None, "name": "未识别到事件库匹配"}
+    ext["mechanism_chain"] = [
+        "AUM 在观察窗内出现 -20.9% 的下降",
+        "降幅集中于 BR_CITY_0006 分行的 HIGH_NET_WORTH 客户",
+        "该组合贡献了绝大部分降幅，其余维度分布平稳",
+    ]
+    return ext
+
+
+def test_matched_event_name_returns_name_when_event_matched():
+    assert _matched_event_name(json.loads(_GOOD_JSON_STR)) == "安鑫 90 天到期"
+
+
+def test_matched_event_name_returns_none_when_event_id_is_null():
+    assert _matched_event_name(_no_event_extraction()) is None
+
+
+def test_matched_event_name_returns_none_when_event_key_is_null():
+    ext = json.loads(_GOOD_JSON_STR)
+    ext["event"] = None
+    assert _matched_event_name(ext) is None
+
+
+def test_template_narrative_no_event_drops_sentinel_and_causal_phrasing():
+    nar = _template_narrative_from_extraction(_no_event_extraction())
+    assert "未识别到事件库匹配" not in nar
+    assert "影响" not in nar.split("。")[0]  # 首句不得是「受「…」影响」
+
+
+def test_template_narrative_no_event_declares_structural_attribution():
+    nar = _template_narrative_from_extraction(_no_event_extraction())
+    assert "结构性归因" in nar
+    assert "待人工确认" in nar
+
+
+def test_template_narrative_no_event_keeps_quant_chain_and_scope():
+    ext = _no_event_extraction()
     nar = _template_narrative_from_extraction(ext)
-    assert "未识别到事件库匹配" in nar
-    assert "AUM" in nar
+    assert "管理资产规模" in nar
+    assert "8000 万元" in nar
+    assert "-20.9" in nar
+    for seg in ext["mechanism_chain"]:
+        assert seg in nar
+    assert "BR_CITY_0006" in nar
+    assert "HIGH_NET_WORTH" in nar
+
+
+def test_template_conclusion_no_event_points_to_scope_not_event():
+    concl = _template_conclusion_from_extraction(_no_event_extraction())
+    assert "未识别到事件库匹配" not in concl
+    assert "驱动" not in concl
+    assert "BR_CITY_0006" in concl
+    assert "待人工确认" in concl
+
+
+def test_template_conclusion_no_event_and_no_scope_stays_honest():
+    ext = _no_event_extraction()
+    ext["scope"] = {}
+    concl = _template_conclusion_from_extraction(ext)
+    assert "未识别到事件库匹配" not in concl
+    assert "根因" in concl
+
+
+def test_extractor_prompt_forbids_inventing_trigger_when_no_event():
+    p = SYNTHESIZER_EXTRACTOR_SYSTEM_PROMPT
+    assert "禁止推测触发原因" in p
+
+
+def test_narrator_prompt_has_no_event_branch():
+    p = SYNTHESIZER_NARRATOR_SYSTEM_PROMPT
+    assert "无事件分支" in p
+    assert "根因待人工确认" in p
+
+
+def test_narrator_conclusion_rule_is_conditioned_on_event_id():
+    """【结论】段若无条件要求点名 event.name，会和无事件分支正面冲突。"""
+    p = SYNTHESIZER_NARRATOR_SYSTEM_PROMPT
+    concl_rule = p.split("【结论】")[1].split("【硬约束】")[0]
+    assert "event.id" in concl_rule
+    assert "null" in concl_rule
 
 
 # ============================================================

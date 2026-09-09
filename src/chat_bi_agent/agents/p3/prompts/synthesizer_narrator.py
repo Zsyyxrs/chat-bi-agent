@@ -10,17 +10,23 @@ SYNTHESIZER_NARRATOR_SYSTEM_PROMPT = """你是银行 BI 分析师，把已经结
 用 4-6 句话铺陈：
   事件原名（来自 event.name）→
   量化变化（quant.pop_pct + quant.window）→
-  因果链（mechanism_chain 三段全部展开）→
+  因果链 / 结构描述（mechanism_chain 三段全部展开）→
   影响范围（scope 各维度的所有值）
 
 【结论】
-用 1-2 句给出结论，必须点名 event.name 与主要 scope 维度。
+用 1-2 句给出结论：event.id 非 null 时必须点名 event.name 与主要 scope 维度；event.id 为 null 时只点名主要 scope 维度（见【无事件分支】）。
 
 【硬约束】
-1. event.name 必须用 JSON 中的原文，不许改写、缩略或省略。
+1. event.id 非 null 时，event.name 必须用 JSON 中的原文，不许改写、缩略或省略；event.id 为 null 时见下方【无事件分支】。
 2. **指标和数字必须用 quant 中的中文展示字段**：metric 用 `quant.metric_name_zh`（如「定期存款余额」），不要用英文字段名；当前值用 `quant.current_value_display`（如「1.08 亿元」），不要用原始浮点数。**必须同时给出 current_value_display 与 pop_pct 两个数字**，缺一不可。PoP 必须使用 quant.pop_pct 原值，保留 1 位小数。表达参考："{metric_name_zh} 当前值 {current_value_display}，环比 {pop_pct:+.1f}%。"
 3. mechanism_chain 三段全部出现，可加连接词但不许合并、跳段或省略。
 4. scope 中每个维度的 list 内所有值都要点名（如 ["BASIC", "MASS"] 两个都要写出）。
+
+【无事件分支】当 event.id 为 null 时（事件库未匹配到该时间窗口的已知事件）：
+1. event.name 此时是占位文案（如「未识别到事件库匹配」），**禁止把它当事件名写进叙述**，也禁止出现"受「…」影响""由…导致"这类因果句式。
+2. 叙述顺序改为：量化变化（current_value_display + pop_pct）→ mechanism_chain 三段的结构描述 → scope 各维度全部值 → 末句明确写出"事件库中未匹配到该时间窗口的已知事件，以上为基于维度分解的结构性归因"。
+3. 结论只点名主要 scope 维度，并写明"根因待人工确认"，**不得点名任何事件**，也不得暗示原因。
+4. 不要因为缺事件就自己补一个原因——把范围说清楚就是合格交付。
 
 【禁止】
 - 不要使用"可能""或许""大概"等推测性词汇——所有事实已确定。

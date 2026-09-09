@@ -240,9 +240,30 @@ def _fallback_conclusion(
     )
 
 
+# extractor prompt 约定：事件库无匹配时输出 {"id": null, "name": "<占位文案>"}。
+# 占位文案只是给 LLM 的信号，不能当事件名写进 narrative——否则会渲染出
+# 「受「未识别到事件库匹配」影响」这种既不通顺又暗示因果的句子。
+def _matched_event_name(ext: dict) -> str | None:
+    """返回真实命中的事件名；事件库无匹配时返回 None。
+
+    判据是 event.id——name 是自由文案，id 才是事件库主键。
+    """
+    event = ext.get("event")
+    if not isinstance(event, dict):
+        return None
+    if not event.get("id"):
+        return None
+    name = event.get("name")
+    return name if isinstance(name, str) and name.strip() else None
+
+
 def _template_narrative_from_extraction(ext: dict) -> str:
-    """Pass 2 失败时的模板 narrative：保证 4 要素全部出现。"""
-    event_name = ext["event"]["name"]
+    """Pass 2 失败时的模板 narrative：保证 4 要素全部出现。
+
+    事件库无匹配时走结构性归因措辞——只陈述「降幅集中在哪」，不用「受…影响」
+    这类因果句式，并显式声明根因未定。
+    """
+    event_name = _matched_event_name(ext)
     quant = ext["quant"]
     metric_zh = quant["metric_name_zh"]
     current_display = quant["current_value_display"]
@@ -252,6 +273,13 @@ def _template_narrative_from_extraction(ext: dict) -> str:
     chain = " → ".join(ext["mechanism_chain"])
     scope_parts = [f"{dim}={','.join(str(v) for v in vals)}" for dim, vals in ext["scope"].items()]
     scope_text = "; ".join(scope_parts) if scope_parts else "全行口径"
+    if event_name is None:
+        return (
+            f"{metric_zh} 在 {window} 期间当前值 {current_display}，环比 {pop_str}。"
+            f"结构特征：{chain}。影响范围集中于 {scope_text}。"
+            f"事件库中未匹配到该时间窗口的已知事件，以上为基于维度分解的结构性归因，"
+            f"根因待人工确认。"
+        )
     return (
         f"受「{event_name}」影响，{metric_zh} 在 {window} 期间当前值 "
         f"{current_display}，环比 {pop_str}。传导路径：{chain}。"
@@ -260,10 +288,21 @@ def _template_narrative_from_extraction(ext: dict) -> str:
 
 
 def _template_conclusion_from_extraction(ext: dict) -> str:
-    """Pass 2 失败时的模板 conclusion：点名 event 与首要 scope。"""
-    event_name = ext["event"]["name"]
+    """Pass 2 失败时的模板 conclusion：点名 event 与首要 scope。
+
+    事件库无匹配时不点名任何事件，只交付 scope + 「根因待人工确认」。
+    """
+    event_name = _matched_event_name(ext)
     scope = ext.get("scope") or {}
     main_scope = next(iter(scope.items()), None)
+    if event_name is None:
+        if main_scope:
+            dim, vals = main_scope
+            return (
+                f"本期变化集中于 {dim}={','.join(str(v) for v in vals)}；"
+                f"事件库未匹配到已知事件，根因待人工确认。"
+            )
+        return "本期变化未定位到显著集中的维度，事件库亦无匹配事件，根因待人工确认。"
     if main_scope:
         dim, vals = main_scope
         return (
