@@ -149,7 +149,7 @@ from q005, where the agent genuinely dropped the "term deposits" constraint.
 Editing gold risks fitting it to the agent, so a boundary was drawn: fix only golds that violate
 business semantics, or that fail to implement a constraint their own prompt states. Differences of
 interpretation are left alone. A guard —
-[`tests/eval/test_gold_sql_row_counts.py`](tests/eval/test_gold_sql_row_counts.py), 42 cases run
+[`tests/eval/test_gold_sql_row_counts.py`](tests/eval/test_gold_sql_row_counts.py), 48 cases run
 against live Postgres — now makes row-count drift a red test instead of a silent deduction.
 Full reasoning in [DESIGN_DECISIONS.md#adr-014](./DESIGN_DECISIONS.md).
 
@@ -501,7 +501,7 @@ chat-bi-agent/
 ├── config/
 │   ├── local.yaml             # Runtime config (model names, retrieval top_k, PG timeout, ...)
 │   └── metrics.yaml           # Semantic-layer metric catalog (21 metrics)
-├── tests/                     # 987 tests, organized by p1/p2/p3/shared/data/viz/eval/schema
+├── tests/                     # 997 tests, organized by p1/p2/p3/shared/data/viz/eval/schema
 ├── results/                   # Evaluation baseline JSONs + markdown reports
 ├── docker-compose.yml         # Postgres + Langfuse stack + App + Seed
 ├── Dockerfile                 # Streamlit image
@@ -525,7 +525,7 @@ chat-bi-agent/
 | Database | PostgreSQL 16 | Isolated read-only user (chatbi_readonly) |
 | Web UI | Streamlit | Demo-oriented, ~3× dev speed → ADR-009 |
 | Visualization | Plotly | 6 chart types auto-inferred (rule-based) |
-| Testing | pytest (987 tests) + ruff | CI on GitHub Actions |
+| Testing | pytest (997 tests) + ruff | CI on GitHub Actions |
 
 Full rationale and alternatives in [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md).
 
@@ -553,7 +553,7 @@ ruff check src/ tests/ streamlit_app/ scripts/
 ruff format src/ tests/ streamlit_app/ scripts/
 ```
 
-Integration tests (`@pytest.mark.integration`, 50 of them) need a **running Postgres with the
+Integration tests (`@pytest.mark.integration`, 55 of them) need a **running Postgres with the
 full seed data**. The gate is an actual `SELECT 1` probe, **not the presence of `PG_HOST`** — that
 variable is always set in `.env`, so using it as the switch makes anyone without Docker hit a pile
 of connection errors instead of a clean skip.
@@ -563,10 +563,10 @@ of connection errors instead of a clean skip.
 | job | What it does |
 |---|---|
 | `test` | ruff + unit tests on a Python 3.11/3.12 matrix, coverage gate `--cov-fail-under=72` (actual 76) |
-| `integration` | Starts a `postgres:16-alpine` service → applies schema → `seed --rows 100000 --seed 42 --with-events` → runs the 50 integration tests |
+| `integration` | Starts a `postgres:16-alpine` service → applies schema → `seed --rows 100000 --seed 42 --with-events` → runs the 55 integration tests |
 | `audit` | `pip-audit --skip-editable` dependency vulnerability audit |
 
-`--seed 42` is a hard requirement: 43 gold-SQL row-count guards assert **exact row counts**
+`--seed 42` is a hard requirement: 48 gold-SQL row-count guards assert **exact row counts**
 (e.g. 674), so a different seed turns them all red. These guards had never run in CI before
 2026-08-18 — and gold row counts were the root cause of the P1 score distortion on 2026-08-14,
 making them exactly what CI most needed to catch. See

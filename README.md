@@ -129,7 +129,7 @@ SQL 取自原产物重打真库），8 题 avg 0.9646 → **0.9771**，其余七
 改 gold 有「对着 agent 拟合」的风险，故划了一条边界：只修违反业务语义的、以及
 题面写了但 gold 没实现的；解释分歧不改。同时加了
 [`tests/eval/test_gold_sql_row_counts.py`](tests/eval/test_gold_sql_row_counts.py)
-守门（42 例真打 PG），让行数漂移下次是 CI 红灯而不是静默扣分。完整判断与方法论
+守门（48 例真打 PG），让行数漂移下次是 CI 红灯而不是静默扣分。完整判断与方法论
 见 [DESIGN_DECISIONS.md#adr-014](./DESIGN_DECISIONS.md)。
 
 </details>
@@ -479,7 +479,7 @@ chat-bi-agent/
 ├── config/
 │   ├── local.yaml             # 运行时配置（模型名、检索 top_k、PG 超时等）
 │   └── metrics.yaml           # 语义层指标 catalog（21 指标）
-├── tests/                     # 987 测试，按 p1/p2/p3/shared/data/viz/eval/schema 分目录
+├── tests/                     # 997 测试，按 p1/p2/p3/shared/data/viz/eval/schema 分目录
 ├── results/                   # 评估 baseline JSON + markdown 报告
 ├── docker-compose.yml         # Postgres + Langfuse 全套 + App + Seed
 ├── Dockerfile                 # Streamlit 镜像
@@ -503,7 +503,7 @@ chat-bi-agent/
 | 数据库 | PostgreSQL 16 | 只读用户隔离（chatbi_readonly）+ 渲染期行级权限 RLAC → ADR-010 / ADR-017 |
 | Web UI | Streamlit | Demo 取向，3 倍开发速度 → ADR-009 |
 | 可视化 | Plotly | 6 种图表自动推断（rule-based） |
-| 测试 | pytest（987 项） + ruff | CI on GitHub Actions |
+| 测试 | pytest（997 项） + ruff | CI on GitHub Actions |
 
 完整决策理由与替代方案对比见 [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md)。
 
@@ -540,10 +540,10 @@ ruff format src/ tests/ streamlit_app/ scripts/
 | job | 内容 |
 |---|---|
 | `test` | ruff + 单元测试，Python 3.11/3.12 矩阵，覆盖率门槛 `--cov-fail-under=72`（实测 76） |
-| `integration` | 起 `postgres:16-alpine` service → 建表 → `seed --rows 100000 --seed 42 --with-events` → 跑 50 个集成测试 |
+| `integration` | 起 `postgres:16-alpine` service → 建表 → `seed --rows 100000 --seed 42 --with-events` → 跑 55 个集成测试 |
 | `audit` | `pip-audit --skip-editable`，依赖漏洞审计 |
 
-`--seed 42` 是硬要求：43 个 gold SQL 行数守门断言的是**具体行数**（如 674 行），
+`--seed 42` 是硬要求：48 个 gold SQL 行数守门断言的是**具体行数**（如 674 行），
 换种子全红。这些守门在 2026-08-18 之前从未在 CI 执行过，而 gold 行数正是
 2026-08-14 那次 P1 分数失真的根源，恰恰最需要 CI 兜住——详见
 [ADR-014](./DESIGN_DECISIONS.md#adr-014)。

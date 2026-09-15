@@ -152,7 +152,7 @@ fct_transaction = 86000
 `fct_transaction` 是 86000 不是 100000——`--rows` 是**目标值**不是精确值，别拿它当断言。
 另有 48 张分区子表（`fct_transaction_*` / `fct_balance_daily_*`），上面的查询已排除。
 
-**`--seed 42` 是硬要求**：43 个 gold SQL 断言的是具体行数，换种子评估和集成测试全红。
+**`--seed 42` 是硬要求**：48 个 gold SQL 断言的是具体行数，换种子评估和集成测试全红。
 
 ### 2.3 只读角色（Layer 1 安全护栏）
 
